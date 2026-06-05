@@ -1,8 +1,5 @@
-import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { getLoginUrl } from "@/const";
 import { Activity, Bot, ChevronRight, Cpu, Shield, Target, TrendingUp, Zap } from "lucide-react";
-import { useEffect } from "react";
 import { useLocation } from "wouter";
 
 const features = [
@@ -15,16 +12,11 @@ const features = [
 ];
 
 export default function Home() {
-  const { user, loading } = useAuth();
   const [, navigate] = useLocation();
-
-  useEffect(() => {
-    if (!loading && user) navigate("/dashboard");
-  }, [user, loading]);
+  const goToDashboard = () => navigate("/dashboard");
 
   return (
     <div className="min-h-screen" style={{ background: "oklch(0.1 0.01 260)" }}>
-      {/* Header */}
       <header className="flex items-center justify-between px-8 py-5" style={{ borderBottom: "1px solid oklch(0.18 0.015 260)" }}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "var(--gradient-primary)" }}>
@@ -35,17 +27,11 @@ export default function Home() {
             <div className="text-xs text-muted-foreground">Autonomous Advertising Agent</div>
           </div>
         </div>
-        <Button
-          onClick={() => { window.location.href = getLoginUrl(); }}
-          style={{ background: "var(--gradient-primary)" }}
-          className="font-semibold"
-        >
-          Accedi
-          <ChevronRight className="w-4 h-4 ml-1" />
+        <Button onClick={goToDashboard} style={{ background: "var(--gradient-primary)" }} className="font-semibold">
+          Accedi alla piattaforma <ChevronRight className="w-4 h-4 ml-1" />
         </Button>
       </header>
 
-      {/* Hero */}
       <section className="max-w-5xl mx-auto px-8 py-24 text-center">
         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium mb-8" style={{ background: "oklch(0.65 0.2 265 / 0.1)", border: "1px solid oklch(0.65 0.2 265 / 0.25)", color: "oklch(0.75 0.15 265)" }}>
           <div className="pulse-dot pulse-dot-running" />
@@ -57,19 +43,10 @@ export default function Home() {
         <p className="text-lg text-muted-foreground max-w-2xl mx-auto mb-10 leading-relaxed">
           Imposta l'obiettivo, definisci il budget massimo. L'agente AI gestisce autonomamente le tue campagne META — analizza, ottimizza, accende e spegne inserzioni in tempo reale per massimizzare il ROAS.
         </p>
-        <div className="flex items-center justify-center gap-4">
-          <Button
-            size="lg"
-            onClick={() => { window.location.href = getLoginUrl(); }}
-            className="px-8 font-semibold text-base"
-            style={{ background: "var(--gradient-primary)" }}
-          >
-            Inizia ora
-            <ChevronRight className="w-5 h-5 ml-1" />
-          </Button>
-        </div>
+        <Button size="lg" onClick={goToDashboard} className="px-8 font-semibold text-base" style={{ background: "var(--gradient-primary)" }}>
+          Inizia ora <ChevronRight className="w-5 h-5 ml-1" />
+        </Button>
 
-        {/* KPI Preview */}
         <div className="grid grid-cols-4 gap-4 mt-16 max-w-3xl mx-auto">
           {[
             { label: "ROAS Medio", value: "4.2x", color: "oklch(0.65 0.18 145)" },
@@ -85,7 +62,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Features */}
       <section className="max-w-5xl mx-auto px-8 pb-24">
         <h2 className="text-2xl font-bold text-center text-foreground mb-12">
           Tutto ciò che un Media Buyer esperto fa, <span className="text-gradient">automatizzato dall'AI</span>
