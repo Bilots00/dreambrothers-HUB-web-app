@@ -9,7 +9,7 @@ import {
   ChevronDown, FlaskConical, Instagram, Layout,
   LogOut, Megaphone, Package2, PanelLeft, Plug,
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
-  Library, Images,
+  Library, Images, Lightbulb,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -40,6 +40,7 @@ const SOCIAL_ITEMS = [
 ];
 
 const LIBRARY_ITEMS = [
+  { icon: Lightbulb, label: "Inspiration", path: "/meta/library/inspiration", description: "Riferimenti & remix" },
   { icon: Images, label: "My Assets", path: "/meta/library/assets", description: "Creative generate (n8n / Drive)" },
 ];
 
