@@ -18,6 +18,8 @@ import ConnectAccount from "./pages/ConnectAccount";
 import Home from "./pages/Home";
 import GelatoMaker from "./pages/GelatoMaker";
 import SocialMedia from "./pages/SocialMedia";
+import AssetsLibrary from "./pages/AssetsLibrary";
+import Login from "./pages/Login";
 
 function withLayout(Component: React.ComponentType) {
   return (
@@ -54,6 +56,10 @@ function AppRouter() {
       <Route path="/social/create">{withLayout(SocialMedia)}</Route>
       <Route path="/social">{() => { window.location.replace("/social/calendar"); return null; }}</Route>
 
+      {/* META LIBRARY */}
+      <Route path="/meta/library/assets">{withLayout(AssetsLibrary)}</Route>
+      {/* SOCIAL LIBRARY */}
+      <Route path="/social/library/assets">{withLayout(AssetsLibrary)}</Route>
       <Route component={NotFound} />
     </Switch>
   );

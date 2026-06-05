@@ -126,24 +126,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (loading) return <DashboardLayoutSkeleton />;
 
   if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "oklch(0.1 0.01 260)" }}>
-        <div className="text-center max-w-md px-8">
-          <div className="mb-8">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6" style={{ background: "var(--gradient-primary)" }}>
-              <Bot className="w-8 h-8 text-white" />
-            </div>
-            <h1 className="text-3xl font-bold text-foreground mb-3">DreamBrothers Hub</h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              Il tuo centro di controllo unificato per META Ads, Gelato Print Studio e Social Media Organico.
-            </p>
-          </div>
-          <Button onClick={() => { window.location.href = getLoginUrl(); }} size="lg" className="w-full font-semibold" style={{ background: "var(--gradient-primary)" }}>
-            Accedi alla piattaforma
-          </Button>
-        </div>
-      </div>
-    );
+    window.location.href = "/login";
+    return null;
   }
 
   const activeGoals = dashboard?.activeGoals ?? 0;
