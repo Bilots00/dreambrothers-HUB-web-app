@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" fill="#ffffff"/>
   <path transform="translate(38,40) scale(0.82)" fill="#1a8cff"
     d="M0,-48 C6,-16 16,-6 48,0 C16,6 6,16 0,48 C-6,16 -16,6 -48,0 C-16,-6 -6,-16 0,-48 Z"/>
   <path transform="translate(76,78) scale(0.42)" fill="#ea4335"
