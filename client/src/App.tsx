@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react";
+import { trpc } from "@/lib/trpc";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
@@ -73,13 +75,39 @@ function AppRouter() {
   );
 }
 
+const SYNC_KEYS = ["assets_library_api_key", "assets_library_folder_id", "db_inspirations", "db_brand"];
+
+function CloudSync({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false);
+  const q = trpc.settings.getAll.useQuery(undefined, { retry: false, refetchOnWindowFocus: false });
+  useEffect(() => {
+    const t = setTimeout(() => setReady(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => {
+    if (!q.isFetched && !q.isError) return;
+    try {
+      const data = (q.data || {}) as Record<string, string>;
+      for (const k of SYNC_KEYS) {
+        const v = data[k];
+        if (v != null && v !== "") localStorage.setItem(k, v);
+      }
+    } catch {}
+    setReady(true);
+  }, [q.isFetched, q.isError, q.data]);
+  if (!ready) return null;
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster theme="dark" position="top-right" richColors />
-          <AppRouter />
+          <CloudSync>
+            <AppRouter />
+          </CloudSync>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
