@@ -244,14 +244,9 @@ export function BulkCreator() {
             {selectedProduct && (
               <Card style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
                 <CardContent className="p-5 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h3 className="font-semibold flex items-center gap-2"><Layers className="h-4 w-4" />Pubblica anche come (opzionale)</h3>
-                      <p className="text-xs text-muted-foreground">Stesso design come prodotti separati: Canvas, Framed Poster, Framed Canvas… (nessun limite)</p>
-                    </div>
-                    <Button size="sm" variant="secondary" onClick={() => setExtraSlots([...extraSlots, {}])}>
-                      <Plus className="h-4 w-4 mr-1" />Aggiungi template
-                    </Button>
+                  <div>
+                    <h3 className="font-semibold flex items-center gap-2"><Layers className="h-4 w-4" />Pubblica anche come (opzionale)</h3>
+                    <p className="text-xs text-muted-foreground">Stesso design come prodotti separati: Canvas, Framed Poster, Framed Canvas… (nessun limite)</p>
                   </div>
                   {extraSlots.map((slot, i) => (
                     <div key={i} className="rounded-xl p-3 space-y-2" style={{ background: "oklch(0.16 0.012 260)", border: "1px solid oklch(0.22 0.015 260)" }}>
@@ -262,6 +257,9 @@ export function BulkCreator() {
                       <ProductSelector selectedProduct={slot.product} onProductSelect={(p) => setExtraSlots(extraSlots.map((x, j) => j === i ? { product: p } : x))} />
                     </div>
                   ))}
+                  <Button variant="secondary" className="w-full" onClick={() => setExtraSlots([...extraSlots, {}])}>
+                    <Plus className="h-4 w-4 mr-1" />Aggiungi template
+                  </Button>
                 </CardContent>
               </Card>
             )}
