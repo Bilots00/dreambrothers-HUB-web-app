@@ -88,22 +88,23 @@ function ShopifyProductPicker({ label, hint, icon, value, onChange }: { label: s
       <label className="text-sm font-medium flex items-center gap-2">{icon}{label}</label>
       <p className="text-xs text-muted-foreground">{hint}</p>
       {value ? (
-        <div className="flex items-center justify-between rounded-lg p-2" style={{ background: "oklch(0.16 0.012 260)", border: "1px solid oklch(0.22 0.015 260)" }}>
+        <div className="flex items-center justify-between rounded-lg p-2.5" style={{ background: "oklch(0.24 0.03 265)", border: "1px solid oklch(0.5 0.1 290)" }}>
           <div className="flex items-center gap-2 min-w-0">
-            {value.image && <img src={value.image} alt="" className="h-8 w-8 rounded object-cover" />}
-            <span className="text-sm truncate">{value.title}</span>
+            {value.image && <img src={value.image} alt="" className="h-9 w-9 rounded object-cover" />}
+            <span className="text-sm truncate font-medium">{value.title}</span>
           </div>
-          <Button size="sm" variant="ghost" onClick={() => { onChange(null); setQ(""); }}>Cambia</Button>
+          <Button size="sm" variant="secondary" onClick={() => { onChange(null); setQ(""); }}>Cambia</Button>
         </div>
       ) : (
         <div className="relative">
-          <Input value={q} placeholder="Cerca un prodotto nel catalogo..." onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
-          {open && (results.length > 0 || loading) && (
-            <div className="absolute z-50 mt-1 w-full rounded-lg max-h-64 overflow-auto" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.25 0.02 265 / 0.6)" }}>
-              {loading && <div className="p-2 text-xs text-muted-foreground">Ricerca...</div>}
+          <Input value={q} placeholder="Cerca un prodotto nel catalogo..." style={{ background: "oklch(0.12 0.012 260)" }} onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
+          {open && q.trim().length >= 2 && (
+            <div className="mt-2 w-full rounded-lg max-h-72 overflow-auto shadow-2xl" style={{ background: "oklch(0.26 0.035 265)", border: "1px solid oklch(0.55 0.1 290)" }}>
+              {loading && <div className="p-3 text-xs text-muted-foreground">Ricerca in corso...</div>}
+              {!loading && results.length === 0 && <div className="p-3 text-xs text-muted-foreground">Nessun prodotto trovato per "{q}"</div>}
               {results.map((p) => (
-                <button key={p.legacyId} type="button" className="flex items-center gap-2 w-full text-left p-2 hover:bg-white/5" onClick={() => { onChange(p); setOpen(false); setQ(""); }}>
-                  {p.image && <img src={p.image} alt="" className="h-8 w-8 rounded object-cover" />}
+                <button key={p.legacyId} type="button" className="flex items-center gap-2 w-full text-left p-2.5 transition-colors hover:bg-white/10" onClick={() => { onChange(p); setOpen(false); setQ(""); }}>
+                  {p.image && <img src={p.image} alt="" className="h-9 w-9 rounded object-cover" />}
                   <span className="text-sm truncate">{p.title}</span>
                 </button>
               ))}
@@ -179,6 +180,21 @@ export function BulkCreator() {
   useEffect(() => {
     try { localStorage.setItem("gelato.automation", JSON.stringify({ mostPopularVariant, priceRef, inventoryRef })); } catch {}
   }, [mostPopularVariant, priceRef, inventoryRef]);
+
+  // ricorda i template scelti nello step 3 (permanente, per la prossima run)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("gelato.templates");
+      if (raw) { const t = JSON.parse(raw); if (t.selectedProduct) setSelectedProduct(t.selectedProduct); if (Array.isArray(t.extraSlots)) setExtraSlots(t.extraSlots); }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("gelato.templates", JSON.stringify({ selectedProduct: selectedProduct || null, extraSlots })); } catch {}
+  }, [selectedProduct, extraSlots]);
+  // se il template e' gia' ricordato e ci sono immagini, vai diretto allo step 4
+  useEffect(() => {
+    if (selectedProduct && images.length > 0) setCurrentStep((c) => Math.max(c, 4));
+  }, [selectedProduct, images.length]);
 
   const handleConnect = (creds: { apiKey: string; storeName: string }) => {
     setCredentials(creds); setIsConnected(true); setCurrentStep(2);
@@ -343,12 +359,12 @@ export function BulkCreator() {
 
       <StepCard step={4} title="Crea Prodotti" description="Upload Chunk Protetto + Iniezione in Gelato" isActive={currentStep === 4} isCompleted={createdProducts.length > 0}>
         {currentStep === 4 && selectedProduct && (
-          <div className="space-y-6">
+          <div className="space-y-8">
             <ProductRules rules={rules} onRulesChange={setRules} onSave={() => toast.success("Regole salvate")} />
 
             {/* v24: Automazioni post-pubblicazione */}
-            <Card style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
-              <CardContent className="p-5 space-y-4">
+            <Card style={{ background: "oklch(0.19 0.025 265)", border: "1px solid oklch(0.5 0.12 290)", boxShadow: "0 0 0 1px oklch(0.5 0.12 290 / 0.25), 0 10px 30px oklch(0 0 0 / 0.4)" }}>
+              <CardContent className="p-6 space-y-6">
                 <div>
                   <h3 className="font-semibold flex items-center gap-2"><Star className="h-4 w-4" />Automazioni post-pubblicazione (opzionali)</h3>
                   <p className="text-xs text-muted-foreground">Applicate in automatico dal worker quando i prodotti compaiono su Shopify. Lascia vuoto ciò che non vuoi usare.</p>
@@ -357,14 +373,18 @@ export function BulkCreator() {
                 <div className="space-y-1">
                   <label className="text-sm font-medium flex items-center gap-2"><Star className="h-4 w-4" />Badge "Most popular" sulla variante</label>
                   <p className="text-xs text-muted-foreground">Nome esatto della variante/taglia da evidenziare (es. "50x70 cm"). Scrive il metafield custom.most_popular_variant.</p>
-                  <Input list="mp-variants" value={mostPopularVariant} placeholder="es. 50x70 cm" onChange={(e) => setMostPopularVariant(e.target.value)} />
+                  <Input list="mp-variants" value={mostPopularVariant} placeholder="es. 50x70 cm" style={{ background: "oklch(0.12 0.012 260)" }} onChange={(e) => setMostPopularVariant(e.target.value)} />
                   <datalist id="mp-variants">
                     {(selectedProduct?.variants || []).map((v, i) => <option key={i} value={v} />)}
                   </datalist>
                 </div>
 
-                <ShopifyProductPicker icon={<Tag className="h-4 w-4" />} label="Copia PREZZI + compare-at da" hint="Prodotto modello da cui copiare prezzo e prezzo barrato per ogni taglia (match per variante)." value={priceRef} onChange={setPriceRef} />
-                <ShopifyProductPicker icon={<Boxes className="h-4 w-4" />} label="Copia INVENTARIO da" hint="Prodotto modello da cui copiare giacenza e tracciamento per ogni taglia (così le varianti non risultano sold out)." value={inventoryRef} onChange={setInventoryRef} />
+                <div className="pt-5" style={{ borderTop: "1px solid oklch(0.34 0.03 265)" }}>
+                  <ShopifyProductPicker icon={<Tag className="h-4 w-4" />} label="Copia PREZZI + compare-at da" hint="Prodotto modello da cui copiare prezzo e prezzo barrato per ogni taglia (match per variante)." value={priceRef} onChange={setPriceRef} />
+                </div>
+                <div className="pt-5" style={{ borderTop: "1px solid oklch(0.34 0.03 265)" }}>
+                  <ShopifyProductPicker icon={<Boxes className="h-4 w-4" />} label="Copia INVENTARIO da" hint="Prodotto modello da cui copiare giacenza e tracciamento per ogni taglia (così le varianti non risultano sold out)." value={inventoryRef} onChange={setInventoryRef} />
+                </div>
               </CardContent>
             </Card>
 
