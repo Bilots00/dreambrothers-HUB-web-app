@@ -68,7 +68,11 @@ export function registerCareRoutes(app: Express) {
     if (!checkSecret(req, res)) return;
     try {
       const settings = await getAllUserSettings(OWNER_USER_ID);
-      res.json({ success: true, autopilot: settings.cs_autopilot === "true" });
+      res.json({
+        success: true,
+        autopilot: settings.cs_autopilot === "true",
+        delaySeconds: Number(settings.cs_delay_seconds ?? 90) || 90,
+      });
     } catch (err) {
       console.warn("[care/config] error:", err);
       res.status(500).json({ error: "config failed" });

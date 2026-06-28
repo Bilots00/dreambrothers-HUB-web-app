@@ -53,6 +53,7 @@ export default function CustomerCare() {
 
   const settingsQuery = trpc.settings.getAll.useQuery(undefined, { refetchOnWindowFocus: false });
   const autopilot = settingsQuery.data?.cs_autopilot === "true";
+  const delaySeconds = Number(settingsQuery.data?.cs_delay_seconds ?? 90) || 90;
   const setSetting = trpc.settings.set.useMutation({ onSuccess: () => utils.settings.getAll.invalidate() });
 
   const counts = {
@@ -98,11 +99,18 @@ export default function CustomerCare() {
             <h1 className="text-lg font-bold">Customer Care</h1>
             <p className="text-xs text-muted-foreground">Tutte le conversazioni clienti (DM, commenti, email, WhatsApp) in un unico posto</p>
           </div>
+          <div className="ml-auto flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style={{ background: "oklch(0.16 0.015 260)", color: "oklch(0.62 0.02 260)" }} title="Quanto l'AI aspetta prima di rispondere (per sembrare umana). Le domande sui prodotti e i clienti arrabbiati hanno comunque risposta immediata.">
+            <span>Attesa risposta</span>
+            <input type="number" min={0} defaultValue={delaySeconds} key={delaySeconds}
+              onBlur={(e) => { const v = Math.max(0, parseInt(e.target.value || "90", 10) || 90); if (v !== delaySeconds) setSetting.mutate({ key: "cs_delay_seconds", value: String(v) }); }}
+              className="w-14 bg-transparent outline-none text-foreground text-right" style={{ borderBottom: "1px solid oklch(0.3 0.02 260)" }} />
+            <span>sec</span>
+          </div>
           <button
             onClick={() => setSetting.mutate({ key: "cs_autopilot", value: String(!autopilot) })}
             disabled={setSetting.isPending}
             title="Quando ON, l'AI risponde da sola a DM e commenti (escala a te i casi incerti). Quando OFF, prepara solo bozze da approvare."
-            className="ml-auto flex items-center gap-2 text-xs px-3 py-2 rounded-xl transition-colors"
+            className="flex items-center gap-2 text-xs px-3 py-2 rounded-xl transition-colors"
             style={{
               background: autopilot ? "oklch(0.6 0.18 145 / 0.12)" : "oklch(0.3 0.02 260 / 0.35)",
               border: autopilot ? "1px solid oklch(0.6 0.18 145 / 0.3)" : "1px solid oklch(0.3 0.02 260)",
