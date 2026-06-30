@@ -415,6 +415,13 @@ export async function recordCsReply(params: {
   return messageId;
 }
 
+export async function deleteCsConversation(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(csMessages).where(eq(csMessages.conversationId, id));
+  await db.delete(csConversations).where(eq(csConversations.id, id));
+}
+
 export async function getCsConversationById(id: number) {
   const db = await getDb();
   if (!db) return undefined;

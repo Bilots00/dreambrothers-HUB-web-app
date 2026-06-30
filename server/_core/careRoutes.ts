@@ -7,6 +7,8 @@ import {
   getAllUserSettings,
   upsertUserSetting,
   conversationHasPending,
+  getCsConversationsForUser,
+  deleteCsConversation,
 } from "../db";
 
 // The local Claude agent is considered "online" if it pinged the heartbeat within this window.
@@ -119,6 +121,35 @@ export function registerCareRoutes(app: Express) {
     } catch (err) {
       console.warn("[care/heartbeat] error:", err);
       res.status(500).json({ error: "heartbeat failed" });
+    }
+  });
+
+  // Admin: list conversations (id/channel/name/handle/status) for cleanup.
+  app.get("/api/care/admin/conversations", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const rows = await getCsConversationsForUser(OWNER_USER_ID);
+      res.json({ success: true, conversations: rows.map((c) => ({ id: c.id, channel: c.channel, customerName: c.customerName, customerHandle: c.customerHandle, status: c.status })) });
+    } catch (err) {
+      console.warn("[care/admin/conversations] error:", err);
+      res.status(500).json({ error: "list failed" });
+    }
+  });
+
+  // Admin: delete a conversation and its messages (cleanup of test data).
+  app.post("/api/care/admin/delete-conversation", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const conversationId = Number((req.body ?? {}).conversationId);
+      if (!conversationId) {
+        res.status(400).json({ error: "conversationId required" });
+        return;
+      }
+      await deleteCsConversation(conversationId);
+      res.json({ success: true, deleted: conversationId });
+    } catch (err) {
+      console.warn("[care/admin/delete-conversation] error:", err);
+      res.status(500).json({ error: "delete failed" });
     }
   });
 
