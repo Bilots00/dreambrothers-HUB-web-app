@@ -2,7 +2,7 @@ import { useState, type ElementType } from "react";
 import { useLocation } from "wouter";
 import {
   Search, Star, Send, ExternalLink, Archive, EyeOff, AlertTriangle, Bot,
-  Instagram, Facebook, Mail, MessageCircle, MessageSquare, Inbox, CheckCheck, Bell,
+  Instagram, Facebook, Mail, MessageCircle, MessageSquare, Inbox, CheckCheck, Bell, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -258,14 +258,25 @@ export default function CustomerCare() {
 
           {/* thread */}
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {selected.thread.map((m, i) => (
+            {selected.thread.map((m, i) => {
+              const isDraft = m.from === "ai";   // AI suggestion, NOT yet sent to the customer
+              const isSent = m.from === "you";   // actually delivered (you pressed "Invia risposta")
+              return (
               <div key={i} className={`flex ${m.from === "customer" ? "" : "flex-row-reverse"}`}>
                 <div className="max-w-[75%]">
-                  <div className="rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap" style={{ background: m.from === "customer" ? "oklch(0.16 0.015 260)" : "oklch(0.65 0.2 265 / 0.18)", border: "1px solid oklch(0.22 0.015 260)" }}>{m.text}</div>
-                  <div className="text-[10px] text-muted-foreground mt-1 px-1">{m.from === "ai" ? "AI · " : ""}{m.time}</div>
+                  <div className="rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap" style={{
+                    background: m.from === "customer" ? "oklch(0.16 0.015 260)" : isDraft ? "oklch(0.2 0.04 75 / 0.18)" : "oklch(0.6 0.18 145 / 0.14)",
+                    border: isDraft ? "1px dashed oklch(0.75 0.14 70 / 0.6)" : "1px solid oklch(0.22 0.015 260)",
+                  }}>{m.text}</div>
+                  <div className="text-[10px] mt-1 px-1 flex items-center gap-1" style={{ justifyContent: m.from === "customer" ? "flex-start" : "flex-end" }}>
+                    {isDraft && (<span className="flex items-center gap-1" style={{ color: "oklch(0.78 0.14 70)" }}><Clock className="w-2.5 h-2.5" /> Bozza AI · non inviata · {m.time}</span>)}
+                    {isSent && (<span className="flex items-center gap-1" style={{ color: "oklch(0.72 0.16 145)" }}>{m.time} · Inviata <CheckCheck className="w-3 h-3" /></span>)}
+                    {m.from === "customer" && (<span className="text-muted-foreground">{m.time}</span>)}
+                  </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* AI suggestion + reply */}
