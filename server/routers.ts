@@ -17,6 +17,7 @@ import {
   getTrackingConfigByAccount, upsertTrackingConfig,
   getAllUserSettings, upsertUserSetting,
   getCsConversationsForUser, getCsMessagesForConversation, recordCsReply, updateCsConversation, getCsConversationById,
+  getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, updateSocialDraft, deleteSocialDraft,
 } from "./db";
 import {
   getAdAccountInfo, getMetaCampaigns, createMetaCampaign,
@@ -58,6 +59,58 @@ export const appRouter = router({
     set: protectedProcedure.input(z.object({ key: z.string(), value: z.string() })).mutation(async ({ ctx, input }) => {
       await upsertUserSetting(ctx.user.id, input.key, input.value);
       return { success: true } as const;
+    }),
+  }),
+
+  // ─── Social Organico: AI Manager chat + Bozze ───────────────────────────────
+  social: router({
+    chatList: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await getSocialChatMessages(ctx.user.id, 100);
+      return rows.reverse().map((m) => ({
+        id: m.id,
+        role: m.role,
+        text: m.text,
+        when: fmtWhen(m.createdAt),
+        pending: m.role === "user" && m.status === "new",
+      }));
+    }),
+    chatSend: protectedProcedure.input(z.object({ text: z.string().min(1) })).mutation(async ({ ctx, input }) => {
+      const id = await insertSocialChatMessage({ userId: ctx.user.id, role: "user", text: input.text, status: "new" });
+      return { success: true, id } as const;
+    }),
+    draftsList: protectedProcedure.query(async ({ ctx }) => {
+      return getSocialDraftsForUser(ctx.user.id);
+    }),
+    draftUpdate: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        title: z.string().optional(),
+        caption: z.string().optional(),
+        hashtags: z.string().optional(),
+        status: z.enum(["draft", "scheduled", "published", "rejected"]).optional(),
+        scheduledAt: z.string().nullable().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const patch: Parameters<typeof updateSocialDraft>[1] = {};
+        if (input.title !== undefined) patch.title = input.title;
+        if (input.caption !== undefined) patch.caption = input.caption;
+        if (input.hashtags !== undefined) patch.hashtags = input.hashtags;
+        if (input.status !== undefined) patch.status = input.status;
+        if (input.scheduledAt !== undefined) patch.scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
+        await updateSocialDraft(input.id, patch);
+        return { success: true } as const;
+      }),
+    draftDelete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+      await deleteSocialDraft(input.id);
+      return { success: true } as const;
+    }),
+    config: protectedProcedure.query(async ({ ctx }) => {
+      const s = await getAllUserSettings(ctx.user.id);
+      return {
+        autopilot: s.social_autopilot === "true",
+        referenceFolder: s.social_reference_folder || "E:\\IDriveLocal\\ALL FILES -Cloud-Drive_andrea.bilotta00@gmail.com\\E-commerce\\MARKETING - PNL, Copy & Vendita\\Instagram DAILY post (Organic)",
+        systemPrompt: s.social_system_prompt || "",
+      };
     }),
   }),
 
