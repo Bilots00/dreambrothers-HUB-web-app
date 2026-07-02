@@ -267,13 +267,23 @@ function ChatView() {
 
 // ─── Create Tab ───────────────────────────────────────────────────────────────
 function CreateView() {
+  const config = trpc.social.config.useQuery();
+  const queue = trpc.social.chatSend.useMutation();
+  const saveSetting = trpc.settings.set.useMutation();
+
   const [platform, setPlatform] = useState<string>("instagram");
-  const [postType, setPostType] = useState("reel");
+  const [postType, setPostType] = useState("carousel");
   const [caption, setCaption] = useState("");
   const [hashtags, setHashtags] = useState("");
+  const [brief, setBrief] = useState("");
+  const [url, setUrl] = useState("");
+  const [folder, setFolder] = useState("");
+  const [queued, setQueued] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [asset, setAsset] = useState<{ name: string; thumb: string; view: string; type: string } | null>(null);
   const [assets, setAssets] = useState<{ name: string; thumb: string; view: string; type: string }[]>([]);
+
+  useEffect(() => { if (config.data && !folder) setFolder(config.data.referenceFolder || ""); }, [config.data]);
 
   useEffect(() => {
     try {
@@ -293,10 +303,22 @@ function CreateView() {
 
   const handleGenerate = async () => {
     setIsGenerating(true);
-    await new Promise((r) => setTimeout(r, 1500));
-    setCaption(`🖼️ Trasforma il tuo spazio con l'arte che ti appartiene.\n\nOgni quadro DreamBrothers è stampato su materiali premium per durare nel tempo — non solo decorazione, ma un investimento nella tua casa.\n\nQuale stile racconta chi sei? Scopri la nostra collezione in bio 👆\n\n✨ Spedizione gratuita sopra €50`);
-    setHashtags("#wallart #homedecor #quadri #arredocasa #interiordesign #livingroom #dreambrothers #printart #minimalhome #italiandesign");
+    if (folder && config.data && folder !== config.data.referenceFolder) {
+      saveSetting.mutate({ key: "social_reference_folder", value: folder });
+    }
+    const request = [
+      "[GENERAZIONE CONTENUTO]",
+      `Piattaforma: ${platform}`,
+      `Formato: ${postType}`,
+      brief ? `Brief: ${brief}` : "",
+      url ? `Da URL: ${url}` : "",
+      folder ? `Cartella reference: ${folder}` : "",
+      "Genera il contenuto (organic-first, brand DreamBrothers) e salvalo in Bozze.",
+    ].filter(Boolean).join("\n");
+    try { await queue.mutateAsync({ text: request }); } catch {}
     setIsGenerating(false);
+    setQueued(true);
+    setTimeout(() => setQueued(false), 6000);
   };
 
   return (
@@ -335,8 +357,17 @@ function CreateView() {
           </div>
           <div className="space-y-2">
             <label className="text-sm text-muted-foreground">Topic / Brief</label>
-            <Textarea placeholder="es. Lancio nuova collezione quadri minimal, target: 25-40 anni appassionati di interior design..." rows={3} className="resize-none" style={{ background: "oklch(0.16 0.015 260)", border: "1px solid oklch(0.22 0.015 260)" }} />
+            <Textarea value={brief} onChange={(e) => setBrief(e.target.value)} placeholder="es. Carosello ispirazionale per sognatori, tema 'non mollare'…" rows={3} className="resize-none" style={{ background: "oklch(0.16 0.015 260)", border: "1px solid oklch(0.22 0.015 260)" }} />
           </div>
+          <div className="space-y-2">
+            <label className="text-sm text-muted-foreground">Cartella reference (PC)</label>
+            <input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="E:\…\Instagram DAILY post (Organic)" className="w-full text-sm rounded-lg px-3 py-2 text-foreground" style={{ border: "1px solid oklch(0.22 0.015 260)", background: "oklch(0.16 0.015 260)" }} />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-muted-foreground">…oppure genera da un URL</label>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://… (prodotto Shopify/Amazon o post di riferimento)" className="w-full text-sm rounded-lg px-3 py-2 text-foreground" style={{ border: "1px solid oklch(0.22 0.015 260)", background: "oklch(0.16 0.015 260)" }} />
+          </div>
+          {queued && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "oklch(0.6 0.18 145 / 0.15)", color: "oklch(0.7 0.16 145)" }}>✓ Richiesta inviata al tuo Claude locale — il contenuto apparirà in Bozze.</div>}
           <Button onClick={handleGenerate} disabled={isGenerating} className="w-full text-white" style={{ background: "var(--gradient-primary)" }}>
             <Sparkles className="w-4 h-4 mr-2" />
             {isGenerating ? "Generando..." : "Genera con AI"}
