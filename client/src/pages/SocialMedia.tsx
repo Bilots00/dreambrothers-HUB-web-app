@@ -496,7 +496,7 @@ export default function SocialMedia() {
   return (
     <div className={tab === "chat" ? "flex flex-col gap-6" : "space-y-6"} style={tab === "chat" ? { height: "calc(100dvh - 130px)" } : undefined}>
       {/* Header */}
-      <div className="rounded-2xl p-6 relative overflow-hidden shrink-0" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+      <div className={tab === "chat" ? "hidden" : "rounded-2xl p-6 relative overflow-hidden shrink-0"} style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
         <div className="absolute inset-0" style={{ background: "var(--gradient-primary)", opacity: 0.04 }} />
         <div className="relative flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: "var(--gradient-primary)" }}>
