@@ -78,10 +78,32 @@ function StatusBadge({ status }: { status: PostStatus }) {
 
 // ─── Calendar Tab ─────────────────────────────────────────────────────────────
 function CalendarView() {
+  const drafts = trpc.social.draftsList.useQuery();
+  const scheduled = (drafts.data ?? []).filter((d) => d.status === "scheduled" || d.status === "published");
   const days = ["Lun 9 Giu", "Mar 10 Giu", "Mer 11 Giu", "Gio 12 Giu", "Ven 13 Giu", "Sab 14 Giu", "Dom 15 Giu"];
 
   return (
     <div className="space-y-6">
+      {scheduled.length > 0 ? (
+        <div className="rounded-2xl p-4" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+          <h3 className="text-sm font-semibold mb-3">📅 Contenuti pianificati dall'AI Manager</h3>
+          <div className="space-y-2">
+            {scheduled.map((d) => (
+              <div key={d.id} className="flex items-center gap-3 rounded-lg p-2" style={{ background: "oklch(0.16 0.015 260)" }}>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "oklch(0.65 0.2 265 / 0.15)", color: "oklch(0.75 0.15 265)" }}>{d.platform}</span>
+                <span className="text-xs text-muted-foreground">{d.format}</span>
+                <span className="text-sm flex-1 truncate">{d.title || d.caption || "(contenuto)"}</span>
+                <span className="text-xs text-muted-foreground">{d.scheduledAt ? new Date(d.scheduledAt).toLocaleDateString("it-IT") : "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-2xl p-4 text-sm text-muted-foreground" style={{ background: "oklch(0.14 0.015 260)", border: "1px dashed oklch(0.22 0.015 260)" }}>
+          📅 Nessun contenuto pianificato ancora. Approva bozze dalla sezione <b>Bozze</b> o lascia lavorare l'AI Manager — appariranno qui.
+        </div>
+      )}
+      <div className="text-xs text-muted-foreground mt-1">Layout settimanale (dati di esempio):</div>
       {/* Stats row */}
       <div className="grid grid-cols-4 gap-4">
         {[
@@ -102,12 +124,12 @@ function CalendarView() {
 
       {/* Weekly grid */}
       <div className="rounded-2xl overflow-hidden" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
-        <div className="grid grid-cols-7 divide-x" style={{ borderBottom: "1px solid oklch(0.2 0.015 260)", divideColor: "oklch(0.2 0.015 260)" }}>
+        <div className="grid grid-cols-7 divide-x" style={{ borderBottom: "1px solid oklch(0.2 0.015 260)" }}>
           {days.map((day) => (
             <div key={day} className="p-3 text-center text-xs font-medium text-muted-foreground">{day}</div>
           ))}
         </div>
-        <div className="grid grid-cols-7 divide-x min-h-48" style={{ divideColor: "oklch(0.2 0.015 260)" }}>
+        <div className="grid grid-cols-7 divide-x min-h-48">
           {days.map((day) => {
             const dayPosts = WEEK_POSTS.filter((p) => p.date === day);
             return (
