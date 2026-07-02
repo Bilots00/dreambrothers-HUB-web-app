@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { trpc } from "@/lib/trpc";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Tab = "calendar" | "chat" | "create";
@@ -22,11 +23,7 @@ interface Post {
   tags?: string[];
 }
 
-interface Message {
-  role: "user" | "ai";
-  content: string;
-  timestamp: string;
-}
+// Message type removed — the AI Manager chat now uses the tRPC social.chat* procedures.
 
 // ─── Mock Data ────────────────────────────────────────────────────────────────
 const WEEK_POSTS: Post[] = [
@@ -165,45 +162,49 @@ function CalendarView() {
   );
 }
 
-// ─── Chat Tab ────────────────────────────────────────────────────────────────
+// ─── Chat Tab (AI Manager — real chat via the local-Claude bridge) ───────────
 function ChatView() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "ai",
-      content: "Ciao! Sono il tuo AI Social Media Manager PRO 🚀\n\nPosso aiutarti con:\n• Strategie di contenuto personalizzate\n• Analisi dei trend in tempo reale\n• Generazione di caption e hook virali\n• Ottimizzazione degli orari di pubblicazione\n• Idee per Reel, Stories e Caroselli\n\nCome posso aiutarti oggi?",
-      timestamp: new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
-    },
-  ]);
+  const utils = trpc.useUtils();
+  const chat = trpc.social.chatList.useQuery(undefined, { refetchInterval: 4000 });
+  const config = trpc.social.config.useQuery();
+  const send = trpc.social.chatSend.useMutation({ onSuccess: () => { utils.social.chatList.invalidate(); } });
+  const saveSetting = trpc.settings.set.useMutation({ onSuccess: () => { config.refetch(); } });
+
   const [input, setInput] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  useEffect(() => { if (config.data) setPrompt(config.data.systemPrompt || ""); }, [config.data]);
 
-  const handleSend = async (text?: string) => {
-    const msg = text || input.trim();
-    if (!msg) return;
-    const time = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-    setMessages((prev) => [...prev, { role: "user", content: msg, timestamp: time }]);
+  const messages = chat.data ?? [];
+  const waiting = messages.length > 0 && messages[messages.length - 1].pending;
+
+  const handleSend = (text?: string) => {
+    const msg = (text ?? input).trim();
+    if (!msg || send.isPending) return;
     setInput("");
-    setIsTyping(true);
-    await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
-    const responses: Record<string, string> = {
-      trend: "📈 **Trend della settimana nella tua nicchia (Wall Art / Home Decor):**\n\n1. **Minimal Japandi** — +340% ricerche su TikTok questa settimana\n2. **Gallery Wall** — trend Instagram in crescita del 28%\n3. **Dark Academia** — engagement medio 4.2% sui Reel\n\n**Consiglio**: Lancia un Reel style \"prima/dopo\" su uno stile Japandi — forte potenziale virale!",
-      hook: "🎣 **3 Hook Virali per Reel Quadri Astratti:**\n\n1. *\"POV: finalmente trasformi quella parete vuota in arte che ti rappresenta 🖼️\"*\n\n2. *\"Questo quadro ha cambiato completamente l'atmosfera del mio living — non scherzo 😱\"*\n\n3. *\"Nessuno ti dice questa cosa quando scegli arte per casa... 👇 (vai al secondo slide)\"*\n\nVuoi che sviluppi uno di questi in script completo?",
-      default: "Ottima domanda! Analizzo il tuo scenario e ti fornisco una strategia personalizzata per DreamBrothers 🎯\n\nBasa la tua prossima settimana su questo mix:\n• **40%** contenuti educativi (come scegliere, come appendere, misure)\n• **35%** prodotto in contesto lifestyle (ambienti reali)\n• **25%** UGC e social proof\n\nVuoi che pianifichi questo in dettaglio per la prossima settimana?",
-    };
-    const key = msg.toLowerCase().includes("trend") ? "trend" : msg.toLowerCase().includes("hook") ? "hook" : "default";
-    setIsTyping(false);
-    setMessages((prev) => [...prev, { role: "ai", content: responses[key], timestamp: new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) }]);
+    send.mutate({ text: msg });
   };
-
-  useEffect(() => {
-    try {
-      const brief = localStorage.getItem("db_remix_brief");
-      if (brief) { localStorage.removeItem("db_remix_brief"); setInput(brief); }
-    } catch {}
-  }, []);
 
   return (
     <div className="flex flex-col h-full" style={{ height: "calc(100vh - 240px)", minHeight: "500px" }}>
+      {/* System prompt (editable) */}
+      <div className="mb-3">
+        <button onClick={() => setShowPrompt((v) => !v)} className="text-xs flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
+          <Sparkles className="w-3.5 h-3.5" /> System prompt {config.data?.systemPrompt ? "(personalizzato)" : "(default)"} · {showPrompt ? "nascondi" : "modifica"}
+        </button>
+        {showPrompt && (
+          <div className="mt-2">
+            <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="Sei il Social Media Manager di DreamBrothers. Voce da sognatore, mai vendita sull'organico…" className="resize-none text-sm" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.22 0.015 260)" }} />
+            <div className="flex items-center gap-3 mt-2">
+              <Button size="sm" className="h-8 text-white" style={{ background: "var(--gradient-primary)" }} disabled={saveSetting.isPending} onClick={() => saveSetting.mutate({ key: "social_system_prompt", value: prompt })}>
+                {saveSetting.isPending ? "Salvo…" : "Salva prompt"}
+              </Button>
+              <span className="text-xs text-muted-foreground">Il tuo Claude locale lo userà ad ogni risposta.</span>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Suggestions */}
       <div className="mb-4">
         <div className="flex flex-wrap gap-2">
@@ -217,24 +218,29 @@ function ChatView() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-4 pr-1 mb-4">
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-sm" style={{ background: msg.role === "ai" ? "var(--gradient-primary)" : "oklch(0.22 0.025 265)", color: "white", fontWeight: 600 }}>
-              {msg.role === "ai" ? "AI" : "A"}
+        {messages.length === 0 && (
+          <div className="text-sm text-muted-foreground text-center mt-8 leading-relaxed">
+            Scrivi al tuo <b>AI Manager</b> 🚀<br />Risponde il tuo Claude locale (piano Max) col contesto del brand.
+          </div>
+        )}
+        {messages.map((m) => (
+          <div key={m.id} className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-sm" style={{ background: m.role === "assistant" ? "var(--gradient-primary)" : "oklch(0.22 0.025 265)", color: "white", fontWeight: 600 }}>
+              {m.role === "assistant" ? "AI" : "A"}
             </div>
             <div className="max-w-[78%]">
-              <div className="rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap" style={{ background: msg.role === "ai" ? "oklch(0.14 0.015 260)" : "oklch(0.65 0.2 265 / 0.15)", border: `1px solid ${msg.role === "ai" ? "oklch(0.22 0.015 260)" : "oklch(0.65 0.2 265 / 0.3)"}` }}>
-                {msg.content}
+              <div className="rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap" style={{ background: m.role === "assistant" ? "oklch(0.14 0.015 260)" : "oklch(0.65 0.2 265 / 0.15)", border: `1px solid ${m.role === "assistant" ? "oklch(0.22 0.015 260)" : "oklch(0.65 0.2 265 / 0.3)"}` }}>
+                {m.text}
               </div>
-              <div className="text-xs text-muted-foreground mt-1 px-1">{msg.timestamp}</div>
+              <div className="text-xs text-muted-foreground mt-1 px-1">{m.when}</div>
             </div>
           </div>
         ))}
-        {isTyping && (
+        {waiting && (
           <div className="flex gap-3">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold text-white" style={{ background: "var(--gradient-primary)" }}>AI</div>
-            <div className="rounded-2xl px-4 py-3 flex gap-1.5 items-center" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.22 0.015 260)" }}>
-              {[0, 1, 2].map((i) => <div key={i} className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />)}
+            <div className="rounded-2xl px-4 py-3 text-xs text-muted-foreground flex items-center gap-2" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.22 0.015 260)" }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" /> In attesa del tuo Claude locale…
             </div>
           </div>
         )}
@@ -246,12 +252,12 @@ function ChatView() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-          placeholder="Chiedi una strategia, un hook virale, analisi trend... (Invio per inviare)"
+          placeholder="Chiedi una strategia, un carosello, un'analisi… (Invio per inviare)"
           className="flex-1 resize-none min-h-[48px] max-h-[120px]"
           rows={2}
           style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.22 0.015 260)" }}
         />
-        <Button onClick={() => handleSend()} disabled={!input.trim() || isTyping} className="self-end h-12 w-12 p-0 shrink-0" style={{ background: "var(--gradient-primary)" }}>
+        <Button onClick={() => handleSend()} disabled={!input.trim() || send.isPending} className="self-end h-12 w-12 p-0 shrink-0" style={{ background: "var(--gradient-primary)" }}>
           <Send className="w-4 h-4" />
         </Button>
       </div>
