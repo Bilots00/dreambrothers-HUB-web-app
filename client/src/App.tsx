@@ -19,6 +19,7 @@ import AlertsPage from "./pages/AlertsPage";
 import ConnectAccount from "./pages/ConnectAccount";
 import Home from "./pages/Home";
 import GelatoMaker from "./pages/GelatoMaker";
+import PodPartners from "./pages/PodPartners";
 import SocialMedia from "./pages/SocialMedia";
 import AssetsLibrary from "./pages/AssetsLibrary";
 import Inspiration from "./pages/Inspiration";
@@ -56,8 +57,9 @@ function AppRouter() {
       <Route path="/settings">{withLayout(Settings)}</Route>
       <Route path="/settings/brand">{withLayout(Settings)}</Route>
 
-      {/* GELATO */}
+      {/* PRINT ON DEMAND (Gelato + POD Partners) */}
       <Route path="/gelato/maker">{withLayout(GelatoMaker)}</Route>
+      <Route path="/gelato/pod-partners">{withLayout(PodPartners)}</Route>
       <Route path="/gelato">{() => { window.location.replace("/gelato/maker"); return null; }}</Route>
 
       {/* SOCIAL MEDIA */}

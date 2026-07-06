@@ -7,7 +7,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity, AlertTriangle, BarChart3, Bell, Bot, Maximize,
   ChevronDown, FlaskConical, Instagram, Layout,
-  LogOut, Megaphone, Package2, PanelLeft, Plug,
+  LogOut, Megaphone, Package, Package2, PanelLeft, Plug,
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox,
 } from "lucide-react";
@@ -31,6 +31,7 @@ const META_ADS_ITEMS = [
 
 const GELATO_ITEMS = [
   { icon: Package2, label: "Bulk Creator", path: "/gelato/maker", description: "Crea prodotti in massa" },
+  { icon: Package, label: "POD Partners", path: "/gelato/pod-partners", description: "Fornitori & certificato" },
 ];
 
 const SOCIAL_ITEMS = [
@@ -217,9 +218,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             defaultOpen={true}
           />
 
-          {/* Gelato */}
+          {/* Print on Demand (Gelato + POD Partners) */}
           <NavGroup
-            label="Gelato Print"
+            label="Print on Demand"
             icon={Package2}
             color="oklch(0.65 0.2 310)"
             items={GELATO_ITEMS}
