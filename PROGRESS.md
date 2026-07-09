@@ -43,3 +43,20 @@
 - `server/routers.ts`: `chatList` espone `source` alla UI.
 **Nota deploy VPS:** `claude-bot-workspace` è **pull-only** (deploy key read-only; cron sync ogni 5 min + keepalive social-agent ogni 1 min). Le modifiche a `social_agent.py` si pushano da PC → `git pull` sul VPS.
 **In attesa di GO go-live:** (1) merge `feat/smm-agent`→`main` = deploy Railway; (2) aggiornare `social_agent.py` (listener Telegram `db_smm_bot` + gestione `source`); (3) token bot in `~/.social-agent.env`; (4) accendere il social-agent.
+
+### 2026-07-10 — Fase 1 GO-LIVE ✅ COMPLETATA E VERIFICATA
+- Deploy web app su `main` (Railway, commit merge `1200880`). Migrazione `source` OK (HTTP 200 su `/api/social/pending`).
+- `social_agent.py` v2 (Telegram + thread unico + nudge) pushato su `Bilots00/claude-bot-VPS-workspace` (commit `7b71e96`), pull sul VPS. **Restart eseguito da Andrea** (l'avvio dell'agente `bypassPermissions` è gated per la sicurezza → lo fa lui).
+- Bloccante risolto: `db_smm_bot` aveva un **webhook n8n** → **disattivato** (non eliminato) il workflow `DreamBrothers UGC Telegram (Immagini)` (id `vqEeZzVxV3ZaSq18`) → webhook liberato (`getWebhookInfo url:""`), `getUpdates` ok.
+- **Test end-to-end OK**: ingest `source=telegram` → `claude -p` (sonnet, 11s) → reply nel thread + inviata su Telegram (owner `440669255`). Log: `replied to msg=17 src=telegram`.
+- Stato: web `/social/chat` + Telegram `db_smm_bot` = **conversazione unica LIVE**, sempre attiva sul VPS, costo LLM 0 (subscription Max). `SOCIAL_POLL_INTERVAL=5`.
+- `.social-agent.env` (VPS): aggiunto `SMM_TELEGRAM_BOT_TOKEN`; `TELEGRAM_OWNER_ID` riusato da `.bot.env`.
+
+### Metodo GPT Image 2.0 catturato (dal workflow n8n `vqEeZzVxV3ZaSq18`) — per Fase 1.5
+- OpenAI images: model `gpt-image-2`, operation **edit** (foto prodotto come reference), size `1024x1536`, quality `high`.
+- Prompt UGC: *"Ultra-realistic UGC-style vertical 9:16 photo... a real, relatable person naturally holding and using the exact product shown in the reference image... Scene: {caption}. Candid iPhone photo aesthetic, natural lighting, shallow depth of field, photorealistic, no text, no watermark."*
+- Output PNG → Telegram + Google Drive (My Assets). Credenziale: `OPENAI_API_KEY` (già in `~/.bot.env` sul VPS).
+
+### Prossimo — Fase 1.5: UGC da immagine in Telegram (2 modalità richieste da Andrea)
+- `/gpt-image-2.0` + foto prodotto + prompt → **GPT Image 2.0** (metodo n8n sopra, replicato in Python nell'agente).
+- default (senza comando) → **Higgsfield MCP** (metodo R. Belli Contarini dal video).
