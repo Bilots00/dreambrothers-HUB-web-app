@@ -60,3 +60,10 @@
 ### Prossimo — Fase 1.5: UGC da immagine in Telegram (2 modalità richieste da Andrea)
 - `/gpt-image-2.0` + foto prodotto + prompt → **GPT Image 2.0** (metodo n8n sopra, replicato in Python nell'agente).
 - default (senza comando) → **Higgsfield MCP** (metodo R. Belli Contarini dal video).
+
+### 2026-07-10 — Fase 2 (Knowledge base) ✅ integrata
+- 3 agenti paralleli hanno analizzato le cartelle marketing: *Instant Viral Templates 3.0* (3 famiglie di format, Lazy Viral = workhorse), *TOP Brands Inspiration* (@inspirationation00 quote-come-oggetto, @ispirazione.ita caroselli nostalgici open-loop), *Lumonboy* (schema JSON 9-campi per UGC dream-home + rotazione 4 scene).
+- **Brain** (repo `Bilots00/dreambrothers-brain`, auto-commit+push del MCP): creato `areas/marketing/viral-playbook.md`; arricchito `areas/design/template-creativita.md` (schema immagini UGC 9-campi); agganciato a `_hub-marketing`; `log.md` aggiornato.
+- **Agente SMM**: `social_system_prompt` aggiornato (1364 char) → consulta il Brain (`viral-playbook`, `template-creativita`, `banca-hook`) prima di creare contenuti. Verificato (`HAS viral-playbook: True`). **Live senza restart** (letto da `/api/social/config` ogni ciclo).
+- Verificato inoltre: il `claude` del VPS ha i connettori MCP `Higgsfield`, `Google Drive`, `Canva`, `Blotato`, `dreambrothers-brain`, `Shopify`, `Notion` (✔ Connected).
+- ⚠️ Sicurezza: `claude mcp list` ha esposto un token Admin Shopify (`shpat_...`) e il dominio backend `aa3csa-zv.myshopify.com` — da rigenerare (decisione di Andrea).
