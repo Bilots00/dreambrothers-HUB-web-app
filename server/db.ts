@@ -1,6 +1,6 @@
 import { eq, desc, and, or, isNull, gte, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, watchlistChannels, watchlistVideos } from "../drizzle/schema";
+import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, watchlistChannels, watchlistVideos, researchItems } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -663,6 +663,74 @@ export async function getWatchlistChannelStats(userId: number) {
   }).from(watchlistVideos)
     .where(eq(watchlistVideos.userId, userId))
     .groupBy(watchlistVideos.channelId);
+}
+
+// ─── SEO & Research: feed di market intelligence ───────────────────────────────
+export async function insertResearchItemIfNew(data: typeof researchItems.$inferInsert): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  try {
+    await db.insert(researchItems).values(data);
+    return true;
+  } catch (err) {
+    // duplicato sulla chiave unica (userId, urlHash): già visto, non è un errore
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/duplicate/i.test(msg)) return false;
+    throw err;
+  }
+}
+
+export interface ResearchFilters {
+  source?: string;
+  status?: string;
+  hours?: number; // 0 = tutti
+  minVirality?: number;
+  minTarget?: number;
+  search?: string;
+  limit?: number;
+}
+
+export async function getResearchItems(userId: number, f: ResearchFilters = {}) {
+  const db = await getDb();
+  if (!db) return [];
+  const conds = [eq(researchItems.userId, userId)];
+  if (f.source) conds.push(eq(researchItems.source, f.source));
+  if (f.status) conds.push(eq(researchItems.status, f.status as "da_leggere" | "salvato" | "usato" | "cestinato"));
+  else conds.push(sql`${researchItems.status} != 'cestinato'`);
+  if (f.hours && f.hours > 0) {
+    const since = new Date(Date.now() - f.hours * 3_600_000);
+    conds.push(or(gte(researchItems.publishedAt, since), and(isNull(researchItems.publishedAt), gte(researchItems.fetchedAt, since)))!);
+  }
+  if (f.minVirality && f.minVirality > 0) conds.push(gte(researchItems.viralityScore, f.minVirality));
+  if (f.minTarget && f.minTarget > 0) conds.push(gte(researchItems.targetScore, f.minTarget));
+  if (f.search) conds.push(sql`${researchItems.title} LIKE ${`%${f.search}%`}`);
+  return db.select().from(researchItems)
+    .where(and(...conds))
+    .orderBy(desc(researchItems.viralityScore), desc(researchItems.publishedAt))
+    .limit(Math.min(f.limit ?? 100, 300));
+}
+
+export async function getResearchItemById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(researchItems).where(eq(researchItems.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function updateResearchItem(id: number, patch: Partial<typeof researchItems.$inferInsert>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(researchItems).set(patch).where(eq(researchItems.id, id));
+}
+
+/** Item non ancora arricchiti dall'LLM, i più virali prima. */
+export async function getUnenrichedResearchItems(userId: number, limit = 10) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(researchItems)
+    .where(and(eq(researchItems.userId, userId), isNull(researchItems.enrichedAt), sql`${researchItems.status} != 'cestinato'`))
+    .orderBy(desc(researchItems.viralityScore), desc(researchItems.fetchedAt))
+    .limit(limit);
 }
 
 /** Salva la deep-analysis di un video (compilata dall'agente VPS). */

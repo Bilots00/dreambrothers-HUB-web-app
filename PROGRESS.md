@@ -99,3 +99,9 @@
 - **TikTok**: stesso fallback con `clockworks/tiktok-profile-scraper` (25 video/refresh, ~$0.075).
 - **Da fare (Andrea)**: copiare il token da console.apify.com → Settings → API & Integrations → e crearlo su Railway come variabile `APIFY_TOKEN`.
 - Deploy: `a58b243` + `c109a35` su main.
+
+### 2026-07-15 — Fase 2.7: SEO & Research Hub (replica dashboard WeAreMarketers)
+- Analizzato il video Mastermind (2Yq4Vq_W-Sw, 1:24:43-1:31:28): dashboard Vignali (Gmail/news/Reddit/Substack → viralità/in-target/interesse 0-10 → brief + chiave di lettura + genera contenuti) + **lezione anti-traffico-freddo**: la notizia nuda fa rumore e non porta clienti; il contenuto deve partire dall'angle del brand.
+- **Decisione architetturale**: feed = infrastruttura condivisa (DB + REST `x-care-secret`), operatore primario = AI **SEO Specialist** (blog Shopify + X + Facebook), consumatori: SMM, futuro Market Intelligence Strategist (file mansioni in HR_ Dream_TEAM), Brain (solo sintesi durevoli).
+- **Implementato**: tabella `research_items` (punteggi viralità euristica + target/interesse via `invokeLLM` gemini-flash con brand context configurabile); fonti gratuite Reddit `.rss` (i .json sono 403 senza OAuth), Google News RSS, Google Trends RSS, Substack RSS; pagina `/seo/research` (nuovo gruppo sidebar **SEO & Research** dopo Social Organico) con filtri, punteggi, modal brief/chiave di lettura, config fonti, "Genera contenuti" → messaggio `[SEO → CONTENUTO]` nel bridge chat → bozze blog+X+FB (draft-first); REST `/api/seo/research/*` (items/refresh/enrich/ingest/status) per agente VPS; skill in `references/skills/seo-research.md`.
+- Verificato live: GNews 15 item, GTrends 10, Reddit .rss ok (429 se paralleli → serializzati con pausa 1.2s), Substack blocca da IP consumer (gestito con errore chiaro + ingest agente). Typecheck pulito, vitest 29/29.

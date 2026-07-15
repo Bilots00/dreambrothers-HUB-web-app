@@ -26,6 +26,7 @@ import Inspiration from "./pages/Inspiration";
 import CustomerCare from "./pages/CustomerCare";
 import SocialDrafts from "./pages/SocialDrafts";
 import SocialWatchlist from "./pages/SocialWatchlist";
+import SeoResearch from "./pages/SeoResearch";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 
@@ -70,6 +71,10 @@ function AppRouter() {
       <Route path="/social/drafts">{withLayout(SocialDrafts)}</Route>
       <Route path="/social/watchlist">{withLayout(SocialWatchlist)}</Route>
       <Route path="/social">{() => { window.location.replace("/social/calendar"); return null; }}</Route>
+
+      {/* SEO & RESEARCH */}
+      <Route path="/seo/research">{withLayout(SeoResearch)}</Route>
+      <Route path="/seo">{() => { window.location.replace("/seo/research"); return null; }}</Route>
 
       {/* CUSTOMER CARE */}
       <Route path="/care">{withLayout(CustomerCare)}</Route>

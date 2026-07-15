@@ -10,6 +10,7 @@ import {
   LogOut, Megaphone, Package, Package2, PanelLeft, Plug,
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar,
+  Newspaper, TrendingUp,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -42,6 +43,10 @@ const SOCIAL_ITEMS = [
   { icon: Radar, label: "Watchlist", path: "/social/watchlist", description: "Canali competitor & outlier" },
 ];
 
+const SEO_ITEMS = [
+  { icon: Newspaper, label: "Research Hub", path: "/seo/research", description: "Trend, news & keywords" },
+];
+
 const CARE_ITEMS = [
   { icon: Inbox, label: "Inbox", path: "/care", description: "Tutti i messaggi clienti" },
 ];
@@ -52,7 +57,7 @@ const LIBRARY_ITEMS = [
 ];
 
 // Flat map for header lookup
-const ALL_ITEMS = [...META_ADS_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...CARE_ITEMS, ...LIBRARY_ITEMS];
+const ALL_ITEMS = [...META_ADS_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...SEO_ITEMS, ...CARE_ITEMS, ...LIBRARY_ITEMS];
 
 // ─── NavGroup component ───────────────────────────────────────────────────────
 function NavGroup({
@@ -237,6 +242,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             icon={Instagram}
             color="oklch(0.65 0.2 340)"
             items={SOCIAL_ITEMS}
+            location={location}
+            navigate={navigate}
+            sidebarOpen={sidebarOpen}
+            defaultOpen={false}
+          />
+
+          {/* SEO & Research */}
+          <NavGroup
+            label="SEO & Research"
+            icon={TrendingUp}
+            color="oklch(0.7 0.16 150)"
+            items={SEO_ITEMS}
             location={location}
             navigate={navigate}
             sidebarOpen={sidebarOpen}

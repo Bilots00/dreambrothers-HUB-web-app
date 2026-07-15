@@ -19,8 +19,13 @@ import {
   getCsConversationsForUser, getCsMessagesForConversation, recordCsReply, updateCsConversation, getCsConversationById,
   getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, updateSocialDraft, deleteSocialDraft,
   getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById,
+  getResearchItems, getResearchItemById, updateResearchItem,
 } from "./db";
 import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChannels } from "./watchlistService";
+import {
+  refreshResearch, enrichPendingResearch, requestContentFromResearch,
+  getResearchConfig, saveResearchConfig,
+} from "./researchService";
 import {
   getAdAccountInfo, getMetaCampaigns, createMetaCampaign,
   getMetaAdSets, createMetaAdSet, getMetaAds,
@@ -180,6 +185,69 @@ export const appRouter = router({
         const text = `[WATCHLIST → DEEP ANALYSIS]\nAnalizza questo video della watchlist: ${input.url}${input.title ? `\nTitolo: ${input.title}` : ""}\nEstrai: topic, hook (parlato/visivo/testo) + categoria hook, formato storytelling e perché funziona, struttura, CTA, insight non ovvi. Poi salva il JSON con POST /api/social/watchlist/analysis e rispondimi in chat con la sintesi.`;
         const id = await insertSocialChatMessage({ userId: ctx.user.id, role: "user", text, status: "new", source: "web" });
         return { success: true, id } as const;
+      }),
+  }),
+
+  // ─── SEO & Research: feed di market intelligence (replica WeAreMarketers) ────
+  research: router({
+    list: protectedProcedure
+      .input(z.object({
+        source: z.string().optional(),
+        status: z.enum(["da_leggere", "salvato", "usato", "cestinato"]).optional(),
+        hours: z.number().min(0).max(8760).default(48),
+        minVirality: z.number().min(0).max(10).default(0),
+        minTarget: z.number().min(0).max(10).default(0),
+        search: z.string().optional(),
+        limit: z.number().min(1).max(300).default(100),
+      }))
+      .query(async ({ ctx, input }) => {
+        return getResearchItems(ctx.user.id, input);
+      }),
+
+    refresh: protectedProcedure.mutation(async ({ ctx }) => {
+      return refreshResearch(ctx.user.id);
+    }),
+
+    setStatus: protectedProcedure
+      .input(z.object({ id: z.number(), status: z.enum(["da_leggere", "salvato", "usato", "cestinato"]) }))
+      .mutation(async ({ ctx, input }) => {
+        const item = await getResearchItemById(input.id);
+        if (!item || item.userId !== ctx.user.id) throw new Error("Item non trovato");
+        await updateResearchItem(input.id, { status: input.status });
+        return { success: true } as const;
+      }),
+
+    enrichPending: protectedProcedure.mutation(async ({ ctx }) => {
+      const enriched = await enrichPendingResearch(ctx.user.id, 15);
+      return { enriched } as const;
+    }),
+
+    generateContent: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        formats: z.array(z.enum(["blog", "x", "facebook"])).default(["blog", "x", "facebook"]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        return requestContentFromResearch(ctx.user.id, input.id, input.formats);
+      }),
+
+    getConfig: protectedProcedure.query(async ({ ctx }) => {
+      return getResearchConfig(ctx.user.id);
+    }),
+
+    saveConfig: protectedProcedure
+      .input(z.object({
+        sources: z.object({
+          subreddits: z.array(z.string()),
+          newsQueries: z.array(z.string()),
+          substacks: z.array(z.string()),
+          trendsGeo: z.string(),
+        }).optional(),
+        brandContext: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await saveResearchConfig(ctx.user.id, input);
+        return { success: true } as const;
       }),
   }),
 

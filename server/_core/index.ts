@@ -9,6 +9,7 @@ import { registerCareRoutes } from "./careRoutes";
 import { registerSocialRoutes } from "./socialRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
+import { registerResearchRoutes } from "./researchRoutes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -161,6 +162,38 @@ async function runMigrations() {
   } catch (err) {
     console.warn("[Migrate] tabelle watchlist non create:", err);
   }
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS research_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      source VARCHAR(24) NOT NULL,
+      sourceDetail VARCHAR(191),
+      title TEXT NOT NULL,
+      url TEXT,
+      urlHash VARCHAR(64) NOT NULL,
+      excerpt TEXT,
+      fullText TEXT,
+      brief TEXT,
+      angle TEXT,
+      commentAnalysis TEXT,
+      viralityScore INT NOT NULL DEFAULT 5,
+      targetScore INT,
+      interestScore INT,
+      engagement INT NOT NULL DEFAULT 0,
+      status ENUM('da_leggere','salvato','usato','cestinato') NOT NULL DEFAULT 'da_leggere',
+      publishedAt TIMESTAMP NULL,
+      enrichedAt TIMESTAMP NULL,
+      fetchedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_research_item (userId, urlHash),
+      INDEX idx_research_user (userId),
+      INDEX idx_research_status (status),
+      INDEX idx_research_published (publishedAt)
+    )`);
+    console.log("[Migrate] Tabella research_items pronta");
+  } catch (err) {
+    console.warn("[Migrate] tabella research_items non creata:", err);
+  }
   // Migrazione additiva idempotente: colonna `source` (web|telegram) su social_chat_messages
   try {
     const res: any = await db.execute(sql`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_chat_messages' AND COLUMN_NAME = 'source'`);
@@ -206,6 +239,7 @@ async function startServer() {
   registerSocialRoutes(app);
   registerWatchlistRoutes(app);
   registerImageProxy(app);
+  registerResearchRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

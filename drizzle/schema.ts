@@ -435,3 +435,36 @@ export const watchlistVideos = mysqlTable("watchlist_videos", {
 ]);
 
 export type WatchlistVideo = typeof watchlistVideos.$inferSelect;
+
+// ─── SEO & Research: feed di market intelligence (replica dashboard WeAreMarketers) ─
+// Notizie/conversazioni/trend da Reddit, Google News, Google Trends, Substack (+
+// ingest dall'agente VPS per Gmail ecc.). Punteggi 0-10: viralità (euristica dalla
+// fonte), in-target e interesse (LLM, contro la buyer persona del brand).
+export const researchItems = mysqlTable("research_items", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  source: varchar("source", { length: 24 }).notNull(), // reddit | news | trends | substack | gmail | manual
+  sourceDetail: varchar("sourceDetail", { length: 191 }), // r/sub, nome feed, query
+  title: text("title").notNull(),
+  url: text("url"),
+  // sha256(url|title) per dedup: le url delle news sono troppo lunghe per una chiave
+  urlHash: varchar("urlHash", { length: 64 }).notNull(),
+  excerpt: text("excerpt"),
+  fullText: text("fullText"),
+  brief: text("brief"), // LLM: cosa è successo
+  angle: text("angle"), // LLM: chiave di lettura col sistema di credenze del brand
+  commentAnalysis: text("commentAnalysis"), // analisi conversazione (agente/LLM)
+  viralityScore: int("viralityScore").default(5).notNull(),
+  targetScore: int("targetScore"),
+  interestScore: int("interestScore"),
+  engagement: int("engagement").default(0).notNull(), // metrica grezza (upvotes+commenti)
+  status: mysqlEnum("status", ["da_leggere", "salvato", "usato", "cestinato"]).default("da_leggere").notNull(),
+  publishedAt: timestamp("publishedAt"),
+  enrichedAt: timestamp("enrichedAt"),
+  fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("uq_research_item").on(t.userId, t.urlHash),
+]);
+
+export type ResearchItem = typeof researchItems.$inferSelect;
