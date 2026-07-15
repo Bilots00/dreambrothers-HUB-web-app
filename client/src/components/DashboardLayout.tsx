@@ -31,6 +31,7 @@ const META_ADS_ITEMS = [
 ];
 
 const GELATO_ITEMS = [
+  { icon: Radar, label: "Product Market FIT", path: "/gelato/market-fit", description: "Monitor competitor & opportunità" },
   { icon: Package2, label: "Bulk Creator", path: "/gelato/maker", description: "Crea prodotti in massa" },
   { icon: Package, label: "POD Partners", path: "/gelato/pod-partners", description: "Fornitori & certificato" },
 ];

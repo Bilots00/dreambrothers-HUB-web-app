@@ -1,6 +1,7 @@
 import { refreshResearch } from "../researchService";
 import { refreshAllWatchlistChannels } from "../watchlistService";
 import { insertSocialChatMessage, getAllUserSettings } from "../db";
+import { runAllStoresCycle, enrichPendingMarketChanges } from "../marketIntelService";
 
 // Scheduler in-process (il server Railway è always-on): job giornalieri a orario
 // fisso italiano, indipendenti dai bottoni della UI e dal browser aperto.
@@ -77,5 +78,11 @@ export function registerDailySchedules() {
         console.log("[Scheduler] nessun motore sul server: enrichment delegato all'agente via chat bridge");
       }
     }
+  });
+
+  scheduleDaily(9, 15, "market-monitor", async () => {
+    const r = await runAllStoresCycle(OWNER_USER_ID);
+    console.log(`[Scheduler] market 09:15: stores=${r.stores} changes=${r.changes} errori=${r.errors.length}`);
+    try { await enrichPendingMarketChanges(OWNER_USER_ID); } catch (e) { console.warn("[Scheduler] market enrich fallito:", e); }
   });
 }

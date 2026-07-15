@@ -27,6 +27,7 @@ import CustomerCare from "./pages/CustomerCare";
 import SocialDrafts from "./pages/SocialDrafts";
 import SocialWatchlist from "./pages/SocialWatchlist";
 import SeoResearch from "./pages/SeoResearch";
+import ProductMarketFit from "./pages/ProductMarketFit";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 
@@ -60,6 +61,7 @@ function AppRouter() {
       <Route path="/settings/brand">{withLayout(Settings)}</Route>
 
       {/* PRINT ON DEMAND (Gelato + POD Partners) */}
+      <Route path="/gelato/market-fit">{withLayout(ProductMarketFit)}</Route>
       <Route path="/gelato/maker">{withLayout(GelatoMaker)}</Route>
       <Route path="/gelato/pod-partners">{withLayout(PodPartners)}</Route>
       <Route path="/gelato">{() => { window.location.replace("/gelato/maker"); return null; }}</Route>
