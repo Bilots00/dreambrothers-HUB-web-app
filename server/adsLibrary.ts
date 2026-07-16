@@ -10,6 +10,8 @@
 export type NormalizedAd = {
   adArchiveId: string;
   pageName: string | null;
+  /** Foto profilo della Pagina: è il logo che la Ads Library mostra accanto all'advertiser. */
+  pageProfilePictureUrl: string | null;
   title: string | null;
   bodyText: string | null;
   ctaText: string | null;
@@ -79,6 +81,42 @@ function firstOf(v: unknown): AnyObj | undefined {
   return Array.isArray(v) && v.length > 0 && typeof v[0] === "object" ? (v[0] as AnyObj) : undefined;
 }
 
+function asArray(v: unknown): AnyObj[] {
+  return Array.isArray(v) ? v.filter((x): x is AnyObj => typeof x === "object" && x !== null) : [];
+}
+
+/**
+ * Cerca il primo media utile scandendo TUTTI i contenitori possibili.
+ * Le ads con più versioni ("This ad has multiple versions") e i caroselli
+ * tengono i media dentro `cards[]`, non in `images[]`/`videos[]`: guardare solo
+ * il primo elemento di images/videos le faceva sembrare senza media → scartate.
+ */
+function collectMedia(snapshot: AnyObj): { imageUrl: string | null; videoUrl: string | null; thumbnailUrl: string | null } {
+  const IMG_KEYS = ["original_image_url", "resized_image_url", "originalImageUrl", "resizedImageUrl", "image_url", "imageUrl", "url"];
+  const VIDEO_KEYS = ["video_hd_url", "video_sd_url", "videoHdUrl", "videoSdUrl", "video_url"];
+  const THUMB_KEYS = ["video_preview_image_url", "videoPreviewImageUrl", "thumbnail_url", "thumbnailUrl"];
+
+  const containers: AnyObj[] = [
+    snapshot,
+    ...asArray(pick(snapshot, "images")),
+    ...asArray(pick(snapshot, "videos")),
+    ...asArray(pick(snapshot, "cards")),
+    ...asArray(pick(snapshot, "extra_images")),
+    ...asArray(pick(snapshot, "extra_videos")),
+  ];
+
+  let imageUrl: string | null = null;
+  let videoUrl: string | null = null;
+  let thumbnailUrl: string | null = null;
+  for (const c of containers) {
+    if (!videoUrl) videoUrl = asStr(pick(c, ...VIDEO_KEYS));
+    if (!thumbnailUrl) thumbnailUrl = asStr(pick(c, ...THUMB_KEYS));
+    if (!imageUrl) imageUrl = asStr(pick(c, ...IMG_KEYS));
+    if (imageUrl && videoUrl && thumbnailUrl) break;
+  }
+  return { imageUrl, videoUrl, thumbnailUrl: thumbnailUrl ?? imageUrl };
+}
+
 export function computeActiveDays(started: Date | null, now: Date = new Date()): number {
   if (!started) return 0;
   const days = Math.floor((now.getTime() - started.getTime()) / 86_400_000);
@@ -100,15 +138,8 @@ export function mapScrapedAd(item: AnyObj, now: Date = new Date()): NormalizedAd
   const body = pick(snapshot, "body") as AnyObj | string | undefined;
   const bodyText = typeof body === "string" ? body : asStr(pick(body as AnyObj, "text")) ?? asStr(pick(snapshot, "body_text", "bodyText"));
 
-  const image = firstOf(pick(snapshot, "images"));
-  const video = firstOf(pick(snapshot, "videos"));
+  const { imageUrl, videoUrl, thumbnailUrl } = collectMedia(snapshot);
   const cards = firstOf(pick(snapshot, "cards"));
-
-  const imageUrl = asStr(pick(image, "original_image_url", "resized_image_url", "originalImageUrl", "resizedImageUrl"))
-    ?? asStr(pick(cards, "original_image_url", "resized_image_url"))
-    ?? asStr(pick(snapshot, "image_url", "imageUrl"));
-  const videoUrl = asStr(pick(video, "video_hd_url", "video_sd_url", "videoHdUrl", "videoSdUrl"));
-  const thumbnailUrl = asStr(pick(video, "video_preview_image_url", "videoPreviewImageUrl")) ?? imageUrl;
 
   const started = asDate(pick(item, "start_date", "startDate", "start_date_string", "ad_delivery_start_time"))
     ?? asDate(pick(snapshot, "start_date"));
@@ -117,13 +148,15 @@ export function mapScrapedAd(item: AnyObj, now: Date = new Date()): NormalizedAd
   return {
     adArchiveId,
     pageName: asStr(pick(item, "page_name", "pageName")) ?? asStr(pick(snapshot, "page_name")),
-    title: asStr(pick(snapshot, "title", "link_title", "caption")),
-    bodyText: bodyText ?? null,
-    ctaText: asStr(pick(snapshot, "cta_text", "ctaText", "cta_type")),
-    landingUrl: asStr(pick(snapshot, "link_url", "linkUrl", "landing_url")),
-    imageUrl: imageUrl ?? null,
-    videoUrl: videoUrl ?? null,
-    thumbnailUrl: thumbnailUrl ?? null,
+    pageProfilePictureUrl: asStr(pick(snapshot, "page_profile_picture_url", "pageProfilePictureUrl"))
+      ?? asStr(pick(item, "page_profile_picture_url", "pageProfilePictureUrl")),
+    title: asStr(pick(snapshot, "title", "link_title", "caption")) ?? asStr(pick(cards, "title", "link_title")),
+    bodyText: bodyText ?? asStr(pick(cards, "body")) ?? null,
+    ctaText: asStr(pick(snapshot, "cta_text", "ctaText", "cta_type")) ?? asStr(pick(cards, "cta_text", "cta_type")),
+    landingUrl: asStr(pick(snapshot, "link_url", "linkUrl", "landing_url")) ?? asStr(pick(cards, "link_url")),
+    imageUrl,
+    videoUrl,
+    thumbnailUrl,
     startedRunningAt: started,
     activeDays,
     score: computeTrendingScore(activeDays, Boolean(videoUrl)),

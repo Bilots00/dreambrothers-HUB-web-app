@@ -14,13 +14,16 @@ import {
   upsertAdInspiration, getAdInspirations, getAdInspirationById, setAdInspirationLiked,
   countAdInspirationsByBrand, insertSocialChatMessage, getAllUserSettings, insertMcActivity,
 } from "./db";
-import { apifyRunSync, hasApifyToken } from "./watchlist";
+import { apifyRunAsync, hasApifyToken } from "./watchlist";
 import {
   parsePageIdInput, adsLibraryUrlForPage, mapScrapedAd, buildScrapeHandoffTask,
 } from "./adsLibrary";
 
 const FB_ADS_ACTOR = process.env.APIFY_FB_ADS_ACTOR || "curious_coder~facebook-ads-library-scraper";
 const LOCAL_AGENT_ONLINE_MS = 300_000;
+// Quante ads scaricare per brand: la Ads Library di un brand attivo ne ha
+// centinaia (Andy okay ~890), il vecchio cap a 50 ne mostrava una frazione.
+const MAX_ADS_PER_BRAND = Number(process.env.ADS_LIBRARY_MAX_PER_BRAND ?? 500);
 
 async function logLyra(userId: number, message: string, details?: Record<string, unknown>) {
   await insertMcActivity({ userId, agentCode: "lyra", message, details }).catch(() => {});
@@ -62,15 +65,21 @@ export async function refreshBrand(userId: number, brandId: number): Promise<{ i
   // 1) Apify
   if (hasApifyToken()) {
     try {
-      const items = await apifyRunSync<Record<string, unknown>>(FB_ADS_ACTOR, {
+      const items = await apifyRunAsync<Record<string, unknown>>(FB_ADS_ACTOR, {
         urls: [{ url: adsLibraryUrlForPage(brand.pageId) }],
-        count: 50,
+        count: MAX_ADS_PER_BRAND,
         "scrapePageAds.activeStatus": "active",
         period: "",
-      });
-      const ingested = await ingestAdsForBrand(userId, brand.id, items);
+      }, { limit: MAX_ADS_PER_BRAND });
+      const { ingested, skipped } = await ingestAdsForBrand(userId, brand.id, items);
       await updateAdBrand(brand.id, { status: "active", lastError: null, lastRefreshAt: new Date(), adCount: await countAdInspirationsByBrand(userId, brand.id) });
-      if (ingested > 0) await logLyra(userId, `Ads Library: ${ingested} creative aggiornate dal brand "${brand.name}" (${items.length} ads analizzate). Le trovi in Inspiration.`);
+      if (ingested > 0) {
+        await logLyra(userId, `Ads Library: ${ingested} creative aggiornate dal brand "${brand.name}" (${items.length} ads analizzate${skipped > 0 ? `, ${skipped} senza media utilizzabile` : ""}). Le trovi in Inspiration.`);
+      }
+      // Trasparenza: se lo scraper tocca il tetto, dillo invece di far sembrare che siano tutte.
+      if (items.length >= MAX_ADS_PER_BRAND) {
+        console.log(`[AdsLibrary] ${brand.name}: raggiunto il cap di ${MAX_ADS_PER_BRAND} ads (alza ADS_LIBRARY_MAX_PER_BRAND per scaricarne di più)`);
+      }
       return { ingested, engine: "apify" };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -114,12 +123,18 @@ export async function refreshAllBrands(userId: number): Promise<{ brands: number
 }
 
 // ─── Ingest (Apify o REST dall'agente VPS) ────────────────────────────────────
-export async function ingestAdsForBrand(userId: number, brandId: number | null, items: Array<Record<string, unknown>>): Promise<number> {
+export async function ingestAdsForBrand(userId: number, brandId: number | null, items: Array<Record<string, unknown>>): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0;
+  let skipped = 0;
+  let logoUrl: string | null = null;
   for (const item of items) {
     const ad = mapScrapedAd(item);
-    if (!ad) continue;
-    if (!ad.imageUrl && !ad.videoUrl && !ad.thumbnailUrl) continue; // niente media = card vuota, salta
+    if (!ad) { skipped++; continue; }
+    // Il logo dell'advertiser arriva dallo snapshot dell'ad (page_profile_picture_url):
+    // è la stessa immagine che la Ads Library mostra accanto al nome del brand.
+    if (!logoUrl && ad.pageProfilePictureUrl) logoUrl = ad.pageProfilePictureUrl;
+    // Senza NESSUN media né testo la card sarebbe vuota: solo in quel caso saltiamo.
+    if (!ad.imageUrl && !ad.videoUrl && !ad.thumbnailUrl && !ad.bodyText && !ad.title) { skipped++; continue; }
     await upsertAdInspiration({
       userId,
       brandId: brandId ?? undefined,
@@ -141,12 +156,15 @@ export async function ingestAdsForBrand(userId: number, brandId: number | null, 
     });
     ingested++;
   }
-  return ingested;
+  if (brandId != null && logoUrl) {
+    await updateAdBrand(brandId, { logoUrl }).catch(() => {});
+  }
+  return { ingested, skipped };
 }
 
 export async function ingestFromRest(userId: number, pageId: string, items: Array<Record<string, unknown>>): Promise<{ ingested: number; brandId: number | null }> {
   const brand = await getAdBrandByPageId(userId, pageId);
-  const ingested = await ingestAdsForBrand(userId, brand?.id ?? null, items);
+  const { ingested } = await ingestAdsForBrand(userId, brand?.id ?? null, items);
   if (brand) {
     await updateAdBrand(brand.id, { status: "active", lastError: null, lastRefreshAt: new Date(), adCount: await countAdInspirationsByBrand(userId, brand.id) });
     if (ingested > 0) await logLyra(userId, `Ads Library: l'agente ha ingestato ${ingested} creative del brand "${brand.name}".`);

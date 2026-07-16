@@ -2,9 +2,12 @@ import { useMemo, useState, type ElementType } from "react";
 import {
   Radar, Youtube, Instagram, Music2, RefreshCw, Trash2, Plus, ExternalLink,
   Download, Bot, Eye, Heart, MessageCircle, Zap, AlertTriangle, CheckCircle2,
+  LayoutGrid, Sparkles, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 
@@ -42,21 +45,42 @@ export default function SocialWatchlist() {
   const utils = trpc.useUtils();
   const channels = trpc.watchlist.list.useQuery(undefined, { refetchInterval: 30000 });
 
+  const [tab, setTab] = useState<"feed" | "templates">("feed");
   const [filterChannel, setFilterChannel] = useState<string>("all");
   const [filterPlatform, setFilterPlatform] = useState<string>("all");
   const [lookback, setLookback] = useState<string>("30");
   const [minOutlier, setMinOutlier] = useState<string>("0");
   const [sort, setSort] = useState<"outlier" | "views" | "recent">("outlier");
+  const [remixTarget, setRemixTarget] = useState<number | null>(null);
+  const [remixNote, setRemixNote] = useState("");
 
+  const isTemplates = tab === "templates";
   const videosInput = {
     channelId: filterChannel !== "all" ? Number(filterChannel) : undefined,
     platform: filterPlatform !== "all" ? (filterPlatform as "youtube" | "instagram" | "tiktok") : undefined,
-    lookbackDays: Number(lookback),
-    minOutlier: Number(minOutlier),
+    // nei Templates conta ciò che hai salvato, non la finestra temporale
+    lookbackDays: isTemplates ? 0 : Number(lookback),
+    minOutlier: isTemplates ? 0 : Number(minOutlier),
+    liked: isTemplates ? true : undefined,
     sort,
     limit: 100,
   };
   const videos = trpc.watchlist.videos.useQuery(videosInput, { refetchInterval: 60000 });
+
+  const likeMut = trpc.watchlist.toggleLike.useMutation({
+    onSuccess: (r) => {
+      utils.watchlist.videos.invalidate();
+      toast.success(r.liked ? "Salvato nei Templates 🩷" : "Rimosso dai Templates");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const remixMut = trpc.watchlist.requestRemix.useMutation({
+    onSuccess: () => {
+      setRemixTarget(null); setRemixNote("");
+      toast.success("Inviato all'AI Manager: la versione on-brand arriverà nelle Bozze");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const invalidate = () => {
     utils.watchlist.list.invalidate();
@@ -142,6 +166,20 @@ export default function SocialWatchlist() {
         </div>
       </div>
 
+      {/* Tab pills: Feed (tutti i contenuti) / Templates (i salvati col 🩷) */}
+      <div className="inline-flex items-center gap-1 rounded-xl p-1" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.22 0.02 260)" }}>
+        {([
+          { id: "feed" as const, label: "Feed", icon: Radar },
+          { id: "templates" as const, label: "Templates", icon: LayoutGrid },
+        ]).map((t) => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+            style={tab === t.id ? { background: "oklch(0.22 0.02 260)", color: "white" } : { color: "oklch(0.65 0.02 260)" }}>
+            <t.icon className="h-4 w-4" /> {t.label}
+          </button>
+        ))}
+      </div>
+
       <div className="grid lg:grid-cols-[1fr_320px] gap-4 items-start">
         {/* ── Feed video ── */}
         <div className="space-y-4">
@@ -197,7 +235,9 @@ export default function SocialWatchlist() {
           {/* Empty state */}
           {feed.length === 0 && (
             <div className="rounded-2xl p-10 text-center text-sm text-muted-foreground" style={{ background: "oklch(0.13 0.015 260)", border: "1px dashed oklch(0.22 0.015 260)" }}>
-              {list.length === 0
+              {isTemplates
+                ? <>Nessun contenuto salvato: metti il 🩷 ai video vincenti nel <b>Feed</b> e li ritroverai qui, pronti da remixare.</>
+                : list.length === 0
                 ? <>Aggiungi il primo canale alla watchlist (URL o @handle) e importo subito i suoi video. 📡</>
                 : <>Nessun video con questi filtri. Prova ad allargare il periodo o abbassare la soglia outlier.</>}
             </div>
@@ -215,25 +255,51 @@ export default function SocialWatchlist() {
               const rawThumb = v.thumbnailUrl ?? (v.platform === "youtube" ? `https://i.ytimg.com/vi/${v.platformVideoId}/hqdefault.jpg` : null);
               const thumbSrc = proxied(rawThumb);
               return (
-                <div key={v.id} className="rounded-2xl overflow-hidden flex flex-col" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
-                  <a href={v.url} target="_blank" rel="noreferrer" className="relative block aspect-video" style={{ background: "oklch(0.1 0.01 260)" }}>
-                    {thumbSrc && (
-                      <img src={thumbSrc} alt={v.title ?? ""} loading="lazy" referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          const img = e.target as HTMLImageElement;
-                          const canonical = v.platform === "youtube" ? `https://i.ytimg.com/vi/${v.platformVideoId}/hqdefault.jpg` : null;
-                          if (canonical && !img.src.includes("ytimg.com")) img.src = canonical;
-                          else img.style.display = "none";
-                        }} />
-                    )}
-                    <span className="absolute top-2 left-2 flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: os.bg, color: os.fg, backdropFilter: "blur(4px)" }}>
+                <div key={v.id} className="group rounded-2xl overflow-hidden flex flex-col" style={{ background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+                  <div className="relative block aspect-video" style={{ background: "oklch(0.1 0.01 260)" }}>
+                    <a href={v.url} target="_blank" rel="noreferrer" className="block w-full h-full">
+                      {thumbSrc && (
+                        <img src={thumbSrc} alt={v.title ?? ""} loading="lazy" referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            const img = e.target as HTMLImageElement;
+                            const canonical = v.platform === "youtube" ? `https://i.ytimg.com/vi/${v.platformVideoId}/hqdefault.jpg` : null;
+                            if (canonical && !img.src.includes("ytimg.com")) img.src = canonical;
+                            else img.style.display = "none";
+                          }} />
+                      )}
+                    </a>
+                    <span className="absolute top-2 left-2 flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full pointer-events-none" style={{ background: os.bg, color: os.fg, backdropFilter: "blur(4px)" }}>
                       <Zap className="w-3 h-3" />{score != null ? `${score}x` : "n/d"}
                     </span>
-                    <span className="absolute top-2 right-2 rounded-lg flex items-center justify-center" style={{ width: 24, height: 24, background: `${p.color}33`, backdropFilter: "blur(4px)" }}>
+                    <span className="absolute top-2 right-2 rounded-lg flex items-center justify-center pointer-events-none" style={{ width: 24, height: 24, background: `${p.color}33`, backdropFilter: "blur(4px)" }}>
                       <Icon className="w-3.5 h-3.5" style={{ color: p.color }} />
                     </span>
-                  </a>
+
+                    {/* Overlay hover: 🩷 salva nei Templates + Remix on-brand */}
+                    <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col"
+                      style={{ background: "oklch(0 0 0 / 0.45)" }}>
+                      <div className="flex justify-end gap-2 p-2">
+                        <button title={v.liked ? "Rimuovi dai Templates" : "Salva nei Templates"}
+                          onClick={() => likeMut.mutate({ id: v.id })}
+                          className="h-8 w-8 rounded-full flex items-center justify-center transition-transform hover:scale-110"
+                          style={{ background: "oklch(0.14 0.015 260 / 0.9)" }}>
+                          <Heart className="h-4 w-4" style={v.liked ? { fill: "oklch(0.63 0.24 350)", color: "oklch(0.63 0.24 350)" } : { color: "white" }} />
+                        </button>
+                        <a href={v.url} target="_blank" rel="noreferrer" title="Apri contenuto"
+                          className="h-8 w-8 rounded-full flex items-center justify-center transition-transform hover:scale-110"
+                          style={{ background: "oklch(0.14 0.015 260 / 0.9)" }}>
+                          <ExternalLink className="h-4 w-4 text-white" />
+                        </a>
+                      </div>
+                      <div className="flex-1 flex items-center justify-center">
+                        <Button className="gap-2 font-semibold rounded-full px-5" style={{ background: "oklch(0.6 0.2 300)" }}
+                          onClick={() => setRemixTarget(v.id)}>
+                          <Sparkles className="h-4 w-4" /> Remix
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                   <div className="p-4 flex flex-col flex-1">
                     <h3 className="text-sm font-semibold line-clamp-2 mb-1">{v.title || "(senza titolo)"}</h3>
                     <p className="text-xs text-muted-foreground mb-2">@{v.channelHandle} · {fmtDate(v.publishedAt)}</p>
@@ -353,6 +419,29 @@ export default function SocialWatchlist() {
           )}
         </div>
       </div>
+
+      {/* Dialog remix */}
+      <Dialog open={remixTarget != null} onOpenChange={(o) => !o && setRemixTarget(null)}>
+        <DialogContent className="max-w-lg" style={{ background: "oklch(0.14 0.015 260)" }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" style={{ color: "oklch(0.6 0.2 300)" }} /> Remix — versione on-brand
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Il contenuto verrà mandato all'<b>AI Manager</b> come reference: manterrà il formato che lo fa funzionare
+            (hook, ritmo, struttura) ma con la voce DreamBrothers, e lo salverà nelle <b>Bozze</b>. Organic ≠ selling: nessun pitch.
+          </p>
+          <Textarea rows={3} value={remixNote} onChange={(e) => setRemixNote(e.target.value)}
+            style={{ background: "oklch(0.16 0.015 260)", border: "1px solid oklch(0.25 0.02 260)" }}
+            placeholder='Note opzionali (es. "adattalo al poster Dream Big, angle: la routine del mattino")' />
+          <Button className="w-full gap-2 font-semibold text-white" style={{ background: "linear-gradient(135deg, oklch(0.6 0.2 300), oklch(0.55 0.2 320))" }}
+            disabled={remixMut.isPending}
+            onClick={() => remixTarget != null && remixMut.mutate({ id: remixTarget, note: remixNote || undefined })}>
+            {remixMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Invia all'AI Manager
+          </Button>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

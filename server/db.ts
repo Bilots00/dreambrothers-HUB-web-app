@@ -600,6 +600,7 @@ export interface WatchlistVideoFilters {
   lookbackDays?: number;
   minOutlier?: number;
   minViews?: number;
+  liked?: boolean;
   sort?: "outlier" | "views" | "recent";
   limit?: number;
 }
@@ -620,6 +621,7 @@ export async function getWatchlistVideos(userId: number, f: WatchlistVideoFilter
   if (f.minOutlier && f.minOutlier > 0) {
     conds.push(sql`${watchlistVideos.outlierScore} >= ${f.minOutlier}`);
   }
+  if (f.liked) conds.push(eq(watchlistVideos.liked, true));
   const orderBy =
     f.sort === "views" ? desc(watchlistVideos.views)
     : f.sort === "recent" ? desc(watchlistVideos.publishedAt)
@@ -641,6 +643,7 @@ export async function getWatchlistVideos(userId: number, f: WatchlistVideoFilter
     engagementRate: watchlistVideos.engagementRate,
     outlierScore: watchlistVideos.outlierScore,
     analyzedAt: watchlistVideos.analyzedAt,
+    liked: watchlistVideos.liked,
     channelHandle: watchlistChannels.handle,
     channelName: watchlistChannels.displayName,
     channelAvatar: watchlistChannels.avatarUrl,
@@ -1088,4 +1091,16 @@ export async function countAdInspirationsByBrand(userId: number, brandId: number
   const rows = await db.select({ n: sql`count(*)` }).from(adInspirations)
     .where(and(eq(adInspirations.userId, userId), eq(adInspirations.brandId, brandId)));
   return Number((rows[0] as { n: unknown })?.n ?? 0);
+}
+
+// ─── Watchlist: 🩷 Templates (video salvati da remixare) ──────────────────────
+export async function getWatchlistVideoById(id: number) {
+  const db = await getDb(); if (!db) return undefined;
+  const rows = await db.select().from(watchlistVideos).where(eq(watchlistVideos.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function setWatchlistVideoLiked(id: number, liked: boolean) {
+  const db = await getDb(); if (!db) return;
+  await db.update(watchlistVideos).set({ liked, likedAt: liked ? new Date() : null }).where(eq(watchlistVideos.id, id));
 }

@@ -92,4 +92,41 @@ describe("mapScrapedAd", () => {
   it("scarta item senza ad_archive_id", () => {
     expect(mapScrapedAd({ snapshot: { title: "x" } }, now)).toBeNull();
   });
+
+  // Regressione: le ads con più versioni/carosello tengono i media in cards[] e
+  // prima venivano scartate come "senza media" → mancavano dal feed.
+  it("estrae il media dai caroselli (cards[]) quando images/videos sono vuoti", () => {
+    const item = {
+      ad_archive_id: "777",
+      page_name: "Andy okay",
+      start_date: 1750000000,
+      snapshot: {
+        images: [],
+        videos: [],
+        cards: [
+          { original_image_url: "https://img.example/card1.jpg", title: "Art for Causes", link_url: "https://andyokay.com", cta_text: "Shop now" },
+          { original_image_url: "https://img.example/card2.jpg" },
+        ],
+      },
+    };
+    const ad = mapScrapedAd(item, now)!;
+    expect(ad.imageUrl).toBe("https://img.example/card1.jpg");
+    expect(ad.thumbnailUrl).toBe("https://img.example/card1.jpg");
+    expect(ad.title).toBe("Art for Causes");
+    expect(ad.landingUrl).toBe("https://andyokay.com");
+  });
+
+  it("estrae il logo dell'advertiser da page_profile_picture_url", () => {
+    const item = {
+      ad_archive_id: "888",
+      page_name: "Andy okay",
+      snapshot: {
+        page_profile_picture_url: "https://scontent.fbcdn.net/logo.jpg",
+        images: [{ resized_image_url: "https://img.example/a.jpg" }],
+      },
+    };
+    const ad = mapScrapedAd(item, now)!;
+    expect(ad.pageProfilePictureUrl).toBe("https://scontent.fbcdn.net/logo.jpg");
+    expect(ad.imageUrl).toBe("https://img.example/a.jpg");
+  });
 });

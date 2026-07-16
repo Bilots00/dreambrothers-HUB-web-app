@@ -484,6 +484,69 @@ export async function apifyRunSync<T>(actorId: string, input: unknown): Promise<
   return Array.isArray(json) ? json : [];
 }
 
+/**
+ * Run asincrono + polling: `run-sync-get-dataset-items` muore a 120-300s, quindi
+ * per gli scrape grossi (centinaia di ads di un brand) serve avviare il run,
+ * aspettare che finisca e poi leggere il dataset paginato.
+ */
+export async function apifyRunAsync<T>(
+  actorId: string,
+  input: unknown,
+  opts: { maxWaitMs?: number; limit?: number } = {},
+): Promise<T[]> {
+  const token = process.env.APIFY_TOKEN;
+  if (!token) throw new Error("APIFY_TOKEN non configurato nelle variabili d'ambiente");
+  const maxWaitMs = opts.maxWaitMs ?? 8 * 60_000;
+  const limit = opts.limit ?? 1000;
+
+  const startRes = await fetch(`https://api.apify.com/v2/acts/${actorId}/runs?token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!startRes.ok) {
+    const text = await startRes.text().catch(() => "");
+    throw new Error(`Apify ${actorId}: avvio run HTTP ${startRes.status} ${text.slice(0, 180)}`);
+  }
+  const startJson = (await startRes.json()) as { data?: { id?: string; defaultDatasetId?: string } };
+  const runId = startJson.data?.id;
+  const datasetId = startJson.data?.defaultDatasetId;
+  if (!runId || !datasetId) throw new Error(`Apify ${actorId}: run non avviato (risposta inattesa)`);
+
+  const deadline = Date.now() + maxWaitMs;
+  let status = "READY";
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    const stRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!stRes.ok) continue;
+    const stJson = (await stRes.json()) as { data?: { status?: string } };
+    status = stJson.data?.status ?? status;
+    if (["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"].includes(status)) break;
+  }
+  if (status === "FAILED" || status === "ABORTED") throw new Error(`Apify ${actorId}: run ${status}`);
+
+  // Anche su TIMED-OUT/run ancora attivo leggiamo ciò che è già stato raccolto.
+  const items: T[] = [];
+  let offset = 0;
+  while (items.length < limit) {
+    const pageSize = Math.min(1000, limit - items.length);
+    const dsRes = await fetch(
+      `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&offset=${offset}&limit=${pageSize}&clean=true`,
+      { signal: AbortSignal.timeout(60_000) },
+    );
+    if (!dsRes.ok) break;
+    const page = (await dsRes.json()) as T[];
+    if (!Array.isArray(page) || page.length === 0) break;
+    items.push(...page);
+    if (page.length < pageSize) break;
+    offset += page.length;
+  }
+  return items;
+}
+
 export async function fetchInstagramViaApify(handle: string): Promise<FetchedChannel> {
   type IgProfile = {
     error?: string;

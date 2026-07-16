@@ -427,6 +427,9 @@ export const watchlistVideos = mysqlTable("watchlist_videos", {
   // deep-analysis (hook, topic, formato...) compilata dall'agente VPS via REST
   analysisJson: json("analysisJson"),
   analyzedAt: timestamp("analyzedAt"),
+  // 🩷 → il video finisce nella tab Templates della Watchlist (da remixare)
+  liked: boolean("liked").default(false).notNull(),
+  likedAt: timestamp("likedAt"),
   fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => [

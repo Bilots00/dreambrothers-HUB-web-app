@@ -409,6 +409,18 @@ async function runMigrations() {
   } catch (err) {
     console.warn("[Migrate] tabelle ads inspiration non create:", err);
   }
+  // Migrazione additiva idempotente: 🩷 sui video della Watchlist (tab Templates)
+  try {
+    const res: any = await db.execute(sql`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'watchlist_videos' AND COLUMN_NAME = 'liked'`);
+    const rows = Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : [];
+    if (!rows || rows.length === 0) {
+      await db.execute(sql`ALTER TABLE watchlist_videos ADD COLUMN liked BOOLEAN NOT NULL DEFAULT FALSE`);
+      await db.execute(sql`ALTER TABLE watchlist_videos ADD COLUMN likedAt TIMESTAMP NULL`);
+      console.log("[Migrate] watchlist_videos.liked + likedAt aggiunte");
+    }
+  } catch (err) {
+    console.warn("[Migrate] colonna liked su watchlist_videos non aggiunta:", err);
+  }
 }
 
 function isPortAvailable(port: number): Promise<boolean> {

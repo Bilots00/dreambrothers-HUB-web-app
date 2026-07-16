@@ -19,6 +19,35 @@ const cardStyle = { background: "oklch(0.14 0.015 260)", border: "1px solid oklc
 
 const CATEGORIES = ["All", "Wall Art / Decor", "Clothing / Apparel", "DTC", "Beauty", "Consumer Goods", "Fitness / Wellness"];
 
+// I media della Ads Library stanno su fbcdn.net, che blocca l'hotlinking
+// cross-origin: vanno serviti dal proxy server (/api/img), come per la Watchlist.
+function proxied(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith("data:")) return url;
+  if (/fbcdn\.net|cdninstagram\.com/.test(url)) return `/api/img?url=${encodeURIComponent(url)}`;
+  return url;
+}
+
+/** Logo dell'advertiser con fallback alle iniziali se manca o non carica. */
+function BrandLogo({ name, logoUrl, size = 40, radius = 12 }: { name: string; logoUrl?: string | null; size?: number; radius?: number }) {
+  const [broken, setBroken] = useState(false);
+  const src = proxied(logoUrl);
+  if (src && !broken) {
+    return (
+      <img src={src} alt={name} referrerPolicy="no-referrer" loading="lazy"
+        onError={() => setBroken(true)}
+        className="object-cover shrink-0"
+        style={{ width: size, height: size, borderRadius: radius, background: "oklch(0.22 0.02 260)" }} />
+    );
+  }
+  return (
+    <div className="flex items-center justify-center font-bold text-white shrink-0"
+      style={{ width: size, height: size, borderRadius: radius, fontSize: size * 0.3, background: "oklch(0.22 0.02 260)" }}>
+      {name.slice(0, 2).toUpperCase()}
+    </div>
+  );
+}
+
 // ─── Card creative (masonry) con overlay stile CreativeOS ─────────────────────
 function CreativeCard({ insp, onLike, onClone }: {
   insp: {
@@ -30,11 +59,13 @@ function CreativeCard({ insp, onLike, onClone }: {
   onClone: (id: number) => void;
 }) {
   const media = insp.thumbnailUrl ?? insp.imageUrl;
+  const [mediaBroken, setMediaBroken] = useState(false);
   return (
     <div className="mb-4 break-inside-avoid">
       <div className="group relative rounded-2xl overflow-hidden" style={cardStyle}>
-        {media ? (
-          <img src={media} alt={insp.title ?? insp.pageName ?? "ad"} loading="lazy"
+        {media && !mediaBroken ? (
+          <img src={proxied(media)} alt={insp.title ?? insp.pageName ?? "ad"} loading="lazy" referrerPolicy="no-referrer"
+            onError={() => setMediaBroken(true)}
             className="w-full h-auto block" style={{ minHeight: 120 }} />
         ) : (
           <div className="w-full flex items-center justify-center p-8 text-xs text-muted-foreground" style={{ minHeight: 160 }}>
@@ -290,9 +321,7 @@ export default function MetaInspiration() {
                 {trendingBrands.map((b) => (
                   <div key={b.id} className="rounded-2xl overflow-hidden" style={cardStyle}>
                     <div className="h-20 flex items-center px-4 gap-3" style={{ background: "linear-gradient(135deg, oklch(0.3 0.08 285), oklch(0.2 0.04 260))" }}>
-                      <div className="h-11 w-11 rounded-xl flex items-center justify-center font-bold text-white text-sm" style={{ background: "oklch(0.14 0.015 260)" }}>
-                        {b.name.slice(0, 2).toUpperCase()}
-                      </div>
+                      <BrandLogo name={b.name} logoUrl={b.logoUrl} size={44} />
                       <div>
                         <p className="font-semibold text-white">{b.name}</p>
                         <p className="text-xs text-white/70">{b.adCount} assets</p>
@@ -325,9 +354,7 @@ export default function MetaInspiration() {
                 {filteredBrands.map((b) => (
                   <div key={b.id} className="group rounded-2xl p-4 flex items-center gap-3 cursor-pointer transition-colors hover:bg-accent/40" style={cardStyle}
                     onClick={() => openBrandLibrary(b.id)}>
-                    <div className="h-10 w-10 rounded-xl flex items-center justify-center font-bold text-white text-xs shrink-0" style={{ background: "oklch(0.22 0.02 260)" }}>
-                      {b.name.slice(0, 2).toUpperCase()}
-                    </div>
+                    <BrandLogo name={b.name} logoUrl={b.logoUrl} size={40} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold truncate">{b.name}</p>
                       <p className="text-xs text-muted-foreground">{b.adCount} templates{b.status === "error" ? " · ⚠︎ errore" : b.status === "pending" ? " · in coda" : ""}</p>

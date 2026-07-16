@@ -19,6 +19,7 @@ import {
   getCsConversationsForUser, getCsMessagesForConversation, recordCsReply, updateCsConversation, getCsConversationById,
   getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, updateSocialDraft, deleteSocialDraft,
   getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById,
+  getWatchlistVideoById, setWatchlistVideoLiked,
   getResearchItems, getResearchItemById, updateResearchItem, getResearchCountries,
 } from "./db";
 import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChannels } from "./watchlistService";
@@ -253,11 +254,41 @@ export const appRouter = router({
         lookbackDays: z.number().min(0).max(730).default(30),
         minOutlier: z.number().min(0).default(0),
         minViews: z.number().min(0).default(0),
+        liked: z.boolean().optional(),
         sort: z.enum(["outlier", "views", "recent"]).default("outlier"),
         limit: z.number().min(1).max(200).default(60),
       }))
       .query(async ({ ctx, input }) => {
         return getWatchlistVideos(ctx.user.id, input);
+      }),
+
+    // 🩷 → il video entra nella tab Templates (raccolta dei contenuti da remixare)
+    toggleLike: protectedProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const v = await getWatchlistVideoById(input.id);
+        if (!v || v.userId !== ctx.user.id) throw new Error("Video non trovato");
+        await setWatchlistVideoLiked(input.id, !v.liked);
+        return { success: true, liked: !v.liked } as const;
+      }),
+
+    // Remix: manda il contenuto salvato al Social Media Manager / Creative Director
+    // (agente VPS) che ne produce la versione on-brand come BOZZA (draft-first).
+    requestRemix: protectedProcedure
+      .input(z.object({ id: z.number(), note: z.string().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        const v = await getWatchlistVideoById(input.id);
+        if (!v || v.userId !== ctx.user.id) throw new Error("Video non trovato");
+        const text = `[WATCHLIST → REMIX] Task organico dal reparto Social Media.
+Andrea vuole REMIXARE questo contenuto vincente della watchlist adattandolo ON-BRAND a DreamBrothers (leggi il Brain: brand-voice, viral-playbook, template-creativita, lessico-dreamer, regole-anti-ai; NIENTE false claims, organic ≠ selling: nessun pitch).
+REFERENCE:
+- Piattaforma: ${v.platform}
+- URL: ${v.url}
+- Titolo: ${v.title ?? "—"}
+- Performance: ${v.views} views${v.outlierScore ? `, outlier ${v.outlierScore}x rispetto alla mediana del canale` : ""}
+${input.note ? `NOTE DI ANDREA: ${input.note}` : ""}
+DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 0-3s, ritmo, payoff) ma con i nostri contenuti e la nostra voce. Genera hook, script/struttura passo-passo, caption e hashtag, poi salva come bozza via POST $SOCIAL_BASE_URL/api/social/draft. Draft-first: nessuna pubblicazione. Rispondi in chat con una sintesi di 2 righe.`;
+        const id = await insertSocialChatMessage({ userId: ctx.user.id, role: "user", text, status: "new", source: "web" });
+        return { success: true, id } as const;
       }),
 
     // Chiede all'AI Manager (agente VPS) la deep-analysis di un video: entra nel
@@ -386,10 +417,15 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => addAdBrand(ctx.user.id, input)),
     removeBrand: protectedProcedure.input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => removeAdBrand(ctx.user.id, input.id)),
+    // Lo scrape di centinaia di ads dura minuti: si avvia e basta (fire-and-forget),
+    // la UI segue lo stato del brand col polling invece di restare appesa.
     refreshBrand: protectedProcedure.input(z.object({ id: z.number().optional() }))
-      .mutation(async ({ ctx, input }) => input.id != null
-        ? refreshAdBrand(ctx.user.id, input.id)
-        : refreshAllAdBrands(ctx.user.id)),
+      .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user.id;
+        const job = input.id != null ? refreshAdBrand(userId, input.id) : refreshAllAdBrands(userId);
+        job.catch((err) => console.warn("[AdsLibrary] refresh in background fallito:", err));
+        return { started: true } as const;
+      }),
     inspirations: protectedProcedure
       .input(z.object({
         q: z.string().optional(),
