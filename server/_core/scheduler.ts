@@ -85,4 +85,17 @@ export function registerDailySchedules() {
     console.log(`[Scheduler] market 09:15: stores=${r.stores} changes=${r.changes} errori=${r.errors.length}`);
     try { await enrichPendingMarketChanges(OWNER_USER_ID); } catch (e) { console.warn("[Scheduler] market enrich fallito:", e); }
   });
+
+  // Lunedì 09:30 — digest Pinterest in nicchia: l'agente Claude (VPS) aggiorna la
+  // nota Brain pinterest-keywords-digest.md per SMM + Creative Director (Task 5
+  // della skill seo-research). Il trigger passa dal bridge chat esistente.
+  scheduleDaily(9, 30, "pinterest-digest", async () => {
+    const dow = new Intl.DateTimeFormat("en-GB", { timeZone: TIMEZONE, weekday: "short" }).format(new Date());
+    if (dow !== "Mon") return;
+    await insertSocialChatMessage({
+      userId: OWNER_USER_ID, role: "user", source: "web", status: "new",
+      text: `[SEO → PINTEREST DIGEST] Task settimanale: esegui il Task 5 della skill seo-research (in ~/.claude/skills/seo-research o claude-bot-workspace/skills). In sintesi: 1) GET $SOCIAL_BASE_URL/api/seo/research/items?source=pinterest&hours=168&min_target=6&limit=30 (header x-care-secret: $CARE_WEBHOOK_SECRET, env in ~/.social-agent.env); 2) leggi la pagina pubblica https://business.pinterest.com/it/pinterest-predicts/ per i temi annuali in nicchia; 3) aggiorna la nota Brain areas/marketing/social-media/pinterest-keywords-digest.md (repo ~/projects/dreambrothers-brain, poi git add/commit/push) con la tabella keyword in nicchia (indice /100, crescita, perché è nostra) e i temi Predicts; 4) rispondi in chat con le 3 keyword top della settimana. NON scrapare trends.pinterest.com/shopping o /search (richiedono login).`,
+    }).catch((err) => console.warn("[Scheduler] pinterest digest handoff fallito:", err));
+    console.log("[Scheduler] pinterest-digest: task settimanale inviato all'agente");
+  });
 }
