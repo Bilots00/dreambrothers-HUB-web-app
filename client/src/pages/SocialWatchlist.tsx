@@ -17,16 +17,13 @@ const PLATFORMS: Record<string, { label: string; icon: ElementType; color: strin
   tiktok: { label: "TikTok", icon: Music2, color: "oklch(0.75 0.15 195)" },
 };
 
-// Strategia immagini per host:
-// - IG /media/ → DIRETTO: il browser dell'utente (IP residenziale + loggato)
-//   raggiunge Instagram, mentre il proxy Railway (datacenter) viene bloccato.
-// - CDN grezzi IG/TikTok (fbcdn/cdninstagram/tiktokcdn) → proxy /api/img (referrer).
-// - YouTube / data-URI → diretti.
+// Strategia immagini: gli URL fbcdn/cdninstagram/tiktokcdn passano dal proxy
+// /api/img (Railway serve le immagini CDN — verificato). YouTube/data-URI diretti.
+// (Le thumbnail IG sono URL fbcdn risolti dal VPS: il proxy Railway le serve.)
 function proxied(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
   if (url.startsWith("data:")) return url;
   if (/(^|\.)ytimg\.com|googleusercontent\.com|ggpht\.com/.test(url)) return url;
-  if (/instagram\.com\/(reel|p|tv)\/[^/]+\/media/i.test(url)) return url; // endpoint pubblico /media/
   if (/cdninstagram\.com|fbcdn\.net|tiktokcdn|ttwstatic\.com/.test(url)) {
     return `/api/img?url=${encodeURIComponent(url)}`;
   }
