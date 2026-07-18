@@ -44,14 +44,19 @@ export async function delegateToVpsAgent(
 
 const BASE_URL = "$SOCIAL_BASE_URL"; // l'agente ha la env; la lasciamo simbolica nel testo
 
-/** Task watchlist: l'agente scrapa un canale IG/TikTok col browser e fa ingest. */
+/** Task watchlist: l'agente scrapa un canale IG/TikTok (curl + cookie di sessione) e fa ingest. */
 export function watchlistScrapeTask(platform: string, handle: string): string {
-  return `[WATCHLIST → SCRAPE ${platform.toUpperCase()}] Apify è esaurito: scrapa tu questo canale col browser (sei loggato) e ricarica i dati — costo zero.
-Canale: ${platform} @${handle}
-1) Apri il profilo (${platform === "instagram" ? `https://www.instagram.com/${handle}/` : `https://www.tiktok.com/@${handle}`}) e leggi: nome, follower, avatar, e gli ultimi 12-30 post/video con views/like/commenti/data/URL/thumbnail.
-2) POST a ${BASE_URL}/api/social/watchlist/ingest (header x-care-secret: $CARE_WEBHOOK_SECRET, env in ~/.social-agent.env) con body JSON:
-   {"platform":"${platform}","handle":"${handle}","displayName":"...","avatarUrl":"...","followers":N,"videos":[{"platformVideoId":"...","url":"...","title":"...","thumbnailUrl":"...","publishedAt":"ISO","views":N,"likes":N,"comments":N,"shares":N,"durationSec":N}]}
-Rispondi in chat solo con: quanti video hai caricato per @${handle}.`;
+  const igSteps = `1) Se in ~/.social-agent.env c'è IG_SESSION_COOKIE, usa curl con header "Cookie: $IG_SESSION_COOKIE" e "x-ig-app-id: 936619743392459":
+   a) GET https://www.instagram.com/api/v1/users/web_profile_info/?username=${handle} → prendi data.user.id, full_name, edge_followed_by.count, profile_pic_url
+   b) GET https://www.instagram.com/api/v1/feed/user/{id}/?count=18 → per ogni item: code, caption.text, taken_at, play_count/view_count, like_count, comment_count
+2) Se il cookie NON c'è o dà 4xx: NON inventare dati; rispondi in chat che serve IG_SESSION_COOKIE (Railway/VPS) o lo scraping dal PC di Andrea.`;
+  const ttSteps = `1) Prova curl sul profilo pubblico https://www.tiktok.com/@${handle} (UA da browser) e leggi il JSON __UNIVERSAL_DATA_FOR_REHYDRATION__; se TikTok blocca (shield/403), rispondi in chat che dal VPS non è raggiungibile e serve il PC di Andrea.
+2) NON inventare mai numeri.`;
+  return `[WATCHLIST → SCRAPE ${platform.toUpperCase()}] Apify è esaurito: recupera tu i dati di ${platform} @${handle} — costo zero.
+${platform === "instagram" ? igSteps : ttSteps}
+3) Se hai i dati, POST a ${BASE_URL}/api/social/watchlist/ingest (header x-care-secret: $CARE_WEBHOOK_SECRET) con body JSON:
+   {"platform":"${platform}","handle":"${handle}","displayName":"...","avatarUrl":"...","followers":N,"videos":[{"platformVideoId":"...","url":"...","title":"...","publishedAt":"ISO","views":N,"likes":N,"comments":N}]}
+Rispondi in chat solo con: quanti video hai caricato per @${handle} (o il motivo del blocco).`;
 }
 
 /** Task research: l'agente scrapa i trend Pinterest col browser e fa ingest. */

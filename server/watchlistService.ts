@@ -127,7 +127,7 @@ async function fetchInstagramViaMeta(userId: number, handle: string): Promise<Fe
 }
 
 /** Refresh completo di un canale: fetch piattaforma → upsert video → outlier. */
-export async function refreshWatchlistChannel(channelId: number): Promise<{ ok: boolean; videosStored: number; error?: string }> {
+export async function refreshWatchlistChannel(channelId: number): Promise<{ ok: boolean; videosStored: number; delegated?: boolean; error?: string }> {
   const channel = await getWatchlistChannelById(channelId);
   if (!channel) return { ok: false, videosStored: 0, error: "Canale non trovato" };
   try {
@@ -166,8 +166,8 @@ export async function refreshWatchlistChannel(channelId: number): Promise<{ ok: 
             watchlistScrapeTask(channel.platform, channel.handle),
           );
           if (d.delegated) {
-            await updateWatchlistChannel(channelId, { status: "pending", lastError: "In coda all'agente VPS (scraping browser gratis)", lastRefreshAt: new Date() });
-            return { ok: true, videosStored: 0, error: undefined };
+            await updateWatchlistChannel(channelId, { status: "pending", lastError: "In coda all'agente VPS — per il fetch diretto configura IG_SESSION_COOKIE su Railway", lastRefreshAt: new Date() });
+            return { ok: true, videosStored: 0, delegated: true };
           }
         }
         throw new Error(reasons.join(" — "));

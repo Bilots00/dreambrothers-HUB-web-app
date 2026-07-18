@@ -359,8 +359,68 @@ export async function fetchYouTubeChannel(handle: string, maxVideos = 50): Promi
   return fetchYouTubeViaScrape(handle);
 }
 
+// ─── Instagram con SESSIONE (autonomo e affidabile) ───────────────────────────
+// Se IG_SESSION_COOKIE è nelle env (Railway) — es. "sessionid=...; ds_user_id=...;
+// csrftoken=..." — usiamo gli stessi endpoint interni del web client loggato:
+// funzionano anche da IP datacenter e danno le VIEWS vere dei reel.
+// ⚠️ Consiglio: usare i cookie di un account IG SECONDARIO, non quello del brand.
+async function igSessionHeaders(): Promise<Record<string, string> | null> {
+  const cookie = (process.env.IG_SESSION_COOKIE ?? "").trim();
+  if (!cookie) return null;
+  return {
+    "User-Agent": BROWSER_UA,
+    "x-ig-app-id": "936619743392459",
+    Cookie: cookie,
+    Accept: "*/*",
+    Referer: "https://www.instagram.com/",
+  };
+}
+
+export async function fetchInstagramViaSession(handle: string): Promise<FetchedChannel> {
+  const headers = await igSessionHeaders();
+  if (!headers) throw new Error("IG_SESSION_COOKIE non configurato");
+  const r1 = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(handle)}`, {
+    headers, signal: AbortSignal.timeout(AXIOS_TIMEOUT_MS),
+  });
+  if (!r1.ok) throw new Error(`IG sessione (profilo): HTTP ${r1.status} — cookie scaduto?`);
+  const user = ((await r1.json()) as { data?: { user?: any } })?.data?.user;
+  if (!user?.id) throw new Error(`IG sessione: profilo "@${handle}" non leggibile`);
+
+  const r2 = await fetch(`https://www.instagram.com/api/v1/feed/user/${user.id}/?count=18`, {
+    headers, signal: AbortSignal.timeout(AXIOS_TIMEOUT_MS),
+  });
+  if (!r2.ok) throw new Error(`IG sessione (feed): HTTP ${r2.status}`);
+  const items: any[] = ((await r2.json()) as { items?: any[] })?.items ?? [];
+
+  return {
+    handle,
+    displayName: user.full_name || handle,
+    avatarUrl: user.profile_pic_url,
+    followers: Number(user.edge_followed_by?.count ?? user.follower_count ?? 0),
+    platformChannelId: String(user.id),
+    videos: items.filter((m) => m?.code).map((m) => ({
+      platformVideoId: String(m.code),
+      url: `https://www.instagram.com/${m.media_type === 2 ? "reel" : "p"}/${m.code}/`,
+      thumbnailUrl: m.image_versions2?.candidates?.[0]?.url ?? m.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url,
+      title: (m.caption?.text ?? "").slice(0, 500),
+      publishedAt: m.taken_at ? new Date(Number(m.taken_at) * 1000) : undefined,
+      views: Number(m.play_count ?? m.view_count ?? m.ig_play_count ?? 0),
+      likes: Number(m.like_count ?? 0),
+      comments: Number(m.comment_count ?? 0),
+    })),
+  };
+}
+
 // ─── Instagram (best effort, endpoint web pubblico) ───────────────────────────
 export async function fetchInstagramChannel(handle: string): Promise<FetchedChannel> {
+  // 1° scelta: sessione configurata (views vere, funziona dai datacenter)
+  if (process.env.IG_SESSION_COOKIE) {
+    try {
+      return await fetchInstagramViaSession(handle);
+    } catch (err) {
+      console.warn(`[watchlist] IG sessione fallita per @${handle}, provo anonimo:`, err instanceof Error ? err.message : err);
+    }
+  }
   const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(handle)}`;
   const res = await fetch(url, {
     headers: {
