@@ -109,7 +109,7 @@ export default function SocialWatchlist() {
         const errs = r.errors.length ? ` — errori: ${r.errors.map((e) => e.handle).join(", ")}` : "";
         toast.success(`${r.refreshed} canali aggiornati${errs}`);
       } else if (r.ok && "delegated" in r && r.delegated) {
-        toast.info("🤖 Instagram/TikTok bloccano i datacenter e Apify è esaurito: il canale riparte quando Apify si ricarica (1° del mese) o via agente. Le thumbnail e i dati già presenti restano.", { duration: 10000 });
+        toast.info("📲 Apri instagram.com in un'altra scheda: lo script Watchlist Auto-Sync popola questo canale in automatico entro 1-2 minuti (gratis, dal tuo browser)", { duration: 12000 });
       } else if (r.ok) toast.success(`Canale aggiornato — ${r.videosStored} video`);
       else toast.error(`Refresh fallito: ${r.error}`);
     },

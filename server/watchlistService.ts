@@ -166,7 +166,7 @@ export async function refreshWatchlistChannel(channelId: number): Promise<{ ok: 
             watchlistScrapeTask(channel.platform, channel.handle),
           );
           if (d.delegated) {
-            await updateWatchlistChannel(channelId, { status: "pending", lastError: "In coda all'agente VPS — per il fetch diretto configura IG_SESSION_COOKIE su Railway", lastRefreshAt: new Date() });
+            await updateWatchlistChannel(channelId, { status: "pending", lastError: "In attesa di sync dal browser: apri instagram.com (con lo script Watchlist attivo) e il canale si popola da solo", lastRefreshAt: new Date() });
             return { ok: true, videosStored: 0, delegated: true };
           }
         }
