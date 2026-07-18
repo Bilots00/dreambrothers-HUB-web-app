@@ -185,8 +185,17 @@ export async function addWatchlistChannel(
 }
 
 /** Refresh di tutti i canali dell'utente, a piccoli lotti concorrenti (rate limit ok). */
-export async function refreshAllWatchlistChannels(userId: number): Promise<{ refreshed: number; errors: { handle: string; error: string }[] }> {
-  const channels = await getWatchlistChannels(userId);
+export async function refreshAllWatchlistChannels(userId: number): Promise<{ refreshed: number; errors: { handle: string; error: string }[]; skipped?: number }> {
+  const all = await getWatchlistChannels(userId);
+  // I canali IG/TikTok costano Apify: nel refresh massivo (bottone/scheduler)
+  // salta quelli aggiornati nelle ultime 20h. YouTube è gratis → sempre.
+  const COOLDOWN_MS = 20 * 3_600_000;
+  const channels = all.filter((ch) => {
+    if (ch.platform === "youtube") return true;
+    const last = ch.lastRefreshAt ? new Date(ch.lastRefreshAt).getTime() : 0;
+    return Date.now() - last > COOLDOWN_MS;
+  });
+  const skipped = all.length - channels.length;
   let refreshed = 0;
   const errors: { handle: string; error: string }[] = [];
   for (let i = 0; i < channels.length; i += REFRESH_CONCURRENCY) {
@@ -197,7 +206,7 @@ export async function refreshAllWatchlistChannels(userId: number): Promise<{ ref
       else errors.push({ handle: `${batch[j].platform}/@${batch[j].handle}`, error: r.error ?? "sconosciuto" });
     });
   }
-  return { refreshed, errors };
+  return { refreshed, errors, skipped };
 }
 
 /** Ingest dall'agente VPS: upsert canale per handle + video già scrapeati. */

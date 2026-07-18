@@ -14,6 +14,7 @@
  * views degli altri video recenti dello stesso canale. 1.0x = baseline del canale.
  */
 import { AXIOS_TIMEOUT_MS } from "@shared/const";
+import { assertAndChargeApify } from "./apifyBudget";
 
 export type WatchPlatform = "youtube" | "instagram" | "tiktok";
 
@@ -469,6 +470,7 @@ export function hasApifyToken(): boolean {
 export async function apifyRunSync<T>(actorId: string, input: unknown): Promise<T[]> {
   const token = process.env.APIFY_TOKEN;
   if (!token) throw new Error("APIFY_TOKEN non configurato nelle variabili d'ambiente");
+  await assertAndChargeApify(actorId); // budget guard mensile (piano free $5)
   const url = `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}&timeout=120`;
   const res = await fetch(url, {
     method: "POST",
@@ -496,6 +498,7 @@ export async function apifyRunAsync<T>(
 ): Promise<T[]> {
   const token = process.env.APIFY_TOKEN;
   if (!token) throw new Error("APIFY_TOKEN non configurato nelle variabili d'ambiente");
+  await assertAndChargeApify(actorId); // budget guard mensile (piano free $5)
   const maxWaitMs = opts.maxWaitMs ?? 8 * 60_000;
   const limit = opts.limit ?? 1000;
 

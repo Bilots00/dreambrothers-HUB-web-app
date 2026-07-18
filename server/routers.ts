@@ -25,6 +25,7 @@ import {
   getResearchItems, getResearchItemById, updateResearchItem, getResearchCountries,
 } from "./db";
 import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChannels } from "./watchlistService";
+import { getApifyBudget } from "./apifyBudget";
 import {
   refreshResearch, enrichPendingResearch, generateContentFromResearch,
   getResearchConfig, saveResearchConfig,
@@ -292,6 +293,8 @@ export const appRouter = router({
 
   // ─── Watchlist canali competitor (replica Sandcastles, dati gratuiti) ────────
   watchlist: router({
+    apifyBudget: protectedProcedure.query(async () => getApifyBudget()),
+
     list: protectedProcedure.query(async ({ ctx }) => {
       const [channels, stats] = await Promise.all([
         getWatchlistChannels(ctx.user.id),

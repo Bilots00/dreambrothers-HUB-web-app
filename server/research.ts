@@ -393,7 +393,8 @@ export async function fetchSubstack(publication: string): Promise<FetchedResearc
 }
 
 /** Esegue tutti i fetcher configurati; gli errori per-fonte non bloccano il resto. */
-export async function fetchAllResearchSources(cfg: ResearchSourcesConfig): Promise<{ items: FetchedResearchItem[]; errors: string[] }> {
+export async function fetchAllResearchSources(cfg: ResearchSourcesConfig, opts: { runPinterest?: boolean } = {}): Promise<{ items: FetchedResearchItem[]; errors: string[] }> {
+  const runPinterest = opts.runPinterest !== false; // Pinterest costa Apify: cache-controllato dal chiamante
   const items: FetchedResearchItem[] = [];
   const errors: string[] = [];
 
@@ -416,10 +417,11 @@ export async function fetchAllResearchSources(cfg: ResearchSourcesConfig): Promi
     // le news vengono raccolte per OGNI paese configurato (con lingua locale)
     ...newsGeos.flatMap((g) => cfg.newsQueries.map((q) => ({ name: `news ${g} "${q}"`, run: () => fetchGoogleNews(q, g) }))),
     ...geos.map((g) => ({ name: `trends ${g}`, run: () => fetchGoogleTrends(g) })),
-    // Pinterest Trends (Apify): keyword ad alto volume per gli articoli SEO
-    ...(hasApifyToken()
+    // Pinterest Trends (Apify): solo se abilitato dalla cache (i trend cambiano
+    // lenti → 1 volta al giorno basta, così non si brucia il budget Apify free)
+    ...(runPinterest && hasApifyToken()
       ? geos.map((g) => ({ name: `pinterest ${g}`, run: () => fetchPinterestTrends(g, cfg.pinterestInterestIds) }))
-      : [{ name: "pinterest", run: async (): Promise<FetchedResearchItem[]> => { throw new Error("APIFY_TOKEN mancante nelle env"); } }]),
+      : []),
     ...cfg.substacks.map((p) => ({ name: `substack ${p}`, run: () => fetchSubstack(p) })),
     // Blog competitor (sezione "Blog Post")
     ...cfg.blogFeeds.map((b) => ({ name: `blog ${b}`, run: () => fetchBlogArticles(b) })),

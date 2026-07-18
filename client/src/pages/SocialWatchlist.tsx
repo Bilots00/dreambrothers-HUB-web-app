@@ -44,6 +44,7 @@ function outlierStyle(score: number | null): { bg: string; fg: string } {
 export default function SocialWatchlist() {
   const utils = trpc.useUtils();
   const channels = trpc.watchlist.list.useQuery(undefined, { refetchInterval: 30000 });
+  const apifyBudget = trpc.watchlist.apifyBudget.useQuery(undefined, { refetchInterval: 60000 });
 
   const [tab, setTab] = useState<"feed" | "templates">("feed");
   const [filterChannel, setFilterChannel] = useState<string>("all");
@@ -161,8 +162,21 @@ export default function SocialWatchlist() {
           <h1 className="text-xl font-bold">Watchlist</h1>
           <p className="text-sm text-muted-foreground">Monitora canali competitor su YouTube, Instagram e TikTok — outlier score, feed e analisi AI. Gratis, senza Sandcastles.</p>
         </div>
-        <div className="ml-auto flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style={{ background: "oklch(0.65 0.2 265 / 0.12)", border: "1px solid oklch(0.65 0.2 265 / 0.3)", color: "oklch(0.75 0.15 265)" }}>
-          <Radar className="w-3.5 h-3.5" /> {list.length} canali · {fmtNum(totalViews30d)} views 30g
+        <div className="ml-auto flex items-center gap-2">
+          {apifyBudget.data && (
+            <div className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl"
+              title={`Apify (piano free $5/mese): stima $${apifyBudget.data.spentUsd} / $${apifyBudget.data.capUsd}. Al limite, IG/TikTok/Pinterest si mettono in pausa fino al mese nuovo.`}
+              style={{
+                background: apifyBudget.data.blocked ? "oklch(0.6 0.2 30 / 0.15)" : "oklch(0.6 0.15 150 / 0.12)",
+                border: `1px solid ${apifyBudget.data.blocked ? "oklch(0.6 0.2 30 / 0.4)" : "oklch(0.6 0.15 150 / 0.3)"}`,
+                color: apifyBudget.data.blocked ? "oklch(0.7 0.18 30)" : "oklch(0.75 0.14 150)",
+              }}>
+              Apify ${apifyBudget.data.spentUsd}/${apifyBudget.data.capUsd}{apifyBudget.data.blocked ? " · limite" : ""}
+            </div>
+          )}
+          <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style={{ background: "oklch(0.65 0.2 265 / 0.12)", border: "1px solid oklch(0.65 0.2 265 / 0.3)", color: "oklch(0.75 0.15 265)" }}>
+            <Radar className="w-3.5 h-3.5" /> {list.length} canali · {fmtNum(totalViews30d)} views 30g
+          </div>
         </div>
       </div>
 
