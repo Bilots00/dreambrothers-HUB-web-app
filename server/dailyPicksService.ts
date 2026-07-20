@@ -13,6 +13,7 @@ import {
 } from "./db";
 import { runResearchLLM, extractJson, sanitizeText } from "./research";
 import { getResearchConfig } from "./researchService";
+import { getBrandContext } from "./brainClient";
 
 // Fusione delle metodologie (GIO · Protocollo Jay · Welch · Ferrari · Cappelli · Miller) + ruolo.
 export const FUSED_METHOD = `Sei il più grande Market Intelligence & Product Research Strategist mai esistito: fondi i metodi dei top guru e-commerce e le 8 competenze del ruolo (trend forecasting, competitive/ad-spy, market gap, product validation, data mastery, voice-of-customer, pricing/offer, sintesi).
@@ -61,10 +62,11 @@ export async function generateDailyPicks(userId: number, pickDate: string): Prom
   const cands = await gatherCandidates(userId);
   if (cands.length === 0) { await replaceDailyPicks(userId, pickDate, []); return { count: 0, usedLLM: false }; }
   const cfg = await getResearchConfig(userId).catch(() => ({ brandContext: "" as string }));
+  const brandContext = await getBrandContext((cfg as any).brandContext).catch(() => "");
   let picks: Array<{ source: string; title: string; url: string | null; imageUrl: string | null; price: string | null; reason: string; score: number }> = [];
   let usedLLM = false;
   try {
-    const sys = `${FUSED_METHOD}\n\nBRAND:\n${(cfg as any).brandContext || "DreamBrothers — Wall Art + Streetwear per dreamers."}\n\nRispondi SOLO con JSON: {"picks":[{"source":"meta|etsy|shopify","title":str,"url":str|null,"imageUrl":str|null,"price":str|null,"reason":"1 frase it","score":0-100}]}. Esattamente 6 pick con source meta (dai candidati Meta/TikTok), 2 con source etsy, 2 con source shopify. Scegli i migliori incrociando i segnali e Google Trends.`;
+    const sys = `${FUSED_METHOD}\n\nBRAND (dal company Brain):\n${brandContext}\n\nRispondi SOLO con JSON: {"picks":[{"source":"meta|etsy|shopify","title":str,"url":str|null,"imageUrl":str|null,"price":str|null,"reason":"1 frase it","score":0-100}]}. Esattamente 6 pick con source meta (dai candidati Meta/TikTok), 2 con source etsy, 2 con source shopify. Scegli i migliori incrociando i segnali e Google Trends.`;
     const usr = `CANDIDATI (source · titolo · segnale · url · img):\n${cands.map((c, i) => `${i}. [${c.source}] ${c.title} — ${c.signal}${c.url ? " — " + c.url : ""}${c.imageUrl ? " — img:" + c.imageUrl : ""}`).join("\n")}`;
     const out = await runResearchLLM(sys, usr);
     const parsed = extractJson<{ picks: typeof picks }>(out);
