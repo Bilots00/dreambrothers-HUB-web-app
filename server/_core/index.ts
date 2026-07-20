@@ -462,7 +462,23 @@ async function runMigrations() {
       INDEX idx_claude_msg_status (status),
       INDEX idx_claude_msg_created (createdAt)
     ) DEFAULT CHARSET=utf8mb4`);
-    console.log("[Migrate] Tabelle claude_sessions + claude_session_messages pronte");
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS claude_attachments (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      sessionId INT NOT NULL,
+      messageId INT NULL,
+      filename VARCHAR(255) NOT NULL,
+      mimeType VARCHAR(128) NOT NULL,
+      size INT NOT NULL,
+      kind ENUM('file','image','voice') NOT NULL DEFAULT 'file',
+      transcript TEXT NULL,
+      data MEDIUMBLOB NOT NULL,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_claude_att_session (sessionId),
+      INDEX idx_claude_att_message (messageId),
+      INDEX idx_claude_att_user (userId)
+    ) DEFAULT CHARSET=utf8mb4`);
+    console.log("[Migrate] Tabelle claude_sessions + claude_session_messages + claude_attachments pronte");
   } catch (err) {
     console.warn("[Migrate] tabelle claude sessions non create:", err);
   }

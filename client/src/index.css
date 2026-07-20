@@ -260,3 +260,16 @@ button:active:not(:disabled) {
   transform: scale(0.97);
   transition: transform 0.1s cubic-bezier(0.23, 1, 0.32, 1);
 }
+
+/* Claude Sessions: puntini "sta scrivendo" + pallino rosso di registrazione */
+@keyframes claude-typing {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+.claude-typing-dot { animation: claude-typing 1.2s infinite ease-in-out; }
+
+@keyframes claude-rec {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.claude-rec-dot { animation: claude-rec 1s infinite ease-in-out; }

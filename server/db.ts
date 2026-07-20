@@ -1,6 +1,6 @@
 import { eq, desc, asc, and, or, isNull, gte, lte, sql, notInArray, inArray, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, InsertClaudeSession } from "../drizzle/schema";
+import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, claudeAttachments, InsertClaudeSession } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -1315,4 +1315,58 @@ export async function deleteClaudeSession(id: number) {
   if (!db) return;
   await db.delete(claudeSessionMessages).where(eq(claudeSessionMessages.sessionId, id));
   await db.delete(claudeSessions).where(eq(claudeSessions.id, id));
+}
+
+
+// ─── Claude: allegati (file, immagini, note vocali) ───────────────────────────
+// I byte vivono in MySQL: niente object storage da configurare su Railway.
+export async function insertClaudeAttachment(params: {
+  userId: number; sessionId: number; messageId?: number | null;
+  filename: string; mimeType: string; kind: "file" | "image" | "voice";
+  transcript?: string | null; data: Buffer;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const r = await db.insert(claudeAttachments).values({
+    userId: params.userId,
+    sessionId: params.sessionId,
+    messageId: params.messageId ?? null,
+    filename: params.filename,
+    mimeType: params.mimeType,
+    size: params.data.length,
+    kind: params.kind,
+    transcript: params.transcript ?? null,
+    data: params.data,
+  });
+  return Number((r as unknown as { insertId: number }[])[0].insertId);
+}
+
+// Metadati senza i byte: la lista messaggi non deve trascinarsi i blob.
+export async function getClaudeAttachmentsForSession(sessionId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: claudeAttachments.id,
+    messageId: claudeAttachments.messageId,
+    filename: claudeAttachments.filename,
+    mimeType: claudeAttachments.mimeType,
+    size: claudeAttachments.size,
+    kind: claudeAttachments.kind,
+    transcript: claudeAttachments.transcript,
+  }).from(claudeAttachments).where(eq(claudeAttachments.sessionId, sessionId));
+}
+
+export async function getClaudeAttachmentById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(claudeAttachments).where(eq(claudeAttachments.id, id)).limit(1);
+  return rows[0];
+}
+
+// Gli allegati nascono prima del messaggio (upload, poi invio): qui li si lega.
+export async function attachClaudeAttachmentsToMessage(ids: number[], messageId: number, userId: number) {
+  const db = await getDb();
+  if (!db || !ids.length) return;
+  await db.update(claudeAttachments).set({ messageId })
+    .where(and(inArray(claudeAttachments.id, ids), eq(claudeAttachments.userId, userId)));
 }

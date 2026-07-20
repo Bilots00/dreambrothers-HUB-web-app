@@ -11,6 +11,7 @@ import {
   bigint,
   uniqueIndex,
   mediumtext,
+  customType,
 } from "drizzle-orm/mysql-core";
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -776,3 +777,27 @@ export const claudeSessionMessages = mysqlTable("claude_session_messages", {
 
 export type ClaudeSessionMessage = typeof claudeSessionMessages.$inferSelect;
 export type InsertClaudeSessionMessage = typeof claudeSessionMessages.$inferInsert;
+
+// Allegati delle chat Claude. I byte stanno in MySQL (MEDIUMBLOB, ~16MB): su
+// Railway non c'e' object storage configurato e questo evita di aggiungere
+// infrastruttura per una feature che gira su pochi file per sessione.
+// Se un giorno i volumi crescono, si sposta `data` su S3 tenendo la stessa riga.
+export const claudeAttachments = mysqlTable("claude_attachments", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  sessionId: int("sessionId").notNull(),
+  messageId: int("messageId"),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  mimeType: varchar("mimeType", { length: 128 }).notNull(),
+  size: int("size").notNull(),
+  kind: mysqlEnum("kind", ["file", "image", "voice"]).default("file").notNull(),
+  // Trascrizione del vocale (dettata dal browser): e' cio' che legge l'agente,
+  // che non puo' ascoltare l'audio.
+  transcript: text("transcript"),
+  data: customType<{ data: Buffer; driverData: Buffer }>({
+    dataType: () => "mediumblob",
+  })("data").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ClaudeAttachment = typeof claudeAttachments.$inferSelect;

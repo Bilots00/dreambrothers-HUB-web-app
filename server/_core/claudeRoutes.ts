@@ -9,6 +9,7 @@ import {
   getPendingClaudeMessages,
   recordClaudeReply,
   updateClaudeSession,
+  getClaudeAttachmentById,
   getAllUserSettings,
   upsertUserSetting,
 } from "../db";
@@ -240,6 +241,35 @@ export function registerClaudeRoutes(app: Express) {
     } catch (err) {
       console.warn("[claude/session] error:", err);
       res.status(500).json({ error: "session upsert failed" });
+    }
+  });
+
+  // Download di un allegato. L'app e' single-user senza login (vedi context.ts:
+  // ogni richiesta e' gia' admin), quindi qui non c'e' un livello di auth in piu'
+  // da applicare: stessa postura del resto dell'app. Serve al browser per mostrare
+  // immagini/audio e all'agente per scaricare i file che Andrea allega.
+  app.get("/api/claude/attachment/:id", async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) {
+        res.status(400).json({ error: "invalid attachment id" });
+        return;
+      }
+      const att = await getClaudeAttachmentById(id);
+      if (!att) {
+        res.status(404).json({ error: "attachment not found" });
+        return;
+      }
+      res.setHeader("Content-Type", att.mimeType);
+      res.setHeader("Content-Length", String(att.size));
+      // inline: immagini e audio devono potersi aprire dentro la pagina
+      const disp = req.query.download === "1" ? "attachment" : "inline";
+      res.setHeader("Content-Disposition", `${disp}; filename="${att.filename.replace(/"/g, "")}"`);
+      res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+      res.send(att.data);
+    } catch (err) {
+      console.warn("[claude/attachment] error:", err);
+      res.status(500).json({ error: "attachment failed" });
     }
   });
 

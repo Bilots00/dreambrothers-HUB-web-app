@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, type ElementType } from "react";
 import {
   Search, Send, Plus, Brain, ArrowLeft, Archive, Trash2, Pencil,
   Globe, Terminal, MessageCircle, ArchiveRestore, Check, X,
+  Mic, Paperclip, Volume2, Pause, Play, Square, FileText, Loader2,
 } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,28 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { useSpeech, useVoiceRecorder } from "@/hooks/useSpeech";
+
+type PendingAttachment = { id: number; filename: string; mimeType: string; size: number; kind: string };
+
+function fmtSize(bytes: number): string {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+function fmtDuration(s: number): string {
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+async function fileToBase64(file: Blob): Promise<string> {
+  const buf = await file.arrayBuffer();
+  let bin = "";
+  const bytes = new Uint8Array(buf);
+  // A colpi, altrimenti stack overflow sui file grossi. Niente spread: il target
+  // TS del progetto non lo consente sulle TypedArray.
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+  }
+  return btoa(bin);
+}
 
 // Badge origine: da dove è nata (o continua) la sessione. L'alpha va DENTRO
 // oklch(), quindi ogni voce porta già la sua variante di sfondo e bordo.
@@ -34,8 +57,13 @@ export default function ClaudeSessions() {
   const [renameValue, setRenameValue] = useState("");
   // Sotto 1024px si vede un pannello alla volta: lista → chat, con back button.
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
+  const [pendingAtts, setPendingAtts] = useState<PendingAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
+  const speech = useSpeech();
+  const voice = useVoiceRecorder();
 
   const { data: sessions = [], isLoading: loadingSessions } = trpc.claude.sessions.useQuery(
     { q: search || undefined, includeArchived },
@@ -52,12 +80,14 @@ export default function ClaudeSessions() {
   const send = trpc.claude.send.useMutation({
     onSuccess: (r) => {
       setDraft("");
+      setPendingAtts([]);
       setSelectedId(r.sessionId);
       utils.claude.messages.invalidate();
       utils.claude.sessions.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
+  const upload = trpc.claude.upload.useMutation();
   const rename = trpc.claude.rename.useMutation({
     onSuccess: () => { setRenamingId(null); utils.claude.sessions.invalidate(); toast.success("Sessione rinominata"); },
     onError: (e) => toast.error(e.message),
@@ -94,14 +124,115 @@ export default function ClaudeSessions() {
 
   function submit() {
     const text = draft.trim();
-    if (!text || send.isPending) return;
-    send.mutate({ sessionId: selectedId ?? undefined, text });
+    if ((!text && !pendingAtts.length) || send.isPending) return;
+    send.mutate({
+      sessionId: selectedId ?? undefined,
+      text,
+      attachmentIds: pendingAtts.map((a) => a.id),
+    });
+  }
+
+  // Upload di file scelti col graffetta. Ogni file diventa un allegato "in attesa",
+  // mostrato sopra il composer finche' non parte il messaggio.
+  async function onPickFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 15 * 1024 * 1024) {
+          toast.error(`${file.name}: troppo grande (max 15MB)`);
+          continue;
+        }
+        const r = await upload.mutateAsync({
+          sessionId: selectedId ?? undefined,
+          filename: file.name,
+          mimeType: file.type || "application/octet-stream",
+          kind: file.type.startsWith("image/") ? "image" : "file",
+          dataBase64: await fileToBase64(file),
+        });
+        if (selectedId == null) setSelectedId(r.sessionId);
+        setPendingAtts((prev) => [...prev, {
+          id: r.id, filename: file.name, mimeType: file.type,
+          size: r.size, kind: file.type.startsWith("image/") ? "image" : "file",
+        }]);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload fallito");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  // Note vocali: audio come allegato + trascrizione come testo del messaggio,
+  // perche' l'agente legge testo, non ascolta.
+  async function startVoice() {
+    try {
+      await voice.start();
+    } catch {
+      toast.error("Microfono non disponibile: controlla i permessi del browser");
+    }
+  }
+
+  async function stopVoiceAndSend() {
+    const res = await voice.stop();
+    if (!res) return;
+    if (res.blob.size < 1200) { toast.info("Vocale troppo corto"); return; }
+    setUploading(true);
+    try {
+      const r = await upload.mutateAsync({
+        sessionId: selectedId ?? undefined,
+        filename: `vocale-${new Date().toISOString().slice(11, 19).replace(/:/g, "-")}.webm`,
+        mimeType: res.blob.type || "audio/webm",
+        kind: "voice",
+        transcript: res.transcript || undefined,
+        dataBase64: await fileToBase64(res.blob),
+      });
+      const sid = selectedId ?? r.sessionId;
+      setSelectedId(sid);
+      send.mutate({
+        sessionId: sid,
+        text: res.transcript || "[messaggio vocale senza trascrizione]",
+        attachmentIds: [r.id],
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Invio vocale fallito");
+    } finally {
+      setUploading(false);
+    }
   }
 
   const online = agent?.online ?? false;
+  // "Sta scrivendo": c'e' un mio messaggio ancora non gestito dall'agente.
+  // Se l'agente e' offline non e' onesto dire che scrive: lo dico com'e'.
+  const waitingReply = messages.some((m) => m.pending);
+  const hasText = draft.trim().length > 0;
 
   return (
-    <div className="flex gap-4 h-[calc(100vh-8rem)]">
+    <div className="flex gap-4 h-[calc(100vh-8rem)] relative">
+      {/* Overlay lettura vocale (stile Gemini): pausa/riprendi sempre a portata,
+          anche se scrolli via dal messaggio che sta parlando. */}
+      {speech.speakingId != null && (
+        <div className="fixed top-20 right-4 z-50 flex items-center gap-1.5 rounded-full pl-3 pr-1.5 py-1.5 shadow-lg"
+             style={{ background: "oklch(0.16 0.015 260)", border: "1px solid oklch(0.65 0.2 265 / 0.4)" }}>
+          <span className="text-xs text-muted-foreground">{speech.paused ? "In pausa" : "Sto leggendo"}</span>
+          <button
+            onClick={speech.toggle}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white"
+            style={{ background: "var(--gradient-primary)" }}
+            title={speech.paused ? "Riprendi" : "Pausa"}
+          >
+            {speech.paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={speech.stop}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground"
+            title="Chiudi"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       {/* ── Lista sessioni ─────────────────────────────────────────── */}
       <aside
         className={`${mobileView === "list" ? "flex" : "hidden"} lg:flex flex-col w-full lg:w-80 shrink-0 rounded-2xl overflow-hidden`}
@@ -293,37 +424,171 @@ export default function ClaudeSessions() {
                       <Streamdown>{m.text}</Streamdown>
                     </div>
                   )}
-                  <div className={`text-[10px] mt-1 ${isUser ? "text-white/60" : "text-muted-foreground"}`}>
-                    {m.when}
-                    {m.pending && " · in attesa dell'agente"}
+
+                  {/* Allegati: immagini inline, vocali col player, il resto come link */}
+                  {m.attachments?.length > 0 && (
+                    <div className="mt-2 space-y-2">
+                      {m.attachments.map((a) => {
+                        if (a.kind === "image") {
+                          return (
+                            <a key={a.id} href={a.url} target="_blank" rel="noreferrer" className="block">
+                              <img src={a.url} alt={a.filename} className="rounded-lg max-h-60 w-auto" style={{ border: BORDER }} />
+                            </a>
+                          );
+                        }
+                        if (a.kind === "voice") {
+                          return <audio key={a.id} controls src={a.url} className="w-full max-w-[260px] h-9" />;
+                        }
+                        return (
+                          <a
+                            key={a.id}
+                            href={`${a.url}?download=1`}
+                            className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs"
+                            style={{ background: "oklch(0.2 0.015 260 / 0.6)", border: BORDER }}
+                          >
+                            <FileText className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate flex-1">{a.filename}</span>
+                            <span className="text-muted-foreground shrink-0">{fmtSize(a.size)}</span>
+                          </a>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className={`flex items-center gap-2 mt-1 ${isUser ? "text-white/60" : "text-muted-foreground"}`}>
+                    <span className="text-[10px]">
+                      {m.when}
+                      {m.pending && " · in attesa dell'agente"}
+                    </span>
+                    {/* Leggi ad alta voce (solo le risposte di Claude) */}
+                    {!isUser && speech.supported && (
+                      <button
+                        onClick={() => speech.speak(m.id, m.text)}
+                        className="p-1 rounded-md hover:text-foreground hover:bg-accent transition-colors"
+                        title={speech.speakingId === m.id ? "Ferma la lettura" : "Leggi ad alta voce"}
+                      >
+                        {speech.speakingId === m.id
+                          ? <Square className="w-3.5 h-3.5" style={{ color: "oklch(0.65 0.2 265)" }} />
+                          : <Volume2 className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
             );
           })}
+
+          {/* "Claude sta scrivendo…" — c'e' un messaggio non ancora gestito.
+              Se l'agente e' spento lo dico, invece di far finta che stia scrivendo. */}
+          {waitingReply && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl px-3.5 py-2.5 flex items-center gap-2" style={{ background: "oklch(0.16 0.015 260)", border: BORDER }}>
+                {online ? (
+                  <>
+                    <span className="text-xs text-muted-foreground">Claude sta scrivendo</span>
+                    <span className="flex gap-1">
+                      {[0, 1, 2].map((i) => (
+                        <span
+                          key={i}
+                          className="w-1.5 h-1.5 rounded-full claude-typing-dot"
+                          style={{ background: "oklch(0.65 0.2 265)", animationDelay: `${i * 0.18}s` }}
+                        />
+                      ))}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">In coda — l'agente Claude è offline</span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="p-3 shrink-0" style={{ borderTop: BORDER }}>
-          <div className="flex gap-2 items-end">
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
-              }}
-              placeholder="Scrivi a Claude… (Enter invia, Shift+Enter a capo)"
-              className="min-h-[44px] max-h-40 resize-none text-sm"
-              rows={1}
-            />
-            <Button
-              onClick={submit}
-              disabled={!draft.trim() || send.isPending}
-              className="h-11 shrink-0"
-              style={{ background: "var(--gradient-primary)" }}
-            >
-              <Send className="w-4 h-4" />
-            </Button>
-          </div>
+          {/* Allegati pronti da inviare */}
+          {pendingAtts.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {pendingAtts.map((a) => (
+                <span
+                  key={a.id}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs"
+                  style={{ background: "oklch(0.2 0.015 260 / 0.6)", border: BORDER }}
+                >
+                  <FileText className="w-3 h-3 shrink-0" />
+                  <span className="truncate max-w-[140px]">{a.filename}</span>
+                  <span className="text-muted-foreground">{fmtSize(a.size)}</span>
+                  <button
+                    onClick={() => setPendingAtts((p) => p.filter((x) => x.id !== a.id))}
+                    className="text-muted-foreground hover:text-destructive"
+                    title="Togli"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {voice.recording ? (
+            /* Modalità registrazione: pallino rosso, durata, e cosa sta capendo */
+            <div className="flex items-center gap-3">
+              <button onClick={voice.cancel} className="p-2 rounded-xl text-muted-foreground hover:text-destructive" title="Annulla">
+                <Trash2 className="w-5 h-5" />
+              </button>
+              <div className="flex-1 min-w-0 flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0 claude-rec-dot" style={{ background: "oklch(0.6 0.24 25)" }} />
+                <span className="text-sm tabular-nums shrink-0">{fmtDuration(voice.seconds)}</span>
+                <span className="text-xs text-muted-foreground truncate">
+                  {voice.transcript || "sto ascoltando…"}
+                </span>
+              </div>
+              <Button onClick={stopVoiceAndSend} disabled={uploading} className="h-11 shrink-0" style={{ background: "var(--gradient-primary)" }}>
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex gap-2 items-end">
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => onPickFiles(e.target.files)}
+              />
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                className="h-11 w-10 shrink-0 flex items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+                title="Allega file"
+              >
+                {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
+              </button>
+              <Textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+                }}
+                placeholder="Scrivi a Claude… (Enter invia, Shift+Enter a capo)"
+                className="min-h-[44px] max-h-40 resize-none text-sm"
+                rows={1}
+              />
+              {/* Come Telegram: vuoto = microfono, appena scrivi = invio */}
+              <Button
+                onClick={hasText || pendingAtts.length ? submit : startVoice}
+                disabled={send.isPending || uploading || (!hasText && !pendingAtts.length && !voice.supported)}
+                className="h-11 shrink-0"
+                style={{ background: "var(--gradient-primary)" }}
+                title={hasText || pendingAtts.length ? "Invia" : "Tieni premuto per un vocale"}
+              >
+                {send.isPending
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : hasText || pendingAtts.length
+                    ? <Send className="w-4 h-4" />
+                    : <Mic className="w-4 h-4" />}
+              </Button>
+            </div>
+          )}
         </div>
       </section>
     </div>

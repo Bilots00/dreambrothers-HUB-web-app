@@ -20,6 +20,7 @@ import {
   getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, updateSocialDraft, deleteSocialDraft,
   createClaudeSession, getClaudeSessionById, getClaudeSessions, getClaudeSessionMessages,
   insertClaudeMessage, updateClaudeSession, deleteClaudeSession,
+  insertClaudeAttachment, getClaudeAttachmentsForSession, attachClaudeAttachmentsToMessage,
   getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById,
   getWatchlistVideoById, setWatchlistVideoLiked,
   getResearchItems, getResearchItemById, updateResearchItem, getResearchCountries,
@@ -275,7 +276,17 @@ export const appRouter = router({
     messages: protectedProcedure.input(z.object({ sessionId: z.number() })).query(async ({ ctx, input }) => {
       const session = await getClaudeSessionById(input.sessionId);
       if (!session || session.userId !== ctx.user.id) return [];
-      const rows = await getClaudeSessionMessages(input.sessionId);
+      const [rows, atts] = await Promise.all([
+        getClaudeSessionMessages(input.sessionId),
+        getClaudeAttachmentsForSession(input.sessionId),
+      ]);
+      const byMessage = new Map<number, typeof atts>();
+      for (const a of atts) {
+        if (a.messageId == null) continue;
+        const list = byMessage.get(a.messageId) ?? [];
+        list.push(a);
+        byMessage.set(a.messageId, list);
+      }
       return rows.map((m) => ({
         id: m.id,
         role: m.role,
@@ -283,11 +294,51 @@ export const appRouter = router({
         source: m.source,
         when: fmtWhen(m.createdAt),
         pending: m.role === "user" && m.status === "new",
+        attachments: (byMessage.get(m.id) ?? []).map((a) => ({
+          id: a.id, filename: a.filename, mimeType: a.mimeType,
+          size: a.size, kind: a.kind, transcript: a.transcript,
+          url: `/api/claude/attachment/${a.id}`,
+        })),
       }));
     }),
-    send: protectedProcedure
-      .input(z.object({ sessionId: z.number().optional(), text: z.string().min(1) }))
+    // Upload di un allegato: arriva in base64 dentro tRPC (il body parser e' a
+    // 50mb) e finisce in MySQL. Ritorna l'id, che poi `send` lega al messaggio.
+    upload: protectedProcedure
+      .input(z.object({
+        sessionId: z.number().optional(),
+        filename: z.string().min(1).max(255),
+        mimeType: z.string().min(1).max(128),
+        kind: z.enum(["file", "image", "voice"]).default("file"),
+        transcript: z.string().optional(),
+        dataBase64: z.string().min(1),
+      }))
       .mutation(async ({ ctx, input }) => {
+        let sessionId = input.sessionId;
+        if (sessionId != null) {
+          const s = await getClaudeSessionById(sessionId);
+          if (!s || s.userId !== ctx.user.id) throw new Error("Sessione non trovata");
+        } else {
+          // Allegato prima di aver aperto una sessione: la creo al volo.
+          sessionId = await createClaudeSession({ userId: ctx.user.id, title: "Nuova sessione", source: "web" });
+        }
+        const data = Buffer.from(input.dataBase64, "base64");
+        if (data.length > 15 * 1024 * 1024) throw new Error("File troppo grande (max 15MB)");
+        const id = await insertClaudeAttachment({
+          userId: ctx.user.id, sessionId, filename: input.filename,
+          mimeType: input.mimeType, kind: input.kind,
+          transcript: input.transcript ?? null, data,
+        });
+        return { id, sessionId, size: data.length, url: `/api/claude/attachment/${id}` } as const;
+      }),
+    send: protectedProcedure
+      .input(z.object({
+        sessionId: z.number().optional(),
+        text: z.string().default(""),
+        attachmentIds: z.array(z.number()).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const attachmentIds = input.attachmentIds ?? [];
+        if (!input.text.trim() && !attachmentIds.length) throw new Error("Messaggio vuoto");
         let sessionId = input.sessionId;
         if (sessionId != null) {
           const session = await getClaudeSessionById(sessionId);
@@ -298,9 +349,25 @@ export const appRouter = router({
           const title = flat.length > 60 ? flat.slice(0, 59) + "…" : flat || "Nuova sessione";
           sessionId = await createClaudeSession({ userId: ctx.user.id, title, source: "web" });
         }
+
+        // L'agente legge solo testo: gli allegati diventano righe con l'URL da cui
+        // scaricarli (i vocali portano gia' la trascrizione nel testo).
+        let text = input.text.trim();
+        if (attachmentIds.length) {
+          const all = await getClaudeAttachmentsForSession(sessionId);
+          const mine = all.filter((a) => attachmentIds.includes(a.id));
+          if (mine.length) {
+            const lines = mine.map((a) =>
+              `- ${a.filename} (${a.kind}, ${a.mimeType}, ${Math.round(a.size / 1024)}KB) → /api/claude/attachment/${a.id}`
+            );
+            text = `${text}${text ? "\n\n" : ""}[allegati]\n${lines.join("\n")}`;
+          }
+        }
+
         const id = await insertClaudeMessage({
-          sessionId, userId: ctx.user.id, role: "user", text: input.text, source: "web", status: "new",
+          sessionId, userId: ctx.user.id, role: "user", text, source: "web", status: "new",
         });
+        if (attachmentIds.length) await attachClaudeAttachmentsToMessage(attachmentIds, id, ctx.user.id);
         return { success: true, id, sessionId } as const;
       }),
     rename: protectedProcedure
