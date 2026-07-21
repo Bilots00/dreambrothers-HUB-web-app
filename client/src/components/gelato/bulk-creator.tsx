@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
 import { CheckCircle, Loader2, Package, Rocket, Layers, Plus, Trash2, Save, Star, Tag, Boxes } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -154,6 +155,9 @@ export function BulkCreator() {
   const [rules, setRules] = useState<ProductRulesType>(defaultRules);
   const [isCreating, setIsCreating] = useState(false);
   const [creationProgress, setCreationProgress] = useState(0);
+  // v25: modalità Set — una sola listing con N design (come Artelo, ma su Gelato)
+  const [setMode, setSetMode] = useState(false);
+  const [setTitle, setSetTitle] = useState("");
   const [createdProducts, setCreatedProducts] = useState<any[]>([]);
   const [template, setTemplate] = useState<any | null>(null);
   const [extraSlots, setExtraSlots] = useState<{ product?: Product }[]>([]);
@@ -211,7 +215,79 @@ export function BulkCreator() {
     setCurrentStep((prev) => Math.max(prev, 4));
   };
 
+  // v25: crea UNA listing "Set of N" — N design diversi, un solo prodotto.
+  // Al momento dell'ordine il worker espande la riga in N stampe (stessa
+  // taglia/materiale scelti dal cliente). Nessun metafield gestito a mano:
+  // il worker scrive custom.set_design_urls in automatico.
+  const handleCreateSet = async () => {
+    if (images.length < 2) { toast.error("Un set richiede almeno 2 design"); return; }
+    if (images.length > 12) { toast.error("Massimo 12 design per set"); return; }
+    if (!setTitle.trim()) { toast.error("Dai un titolo al set (es. \"Movie Legends — Set of 6\")"); return; }
+    if (!selectedProduct || !isUuid(selectedProduct.id)) { toast.error("Seleziona un Template Gelato valido (UUID)"); return; }
+    setIsCreating(true); setCreationProgress(0);
+    try {
+      const templateList: { id: string; label: string }[] = [
+        { id: selectedProduct.id, label: "" },
+        ...extraSlots.filter(s => s.product && isUuid(s.product.id)).map(s => ({ id: s.product!.id, label: (s.product!.name || "").trim() })),
+      ];
+      // 1) Carica TUTTI i design del set su R2 (ognuno è un pezzo distinto).
+      const base = setTitle.trim();
+      const setUrls: string[] = [];
+      for (let i = 0; i < images.length; i++) {
+        const fname = `${base} - ${String(i + 1).padStart(2, "0")}.jpg`;
+        setUrls.push(await uploadOriginalFile(images[i].file, fname));
+        setCreationProgress(((i + 1) / images.length) * 45);
+      }
+      // 2) Per ogni materiale (template) crea UNA listing col set.
+      const allResults: any[] = [];
+      let tIndex = 0;
+      for (const t of templateList) {
+        const tplRes = await fetch(`${WORKER_BASE}/gelato-get-template?templateId=${t.id}`);
+        if (!tplRes.ok) { allResults.push({ title: `Template ${t.id.slice(0, 8)}`, status: "error", error: "Template non trovato" }); tIndex++; continue; }
+        const tpl = await tplRes.json();
+        if (t.id === selectedProduct.id) setTemplate(tpl);
+        const tplVariants: any[] = tpl?.variants ?? [];
+        if (!tplVariants.length) { allResults.push({ title: tpl?.title || t.id.slice(0, 8), status: "error", error: "Nessuna variante" }); tIndex++; continue; }
+        const suffix = t.label ? ` — ${t.label}` : "";
+        // il design #1 rappresenta la listing per il mockup Gelato; i 6 veri
+        // stanno in setDesignUrls e vengono prodotti tutti all'ordine.
+        const variantsPayload = tplVariants.map((v) => ({
+          templateVariantId: v.id,
+          imagePlaceholders: [{ name: v?.imagePlaceholders?.[0]?.name || tpl?.imagePlaceholders?.[0]?.name || "front", fileUrl: setUrls[0] }],
+        }));
+        const product = {
+          title: `${base}${suffix}`,
+          description: rules.descriptionCustomHTML || "",
+          tags: rules.tagsCustom.length > 0 ? [...rules.tagsCustom, "set"] : ["gelato", "bulk-created", "set", `set-of-${setUrls.length}`],
+          variants: variantsPayload,
+          setDesignUrls: setUrls,
+          setSize: setUrls.length,
+        };
+        const tref = refsByTemplate[t.id] || { priceRef: null, inventoryRef: null };
+        const runSettings = { mostPopular: mostPopularVariant.trim() || "", priceRef: tref.priceRef?.legacyId || "", inventoryRef: tref.inventoryRef?.legacyId || "" };
+        const createRes = await fetch(`${WORKER_BASE}/gelato-bulk-create`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ templateId: tpl.id, publish: true, products: [product], storeId: STORE_ID, salesChannels: ["shopify"], settings: runSettings }),
+        });
+        let data: any = {}; try { data = await createRes.json(); } catch {}
+        const results = (data.results || []).map((r: any) => ({ ...r, templateName: tpl.title || t.label || tpl.productType, set: setUrls.length }));
+        if (!createRes.ok && !results.length) allResults.push({ title: `${base}${suffix}`, status: "error", error: data.error || "Errore pubblicazione" });
+        else allResults.push(...results);
+        tIndex++;
+        setCreationProgress(45 + (tIndex / templateList.length) * 55);
+      }
+      setCreatedProducts(allResults); setCreationProgress(100); setIsCreating(false);
+      const ok = allResults.filter((r: any) => r.status === "active" || r.status === "created_in_background").length;
+      if (ok > 0) toast.success(`Set creato (${setUrls.length} design) su ${templateList.length} materiale/i`);
+      else toast.error("Set non creato. Controlla i Template ID.");
+    } catch (error: any) {
+      setIsCreating(false); setCreationProgress(0);
+      toast.error(error?.message ?? "Operazione fallita", { duration: 10000 });
+    }
+  };
+
   const handleCreateProducts = async () => {
+    if (setMode) return handleCreateSet();
     if (!images.length || !selectedProduct) return;
     if (!isUuid(selectedProduct.id)) { toast.error("Carica un VERO Template ID Gelato (UUID)"); return; }
     setIsCreating(true); setCreationProgress(0);
@@ -363,6 +439,27 @@ export function BulkCreator() {
         {currentStep === 4 && selectedProduct && (
           <div className="space-y-8">
             <ProductRules rules={rules} onRulesChange={setRules} onSave={() => toast.success("Regole salvate")} />
+
+            {/* v25: modalità Set — una listing con N design (stile Artelo, su Gelato) */}
+            <Card style={{ background: "oklch(0.19 0.025 265)", border: "1px solid oklch(0.55 0.14 160)", boxShadow: "0 0 0 1px oklch(0.55 0.14 160 / 0.25)" }}>
+              <CardContent className="p-6 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="font-semibold flex items-center gap-2"><Layers className="h-4 w-4 text-emerald-400" />Crea come SET (una sola listing)</h3>
+                    <p className="text-xs text-muted-foreground">ON: i {images.length} design caricati diventano UN prodotto "Set of {images.length}". All'ordine vengono stampati tutti insieme. OFF: {totalGroupsCalculated} prodotti separati (comportamento normale).</p>
+                  </div>
+                  <Switch checked={setMode} onCheckedChange={setSetMode} />
+                </div>
+                {setMode && (
+                  <div className="space-y-1 pt-2" style={{ borderTop: "1px solid oklch(0.34 0.03 265)" }}>
+                    <label className="text-sm font-medium">Titolo del set</label>
+                    <p className="text-xs text-muted-foreground">Es. "Movie Legends — Set of {images.length}". Il cliente sceglie UNA taglia/materiale e riceve tutti i {images.length} design a quella taglia.</p>
+                    <Input value={setTitle} placeholder={`Es. Movie Legends — Set of ${images.length || 6}`} style={{ background: "oklch(0.12 0.012 260)" }} onChange={(e) => setSetTitle(e.target.value)} />
+                    {(images.length < 2 || images.length > 12) && <p className="text-xs text-amber-400">Carica da 2 a 12 design per un set (ora: {images.length}).</p>}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
             {/* v24: Automazioni post-pubblicazione */}
             <Card style={{ background: "oklch(0.19 0.025 265)", border: "1px solid oklch(0.5 0.12 290)", boxShadow: "0 0 0 1px oklch(0.5 0.12 290 / 0.25), 0 10px 30px oklch(0 0 0 / 0.4)" }}>
