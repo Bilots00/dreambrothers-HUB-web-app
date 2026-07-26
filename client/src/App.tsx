@@ -31,6 +31,7 @@ import SocialDrafts from "./pages/SocialDrafts";
 import SocialWatchlist from "./pages/SocialWatchlist";
 import SeoResearch from "./pages/SeoResearch";
 import SeoBlogs from "./pages/SeoBlogs";
+import SeoApprovals from "./pages/SeoApprovals";
 import ProductMarketFit from "./pages/ProductMarketFit";
 import ClaudeSessions from "./pages/ClaudeSessions";
 import Settings from "./pages/Settings";
@@ -85,6 +86,7 @@ function AppRouter() {
       {/* SEO & RESEARCH */}
       <Route path="/seo/research">{withLayout(SeoResearch)}</Route>
       <Route path="/seo/blogs">{withLayout(SeoBlogs)}</Route>
+      <Route path="/seo/approvals">{withLayout(SeoApprovals)}</Route>
       <Route path="/seo">{() => { window.location.replace("/seo/research"); return null; }}</Route>
 
       {/* CLAUDE AI */}

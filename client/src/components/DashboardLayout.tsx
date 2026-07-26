@@ -10,7 +10,7 @@ import {
   LogOut, Megaphone, Package, Package2, PanelLeft, Plug,
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar,
-  Newspaper, TrendingUp, BookOpen, Star, Satellite, Brain, Menu, X,
+  Newspaper, TrendingUp, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -46,6 +46,7 @@ const SOCIAL_ITEMS = [
 const SEO_ITEMS = [
   { icon: Newspaper, label: "Research Hub", path: "/seo/research", description: "Trend, news & keywords" },
   { icon: BookOpen, label: "Blog Post", path: "/seo/blogs", description: "Blog competitor → riscrittura brand" },
+  { icon: ShieldCheck, label: "Approvals", path: "/seo/approvals", description: "Proposte dell'agente SEO da approvare" },
 ];
 
 const CARE_ITEMS = [

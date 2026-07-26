@@ -58,6 +58,7 @@ import {
 } from "./db";
 import { scanMetaAdLibrary, scanTikTokTopAds } from "./adLibrary";
 import { generateDailyPicks } from "./dailyPicksService";
+import { listProposte, decidiProposta, getBacklog } from "./seoApprovals";
 
 function todayRome(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -498,6 +499,24 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         const id = await insertSocialChatMessage({ userId: ctx.user.id, role: "user", text, status: "new", source: "web" });
         return { success: true, id } as const;
       }),
+  }),
+
+  // ─── SEO Approvals: le proposte dell'agente SEO che aspettano una decisione ──
+  seoApprovals: router({
+    list: protectedProcedure.query(async () => listProposte()),
+
+    backlog: protectedProcedure.query(async () => getBacklog()),
+
+    decidi: protectedProcedure
+      .input(
+        z.object({
+          path: z.string().min(1),
+          decisione: z.enum(["approvata", "approvata_con_condizioni", "rifiutata"]),
+          note: z.string().max(8000).optional(),
+          sha: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => decidiProposta(input)),
   }),
 
   // ─── SEO & Research: feed di market intelligence (replica WeAreMarketers) ────
