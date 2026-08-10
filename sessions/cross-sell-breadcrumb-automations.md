@@ -79,3 +79,43 @@ Spot-check delle esecuzioni n8n dopo il backfill:
 
 ## user — 2026-07-22T15:35:00Z
 Chiede `/session-export` per portare il contesto di queste due automazioni sul PC senza doverlo rispiegare.
+
+## assistant — 2026-08-07T11:00:00Z
+[contesto compattato: tra l'export precedente e qui, sessione ha confermato il fix del Constellation Engine (stabile da giorni, zero errori) e completato la documentazione Brain per entrambe le automazioni cross-sell/breadcrumb]
+
+## user — 2026-08-07T11:00:00Z
+Chiede una nuova automazione: ogni sera alle 22:30 analizzare le task completate della giornata (blocco "Tabs" della pagina Notion "To do list") e alle 23:00 pianificare la giornata successiva, compilando anche gli obiettivi di Mese/Trimestre/Settimana in funzione dell'obiettivo annuale, e segnando su Google Calendar le scadenze/eventi del mese — per avere sempre visione MACRO e MICRO insieme.
+
+## assistant — 2026-08-07T11:10:00Z
+[tool: letto il vecchio workflow n8n "Jordan — Piano Serale" esistente come pattern di riferimento; scoperto e corretto un bug di dati reale — le relation Trimestre↔Mesi su Notion erano scrambled (ogni trimestre puntava ai mesi sbagliati); aggiunta proprietà "Scadenza su Calendar" al database Task Giornaliere]
+Costruito ed attivato workflow n8n "Jordan — Ciclo Serale (Review 22:30 + Piano 23:00)" (id `8L9w6NaAwDvZCBG1`, 33 nodi: Notion HTTP + Google Calendar + chainLlm/Gemini + outputParserStructured), disattivato il vecchio workflow (tenuto come backup). Trovato e corretto un bug separato: il trigger orario girava su timezone America/New_York invece di Europe/Rome (settings.timezone mai impostato) — corretto esplicitamente.
+
+## user — 2026-08-08T09:00:00Z
+Segnala che nel panel "Task del Giorno" del blocco Tabs non vede nessuna task, né per oggi né per gli altri timeframe (Trimestri/Mesi/Settimane), nonostante l'automazione dichiarata pronta.
+
+## assistant — 2026-08-08T09:15:00Z
+[tool: controllate le esecuzioni n8n del workflow Gemini] Diagnosi reale: il vecchio workflow falliva ogni notte da 6 giorni (dal 2/8) per un 403 di fatturazione Google Cloud sulla chiave Gemini ("Lightning dunning decision is deny" — carta di pagamento del progetto GCP non valida). Spiegato ad Andrea perché il panel "Task del Giorno" è filtrato su "oggi": è normale che sia vuoto finché il piano di stasera non scatta.
+
+## user — 2026-08-08T09:30:00Z
+Racconta di aver rimosso il metodo di pagamento Google Cloud (carta rubata) e rifiuta di pagare ~30€/mese per Gemini visto l'uso minimo. Chiede di usare la subscription Claude Max che già paga, senza nessuna API a pagamento.
+
+## assistant — 2026-08-08T10:00:00Z
+[tool: ispezionato l'ambiente VPS — n8n gira su Railway (non self-hosted), niente accesso shell locale da lì; Claude Code CLI gira invece nativamente sul VPS via subscription Max] Ridisegnata l'architettura "Ciclo Serale v2": n8n resta solo per il Calendar CRUD (zero nodi AI, zero rischio fatturazione) tramite 3 workflow "bridge" con webhook + header-auth (`Jordan · Bridge Calendar lettura` `uhQMTyzBC6Uonz16`, `scrittura` `MidOmRy8uVhzeT2n`, `WhatsApp/Twilio` `4otw3lOmDLzpXrvP`); il ragionamento e la scrittura Notion si spostano su 2 cron job sul VPS (`scripts/ciclo-serale-review.sh` 22:30, `scripts/ciclo-serale-piano.sh` 23:00) che invocano `claude -p` con la persona Jordan, zero costo aggiuntivo. Vecchio workflow Gemini disattivato.
+
+## assistant — 2026-08-08T10:30:00Z
+[tool: debug live] Scoperto un bug di autenticazione reale: `source ~/.bot.env` senza `set -a` non esporta le variabili al sub-processo, quindi `claude -p` non vedeva `CLAUDE_CODE_OAUTH_TOKEN` e falliva silenziosamente con "Not logged in" (il file `~/.claude/.credentials.json` su disco è vuoto/inaffidabile, l'autenticazione vera passa dall'env var). Stesso identico bug trovato — e corretto — anche in un'automazione preesistente e non collegata (`dreambrothers-seo-architect-AUTO/scripts/run-daily.sh`, cron delle 7:30), rotta silenziosamente da 5+ giorni. Fixato entrambi.
+
+## assistant — 2026-08-08T11:00:00Z
+Test end-to-end in produzione riuscito: review e piano generati per davvero, verificati via query dirette (non solo fidandosi del messaggio finale) — 3 task scritte su Notion per il 9/8 (compleanno di Andrea), obiettivi di Trimestre/Mese/Settimana compilati per la prima volta, 3 eventi creati su Google Calendar. Cron installati (`30 22 * * *` e `0 23 * * *`, timezone di sistema già Europe/Rome).
+
+## user — 2026-08-08T11:15:00Z
+Segnala che l'ordine delle task nella vista Notion non rispetta la priorità (The ONE Thing dovrebbe stare prima), chiede conferma che gli obiettivi M/T/S siano stati compilati, e chiede che l'automazione compili anche la tab "Calendario" prendendo le scadenze dal toggle "Scadenze / appuntamenti", più un reminder ricorrente ogni 3° giovedì del mese per il lavaggio strade (per spostare l'auto).
+
+## assistant — 2026-08-08T11:30:00Z
+Spiegato che il sort di una vista Notion non è raggiungibile via API pubblica (serve un click manuale una tantum). [tool: ispezionata la struttura reale della pagina "To do list"] Trovate due cose distinte: il tab "Calendario" incorpora un mini-database quasi vuoto; il toggle "Scadenze / appuntamenti" è testo libero scritto a mano da Andrea, senza data strutturata. Proposto di usare il database come fonte pulita — **rifiutato esplicitamente da Andrea** ("non voglio nessun database di merda, uso il toggle").
+
+## assistant — 2026-08-08T11:45:00Z
+Ridisegnata la sync: il toggle resta l'unica fonte (testo libero), il database nella tab Calendario diventa solo l'OUTPUT scritto dall'automazione (mai un input manuale). [tool: test dry-run sul parsing del toggle] Trovato un caso reale ambiguo (toggle-data "20 luglio" conteneva un to-do con "si rinnova il 27 Giugno") — confermata con Andrea la regola: la data nel TESTO del blocco vince sempre, il titolo del toggle-genitore è solo un fallback. [tool: eseguito per davvero] 7 scadenze reali sincronizzate su Notion + Google Calendar con reminder personalizzato.
+
+## assistant — 2026-08-08T12:00:00Z
+[tool: esteso il bridge Calendar per supportare RRULE e reminder configurabili; scoperto e corretto un bug — n8n aggiunge da solo il prefisso "RRULE:", passandolo già incluso lo raddoppiava e Google rifiutava] Creato evento ricorrente nativo "🧹 Lavaggio strade" (ogni 3° giovedì del mese, 9:00-10:00, reminder 14h prima) su Google Calendar. Aggiunta anche una via di cancellazione eventi al bridge (per pulire eventi di test). Andrea ha segnalato che l'evento non appariva sulla tab Calendario di Notion — errore reale: creato solo su Google Calendar, dimenticato lo specchio Notion. Corretto: aggiunta la pagina su Notion per agosto + backfill delle ricorrenze rimanenti del 2026 (set/ott/nov/dic) + aggiunta manutenzione automatica nel prompt notturno per non farlo scadere silenziosamente nel 2027.
