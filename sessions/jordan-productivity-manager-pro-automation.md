@@ -1,4 +1,4 @@
-# Cross-Sell & Breadcrumb Automations
+# Jordan Productivity Manager Pro Automation
 <!-- externalId: cross-sell-breadcrumb-automations -->
 
 ## user — 2026-07-22T09:00:00Z
