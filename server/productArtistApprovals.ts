@@ -124,8 +124,12 @@ export async function listaBatch(): Promise<string[]> {
     }
     throw e;
   }
+  // Solo le cartelle che sono ESATTAMENTE una data: le prove e gli scarti vivono
+  // altrove. Con un prefisso invece di un match esatto, una cartella tipo
+  // "2026-08-12-test-landscape" finiva in cima all'elenco e la pagina si apriva
+  // su un batch inesistente (successo il 2026-08-12).
   return items
-    .filter(i => i.type === "dir" && /^\d{4}-\d{2}-\d{2}/.test(i.name))
+    .filter(i => i.type === "dir" && /^\d{4}-\d{2}-\d{2}$/.test(i.name))
     .map(i => i.name)
     .sort()
     .reverse();

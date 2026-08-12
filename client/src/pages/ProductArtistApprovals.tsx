@@ -10,10 +10,12 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import {
-  Check, X as XIcon, Clock, RefreshCw, Loader2, Shirt, Frame,
-  CheckCheck, Trash2, Calendar,
+  Check, X as XIcon, RefreshCw, Loader2, Shirt, Frame,
+  CheckCheck, Trash2, Calendar1, ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 
@@ -26,6 +28,94 @@ const DEC_META: Record<Decisione, { label: string; fg: string; bg: string }> = {
 };
 
 const CARD = { background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" };
+
+/* ------------------------------------------------------------------ */
+/* Selettore data in stile Shopify: scorciatoie a sinistra, calendario  */
+/* a destra. I giorni senza batch non sono cliccabili — l'agente non ha */
+/* prodotto nulla quella notte e non c'è niente da mostrare.            */
+/* ------------------------------------------------------------------ */
+
+const ISO = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const daISO = (s: string) => {
+  const [y, m, g] = s.split("-").map(Number);
+  return new Date(y, m - 1, g);
+};
+
+const etichettaData = (s?: string) => {
+  if (!s) return "—";
+  const oggi = ISO(new Date());
+  const ieri = ISO(new Date(Date.now() - 86_400_000));
+  if (s === oggi) return "Stanotte";
+  if (s === ieri) return "Ieri";
+  return daISO(s).toLocaleDateString("it-IT", { weekday: "short", day: "2-digit", month: "long", year: "numeric" });
+};
+
+function SelettoreData({
+  disponibili, valore, onChange,
+}: { disponibili: string[]; valore?: string; onChange: (d: string) => void }) {
+  const [aperto, setAperto] = useState(false);
+  const [mese, setMese] = useState<Date>(valore ? daISO(valore) : new Date());
+
+  const set = useMemo(() => new Set(disponibili), [disponibili]);
+  const conBatch = useMemo(() => disponibili.map(daISO), [disponibili]);
+
+  const scegli = (iso: string) => { onChange(iso); setAperto(false); };
+
+  // Le scorciatoie compaiono solo se esiste davvero un batch per quel giorno.
+  const scorciatoie = [
+    { label: "Ultimo batch", iso: disponibili[0] },
+    { label: "Stanotte", iso: set.has(ISO(new Date())) ? ISO(new Date()) : undefined },
+    { label: "Ieri", iso: set.has(ISO(new Date(Date.now() - 86_400_000))) ? ISO(new Date(Date.now() - 86_400_000)) : undefined },
+  ].filter(s => s.iso);
+
+  return (
+    <Popover open={aperto} onOpenChange={setAperto}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-2 font-normal">
+          <Calendar1 className="w-4 h-4 opacity-70" />
+          <span>{etichettaData(valore)}</span>
+          <span className="opacity-45 text-xs">{valore}</span>
+          <ChevronDown className="w-3.5 h-3.5 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+
+      <PopoverContent align="start" className="w-auto p-0" style={CARD}>
+        <div className="flex">
+          <div className="p-2 flex flex-col gap-0.5 min-w-[150px]"
+               style={{ borderRight: "1px solid oklch(0.2 0.015 260)" }}>
+            {scorciatoie.map(s => (
+              <button
+                key={s.label}
+                onClick={() => scegli(s.iso!)}
+                className="text-left text-sm px-3 py-1.5 rounded-md hover:bg-white/5 transition-colors"
+                style={valore === s.iso ? { background: "oklch(0.22 0.02 260)" } : undefined}
+              >
+                {s.label}
+              </button>
+            ))}
+            <div className="mt-1 pt-2 px-3 text-[11px] opacity-45"
+                 style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
+              {disponibili.length} notti disponibili
+            </div>
+          </div>
+
+          <Calendar
+            mode="single"
+            month={mese}
+            onMonthChange={setMese}
+            selected={valore ? daISO(valore) : undefined}
+            onSelect={(d) => d && set.has(ISO(d)) && scegli(ISO(d))}
+            disabled={(d) => !set.has(ISO(d))}
+            modifiers={{ conBatch }}
+            modifiersStyles={{ conBatch: { fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 } }}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /** L'anteprima si carica solo quando la card entra in pagina: 20 PNG da 2 MB
  *  scaricati tutti insieme farebbero attendere un minuto prima di vedere nulla. */
@@ -121,15 +211,11 @@ export default function ProductArtistApprovals() {
 
       {/* Selettore della notte + riepilogo */}
       <div className="flex items-center gap-3 flex-wrap rounded-xl p-3" style={CARD}>
-        <Calendar className="w-4 h-4 opacity-60" />
-        <select
-          value={dataSel ?? ""}
-          onChange={(e) => setDataSel(e.target.value)}
-          className="bg-transparent text-sm outline-none rounded px-2 py-1"
-          style={{ border: "1px solid oklch(0.25 0.015 260)" }}
-        >
-          {(batches.data ?? []).map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
+        <SelettoreData
+          disponibili={batches.data ?? []}
+          valore={dataSel}
+          onChange={setDataSel}
+        />
 
         <span className="text-sm opacity-70">
           {design.length} design · <b style={{ color: DEC_META.in_attesa.fg }}>{inAttesa.length} da decidere</b>
