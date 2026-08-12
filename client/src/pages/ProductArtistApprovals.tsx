@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Check, X as XIcon, RefreshCw, Loader2, Shirt, Frame,
-  CheckCheck, Trash2, Calendar1, ChevronDown,
+  CheckCheck, Trash2, Calendar1, ChevronDown, Maximize2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -117,9 +117,48 @@ function SelettoreData({
   );
 }
 
+/** Anteprima a tutto schermo: un design si giudica in grande, non in un francobollo. */
+function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", esc);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", esc);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-6 cursor-zoom-out"
+      style={{ background: "oklch(0.08 0.01 260 / 0.94)", backdropFilter: "blur(4px)" }}
+      onClick={onClose}
+    >
+      <button
+        className="absolute top-4 right-4 p-2 rounded-lg hover:bg-white/10 transition-colors"
+        onClick={onClose}
+        aria-label="Chiudi"
+      >
+        <XIcon className="w-5 h-5" />
+      </button>
+      <img
+        src={src}
+        alt={alt}
+        className="max-w-full max-h-full object-contain rounded-lg cursor-default"
+        onClick={(e) => e.stopPropagation()}
+      />
+      <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs opacity-50">
+        clicca fuori o premi Esc per chiudere
+      </p>
+    </div>
+  );
+}
+
 /** L'anteprima si carica solo quando la card entra in pagina: 20 PNG da 2 MB
  *  scaricati tutti insieme farebbero attendere un minuto prima di vedere nulla. */
 function Anteprima({ data, file, alt }: { data: string; file: string; alt: string }) {
+  const [aperta, setAperta] = useState(false);
   const q = trpc.productArtist.immagine.useQuery(
     { data, file },
     { staleTime: 60 * 60_000, refetchOnWindowFocus: false },
@@ -141,14 +180,28 @@ function Anteprima({ data, file, alt }: { data: string; file: string; alt: strin
       </div>
     );
   }
+  const src = `data:${q.data.mime};base64,${q.data.base64}`;
   return (
-    <img
-      src={`data:${q.data.mime};base64,${q.data.base64}`}
-      alt={alt}
-      loading="lazy"
-      className="w-full aspect-square object-contain rounded-lg"
-      style={{ background: "oklch(0.11 0.015 260)" }}
-    />
+    <>
+      <button
+        onClick={() => setAperta(true)}
+        className="relative w-full group/img cursor-zoom-in"
+        title="Apri a tutto schermo"
+      >
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          className="w-full aspect-square object-contain rounded-lg"
+          style={{ background: "oklch(0.11 0.015 260)" }}
+        />
+        <span className="absolute bottom-2 right-2 p-1.5 rounded-md opacity-0 group-hover/img:opacity-100 transition-opacity"
+              style={{ background: "oklch(0.1 0.01 260 / 0.8)" }}>
+          <Maximize2 className="w-4 h-4" />
+        </span>
+      </button>
+      {aperta && <Lightbox src={src} alt={alt} onClose={() => setAperta(false)} />}
+    </>
   );
 }
 
@@ -170,7 +223,11 @@ export default function ProductArtistApprovals() {
 
   const decidi = trpc.productArtist.decidi.useMutation({
     onSuccess: (_, vars) => {
-      toast.success(vars.decisione === "approvato" ? "Design approvato" : "Design scartato");
+      toast.success(
+        vars.decisione === "approvato" ? "Design approvato"
+          : vars.decisione === "rifiutato" ? "Design scartato"
+          : "Decisione annullata",
+      );
       ricarica();
     },
     onError: (e) => toast.error(e.message),
@@ -192,6 +249,34 @@ export default function ProductArtistApprovals() {
   }), [design]);
 
   const inCorso = decidi.isPending || decidiMolti.isPending;
+
+  /* Uno scartato sparisce dalla griglia dopo 30 secondi, per lasciare in vista
+     solo ciò che aspetta ancora una decisione. Il conto si basa su `decisoIl`,
+     che arriva dal server: così la card resta nascosta anche dopo un ricarico,
+     invece di ricomparire come se non avessi mai deciso. */
+  const GRAZIA_MS = 30_000;
+  const [mostraScartati, setMostraScartati] = useState(false);
+  const [ora, setOra] = useState(() => Date.now());
+
+  const restanti = (d: { decisione: string; decisoIl: string | null }) =>
+    d.decisione === "rifiutato" && d.decisoIl
+      ? Math.max(0, GRAZIA_MS - (ora - new Date(d.decisoIl).getTime()))
+      : 0;
+
+  const inGrazia = design.some(d => restanti(d) > 0);
+
+  // Il tick gira solo mentre c'è davvero un conto alla rovescia in corso.
+  useEffect(() => {
+    if (!inGrazia) return;
+    const t = setInterval(() => setOra(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [inGrazia]);
+
+  const nascosto = (d: { decisione: string; decisoIl: string | null }) =>
+    d.decisione === "rifiutato" && d.decisoIl !== null && restanti(d) === 0;
+
+  const visibili = mostraScartati ? design : design.filter(d => !nascosto(d));
+  const nascostiN = design.filter(nascosto).length;
 
   return (
     <div className="p-6 space-y-5">
@@ -222,6 +307,15 @@ export default function ProductArtistApprovals() {
           {conteggi.approvati > 0 && <> · <span style={{ color: DEC_META.approvato.fg }}>{conteggi.approvati} approvati</span></>}
           {conteggi.rifiutati > 0 && <> · <span style={{ color: DEC_META.rifiutato.fg }}>{conteggi.rifiutati} scartati</span></>}
         </span>
+
+        {nascostiN > 0 && (
+          <button
+            onClick={() => setMostraScartati(v => !v)}
+            className="text-xs opacity-60 hover:opacity-100 underline underline-offset-2 transition-opacity"
+          >
+            {mostraScartati ? "nascondi gli scartati" : `mostra i ${nascostiN} scartati`}
+          </button>
+        )}
 
         {inAttesa.length > 0 && dataSel && (
           <div className="ml-auto flex gap-2">
@@ -264,11 +358,13 @@ export default function ProductArtistApprovals() {
       )}
 
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-        {design.map(d => {
+        {visibili.map(d => {
           const meta = DEC_META[d.decisione as Decisione] ?? DEC_META.in_attesa;
           const bloccato = d.applicato || inCorso;
+          const msRestanti = restanti(d);
           return (
-            <div key={d.id} className="rounded-xl p-3 flex flex-col gap-3" style={CARD}>
+            <div key={d.id} className="rounded-xl p-3 flex flex-col gap-3 transition-opacity"
+                 style={{ ...CARD, opacity: d.decisione === "rifiutato" ? 0.55 : 1 }}>
               <Anteprima data={batch.data!.data} file={d.file} alt={d.concept || d.id} />
 
               <div className="space-y-1.5">
@@ -293,20 +389,30 @@ export default function ProductArtistApprovals() {
                 </div>
               </div>
 
+              {msRestanti > 0 && (
+                <div className="flex items-center justify-between gap-2 text-xs rounded-lg px-2.5 py-1.5"
+                     style={{ background: DEC_META.rifiutato.bg, color: DEC_META.rifiutato.fg }}>
+                  <span>sparisce tra {Math.ceil(msRestanti / 1000)}s</span>
+                  <button
+                    className="underline underline-offset-2 hover:opacity-80"
+                    disabled={inCorso}
+                    onClick={() => decidi.mutate({ data: batch.data!.data, id: d.id, decisione: "in_attesa" })}
+                  >
+                    annulla
+                  </button>
+                </div>
+              )}
+
               <div className="flex gap-2 mt-auto">
                 <Button
                   size="sm" className="flex-1" disabled={bloccato || d.decisione === "approvato"}
-                  onClick={() => decidi.mutate({
-                    data: batch.data!.data, id: d.id, decisione: "approvato", sha: batch.data!.sha,
-                  })}
+                  onClick={() => decidi.mutate({ data: batch.data!.data, id: d.id, decisione: "approvato" })}
                 >
                   <Check className="w-4 h-4 mr-1" /> Approva
                 </Button>
                 <Button
                   size="sm" variant="outline" className="flex-1" disabled={bloccato || d.decisione === "rifiutato"}
-                  onClick={() => decidi.mutate({
-                    data: batch.data!.data, id: d.id, decisione: "rifiutato", sha: batch.data!.sha,
-                  })}
+                  onClick={() => decidi.mutate({ data: batch.data!.data, id: d.id, decisione: "rifiutato" })}
                 >
                   <XIcon className="w-4 h-4 mr-1" /> Scarta
                 </Button>

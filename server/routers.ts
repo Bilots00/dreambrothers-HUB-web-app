@@ -546,7 +546,7 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         z.object({
           data: z.string().min(1),
           id: z.string().min(1),
-          decisione: z.enum(["approvato", "rifiutato"]),
+          decisione: z.enum(["approvato", "rifiutato", "in_attesa"]),
           note: z.string().max(4000).optional(),
           sha: z.string().optional(),
         }),

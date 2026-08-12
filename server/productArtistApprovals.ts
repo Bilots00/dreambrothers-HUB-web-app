@@ -162,11 +162,27 @@ export async function getBatch(data?: string): Promise<Batch | null> {
 export async function getImmagine(data: string, file: string): Promise<{ base64: string; mime: string } | null> {
   if (file.includes("..") || file.includes("/")) throw new Error("nome file non valido");
   const { owner, repo } = repoSlug();
-  const res = await ghJson<{ content: string; encoding: string }>(
+
+  const meta = await ghJson<{ content: string; encoding: string; sha: string; size: number }>(
     `/repos/${owner}/${repo}/contents/output/${encodeURIComponent(data)}/${encodeURIComponent(file)}`,
   ).catch(() => null);
-  if (!res) return null;
-  return { base64: res.content.replace(/\n/g, ""), mime: file.endsWith(".jpg") ? "image/jpeg" : "image/png" };
+  if (!meta) return null;
+
+  const mime = file.toLowerCase().endsWith(".jpg") ? "image/jpeg" : "image/png";
+
+  // Sotto il megabyte l'API Contents restituisce già il contenuto.
+  if (meta.content) return { base64: meta.content.replace(/\n/g, ""), mime };
+
+  // Oltre 1 MB torna il metadato con `content` VUOTO, senza errore: i PNG dei
+  // design pesano 1,5-2,8 MB, quindi metà anteprime restavano bianche senza che
+  // niente segnalasse un problema. Sopra quella soglia si passa dall'API Blobs,
+  // che arriva fino a 100 MB.
+  const blob = await ghJson<{ content: string; encoding: string }>(
+    `/repos/${owner}/${repo}/git/blobs/${meta.sha}`,
+  ).catch(() => null);
+  if (!blob?.content) return null;
+
+  return { base64: blob.content.replace(/\n/g, ""), mime };
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,7 +192,8 @@ export async function getImmagine(data: string, file: string): Promise<{ base64:
 export async function decidiDesign(input: {
   data: string;
   id: string;
-  decisione: Exclude<DecisioneDesign, "in_attesa">;
+  /** "in_attesa" è il ripensamento: riporta il design indietro e ferma il timer. */
+  decisione: DecisioneDesign;
   note?: string;
   sha?: string;
 }): Promise<Batch> {
