@@ -164,13 +164,14 @@ export default function ProductArtistApprovals() {
         </div>
       )}
 
-      {batch.isError && (
+      {(batch.isError || batches.isError) && (
         <div className="rounded-xl p-4 text-sm" style={{ ...CARD, borderColor: "oklch(0.4 0.15 25)" }}>
-          {batch.error.message}
+          <b style={{ color: DEC_META.rifiutato.fg }}>Non riesco a leggere la repo dell'agente.</b>
+          <p className="mt-1 opacity-80">{batches.error?.message || batch.error?.message}</p>
         </div>
       )}
 
-      {!batch.isLoading && !design.length && (
+      {!batch.isLoading && !batches.isError && !batch.isError && !design.length && (
         <div className="rounded-xl p-8 text-center text-sm opacity-60" style={CARD}>
           Nessun design per questa data. L'agente gira ogni notte alle 02:00.
         </div>

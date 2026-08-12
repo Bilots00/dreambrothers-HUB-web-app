@@ -101,10 +101,29 @@ async function ghJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 type ContentItem = { name: string; path: string; type: string; sha: string };
 
-/** Le date disponibili, dalla più recente. Una cartella per notte. */
+/**
+ * Le date disponibili, dalla più recente. Una cartella per notte.
+ *
+ * Gli errori NON si ingoiano: una pagina vuota che non spiega perché è vuota
+ * manda a caccia del problema sbagliato (successo il 2026-08-12, il token non
+ * vedeva la repo e la pagina diceva solo "nessun design").
+ */
 export async function listaBatch(): Promise<string[]> {
   const { owner, repo } = repoSlug();
-  const items = await ghJson<ContentItem[]>(`/repos/${owner}/${repo}/contents/output`).catch(() => []);
+  let items: ContentItem[];
+  try {
+    items = await ghJson<ContentItem[]>(`/repos/${owner}/${repo}/contents/output`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/non trovata/i.test(msg)) {
+      throw new Error(
+        `La repo ${owner}/${repo} non è raggiungibile col token configurato. ` +
+          `Verifica che PRODUCT_ARTIST_GITHUB_TOKEN esista su Railway e abbia accesso a QUESTA repo ` +
+          `(un token fine-grained limitato ad altre repo restituisce lo stesso 404).`,
+      );
+    }
+    throw e;
+  }
   return items
     .filter(i => i.type === "dir" && /^\d{4}-\d{2}-\d{2}/.test(i.name))
     .map(i => i.name)
