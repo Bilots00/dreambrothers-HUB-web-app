@@ -33,6 +33,7 @@ import SeoResearch from "./pages/SeoResearch";
 import SeoBlogs from "./pages/SeoBlogs";
 import SeoApprovals from "./pages/SeoApprovals";
 import ProductMarketFit from "./pages/ProductMarketFit";
+import ProductArtistApprovals from "./pages/ProductArtistApprovals";
 import ClaudeSessions from "./pages/ClaudeSessions";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
@@ -73,6 +74,7 @@ function AppRouter() {
       <Route path="/gelato/market-fit">{withLayout(ProductMarketFit)}</Route>
       <Route path="/gelato/maker">{withLayout(GelatoMaker)}</Route>
       <Route path="/gelato/pod-partners">{withLayout(PodPartners)}</Route>
+      <Route path="/gelato/design-approvals">{withLayout(ProductArtistApprovals)}</Route>
       <Route path="/gelato">{() => { window.location.replace("/gelato/maker"); return null; }}</Route>
 
       {/* SOCIAL MEDIA */}

@@ -9,7 +9,7 @@ import {
   ChevronDown, FlaskConical, Instagram, Layout,
   LogOut, Megaphone, Package, Package2, PanelLeft, Plug,
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
-  Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar,
+  Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar, CheckCircle2,
   Newspaper, TrendingUp, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck,
 } from "lucide-react";
 import { useState, useEffect } from "react";
@@ -31,6 +31,7 @@ const META_ADS_ITEMS = [
 
 const GELATO_ITEMS = [
   { icon: Radar, label: "Product Market FIT", path: "/gelato/market-fit", description: "Monitor competitor & opportunità" },
+  { icon: CheckCircle2, label: "Approva Design", path: "/gelato/design-approvals", description: "I design della notte: sì o no" },
   { icon: Package2, label: "Bulk Creator", path: "/gelato/maker", description: "Crea prodotti in massa" },
   { icon: Package, label: "POD Partners", path: "/gelato/pod-partners", description: "Fornitori & certificato" },
 ];

@@ -59,6 +59,13 @@ import {
 import { scanMetaAdLibrary, scanTikTokTopAds } from "./adLibrary";
 import { generateDailyPicks } from "./dailyPicksService";
 import { listProposte, decidiProposta, getBacklog } from "./seoApprovals";
+import {
+  listaBatch,
+  getBatch,
+  getImmagine,
+  decidiDesign,
+  decidiMolti,
+} from "./productArtistApprovals";
 
 function todayRome(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -517,6 +524,44 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         }),
       )
       .mutation(async ({ input }) => decidiProposta(input)),
+  }),
+
+  // ─── Product Artist: i design della notte in attesa di sì o no ───────────────
+  productArtist: router({
+    /** Le date disponibili, dalla più recente. */
+    batches: protectedProcedure.query(async () => listaBatch()),
+
+    /** Il batch di una data; senza data prende l'ultima notte. */
+    batch: protectedProcedure
+      .input(z.object({ data: z.string().optional() }).optional())
+      .query(async ({ input }) => getBatch(input?.data)),
+
+    /** L'immagine del design in base64: la repo è privata, non è linkabile. */
+    immagine: protectedProcedure
+      .input(z.object({ data: z.string().min(1), file: z.string().min(1) }))
+      .query(async ({ input }) => getImmagine(input.data, input.file)),
+
+    decidi: protectedProcedure
+      .input(
+        z.object({
+          data: z.string().min(1),
+          id: z.string().min(1),
+          decisione: z.enum(["approvato", "rifiutato"]),
+          note: z.string().max(4000).optional(),
+          sha: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => decidiDesign(input)),
+
+    decidiMolti: protectedProcedure
+      .input(
+        z.object({
+          data: z.string().min(1),
+          ids: z.array(z.string().min(1)).min(1).max(200),
+          decisione: z.enum(["approvato", "rifiutato"]),
+        }),
+      )
+      .mutation(async ({ input }) => decidiMolti(input)),
   }),
 
   // ─── SEO & Research: feed di market intelligence (replica WeAreMarketers) ────
