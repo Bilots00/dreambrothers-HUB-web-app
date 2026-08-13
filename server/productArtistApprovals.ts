@@ -245,6 +245,124 @@ export async function decidiMolti(input: {
   return batch;
 }
 
+/* ------------------------------------------------------------------ */
+/* Materiale per la notte successiva: reference e fonte                */
+/* ------------------------------------------------------------------ */
+
+export type ModoFonte = "caricate" | "url" | "auto";
+
+export type Fonte = {
+  modo: ModoFonte;
+  /** usato se modo = "url": la vetrina da cui prendere i bestseller */
+  url?: string;
+  /** compilato dalla web app se modo = "auto": i domini della watchlist Product Market FIT */
+  watchlist?: string[];
+  note?: string;
+  aggiornatoIl: string;
+};
+
+const PATH_FONTE = "references/_fonte-prossima-notte.json";
+
+/** Oggi in fuso Roma: le reference si organizzano per giornata di lavoro. */
+function oggiRoma(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+}
+
+export async function getFonte(): Promise<Fonte> {
+  const { owner, repo } = repoSlug();
+  const file = await ghJson<{ content: string; encoding: string }>(
+    `/repos/${owner}/${repo}/contents/${PATH_FONTE}`,
+  ).catch(() => null);
+  if (!file) return { modo: "auto", aggiornatoIl: new Date().toISOString() };
+  return JSON.parse(
+    Buffer.from(file.content, (file.encoding as BufferEncoding) || "base64").toString("utf8"),
+  ) as Fonte;
+}
+
+export async function setFonte(input: {
+  modo: ModoFonte; url?: string; watchlist?: string[]; note?: string;
+}): Promise<Fonte> {
+  if (input.modo === "url" && !input.url?.trim()) {
+    throw new Error("Con modo 'url' serve l'indirizzo del negozio.");
+  }
+  const fonte: Fonte = {
+    modo: input.modo,
+    url: input.url?.trim() || undefined,
+    watchlist: input.watchlist?.length ? input.watchlist : undefined,
+    note: input.note?.trim() || undefined,
+    aggiornatoIl: new Date().toISOString(),
+  };
+  await scriviFile(PATH_FONTE, Buffer.from(JSON.stringify(fonte, null, 2), "utf8"),
+    `fonte reference: ${input.modo}${input.url ? ` (${input.url})` : ""}`);
+  return fonte;
+}
+
+export type FileReference = { path: string; nome: string; tipo: string; giorno: string; size: number; sha: string };
+
+/** Le reference caricate per la prossima notte, raggruppabili per tipo. */
+export async function listaReference(giorno?: string): Promise<FileReference[]> {
+  const g = giorno || oggiRoma();
+  const { owner, repo } = repoSlug();
+  const out: FileReference[] = [];
+  for (const tipo of ["apparel", "wallart"]) {
+    const items = await ghJson<(ContentItem & { size: number })[]>(
+      `/repos/${owner}/${repo}/contents/references/${tipo}/${encodeURIComponent(g)}`,
+    ).catch(() => []);
+    for (const i of items) {
+      if (i.type !== "file") continue;
+      out.push({ path: i.path, nome: i.name, tipo, giorno: g, size: i.size, sha: i.sha });
+    }
+  }
+  return out;
+}
+
+export async function caricaReference(input: {
+  tipo: "apparel" | "wallart"; nomeFile: string; base64: string; giorno?: string;
+}): Promise<FileReference> {
+  // Il nome arriva dal browser: si ripulisce prima di farlo diventare un path.
+  const nome = input.nomeFile.replace(/[^A-Za-z0-9._-]/g, "_").slice(-80);
+  if (!nome || nome.startsWith(".")) throw new Error("nome file non valido");
+
+  const bytes = Buffer.from(input.base64, "base64");
+  if (bytes.length > 12 * 1024 * 1024) throw new Error("immagine troppo grande (max 12 MB)");
+
+  const g = input.giorno || oggiRoma();
+  const path = `references/${input.tipo}/${g}/${nome}`;
+  await scriviFile(path, bytes, `reference caricata: ${input.tipo}/${nome}`);
+  return { path, nome, tipo: input.tipo, giorno: g, size: bytes.length, sha: "" };
+}
+
+export async function eliminaReference(path: string): Promise<void> {
+  if (!path.startsWith("references/") || path.includes("..")) throw new Error("percorso non valido");
+  const { owner, repo } = repoSlug();
+  const meta = await ghJson<{ sha: string }>(`/repos/${owner}/${repo}/contents/${path}`);
+  await ghJson(`/repos/${owner}/${repo}/contents/${path}`, {
+    method: "DELETE",
+    body: JSON.stringify({
+      message: `web app: rimossa reference ${path.split("/").pop()}`,
+      sha: meta.sha,
+      committer: { name: "DreamBrothers HUB", email: "hub@dreambrothers.local" },
+    }),
+  });
+}
+
+/** Scrittura generica su GitHub: crea o aggiorna, gestendo lo sha se il file esiste. */
+async function scriviFile(path: string, contenuto: Buffer, messaggio: string): Promise<void> {
+  const { owner, repo } = repoSlug();
+  const esistente = await ghJson<{ sha: string }>(`/repos/${owner}/${repo}/contents/${path}`).catch(() => null);
+  await ghJson(`/repos/${owner}/${repo}/contents/${path}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      message: `web app: ${messaggio}`,
+      content: contenuto.toString("base64"),
+      ...(esistente ? { sha: esistente.sha } : {}),
+      committer: { name: "DreamBrothers HUB", email: "hub@dreambrothers.local" },
+    }),
+  });
+}
+
 async function scriviBatch(batch: Batch, messaggio: string): Promise<void> {
   const { owner, repo } = repoSlug();
   const path = `output/${batch.data}/batch.json`;

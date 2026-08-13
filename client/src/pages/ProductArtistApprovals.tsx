@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Check, X as XIcon, RefreshCw, Loader2, Shirt, Frame,
-  CheckCheck, Trash2, Calendar1, ChevronDown, Maximize2,
+  CheckCheck, Trash2, Calendar1, ChevronDown, Maximize2, Upload, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -114,6 +114,201 @@ function SelettoreData({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Materiale per la prossima notte                                     */
+/*                                                                     */
+/* Le reference si caricano da qui invece che da una cartella sul disco:*/
+/* finiscono nella repo dell'agente, che il VPS legge al run notturno.  */
+/* Se non carichi niente, l'agente non resta a mani vuote — prende i    */
+/* bestseller da un negozio che indichi, o dalla watchlist di Product   */
+/* Market FIT.                                                          */
+/* ------------------------------------------------------------------ */
+
+const MODI = [
+  { id: "caricate", label: "Carico io", desc: "Uso le immagini che carico qui sotto" },
+  { id: "url", label: "Da un negozio", desc: "Prendi i bestseller da questa vetrina" },
+  { id: "auto", label: "Automatico", desc: "Pesca dai negozi che seguo in Product Market FIT" },
+] as const;
+
+function MaterialeProssimaNotte() {
+  const utils = trpc.useUtils();
+  const fonte = trpc.productArtist.fonte.useQuery();
+  const reference = trpc.productArtist.reference.useQuery();
+
+  const [modo, setModo] = useState<"caricate" | "url" | "auto">("auto");
+  const [url, setUrl] = useState("");
+  const [tipo, setTipo] = useState<"apparel" | "wallart">("apparel");
+  const [caricando, setCaricando] = useState(0);
+
+  useEffect(() => {
+    if (!fonte.data) return;
+    setModo(fonte.data.modo);
+    setUrl(fonte.data.url ?? "");
+  }, [fonte.data]);
+
+  const salva = trpc.productArtist.setFonte.useMutation({
+    onSuccess: () => { toast.success("Impostazione salvata per stanotte"); utils.productArtist.fonte.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const carica = trpc.productArtist.caricaReference.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
+
+  const elimina = trpc.productArtist.eliminaReference.useMutation({
+    onSuccess: () => { toast.success("Reference rimossa"); utils.productArtist.reference.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const onFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setCaricando(files.length);
+    let ok = 0;
+    for (const file of Array.from(files)) {
+      try {
+        const base64 = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result).split(",")[1] ?? "");
+          r.onerror = () => rej(new Error(`non riesco a leggere ${file.name}`));
+          r.readAsDataURL(file);
+        });
+        await carica.mutateAsync({ tipo, nomeFile: file.name, base64 });
+        ok++;
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : `errore su ${file.name}`);
+      }
+      setCaricando(n => n - 1);
+    }
+    if (ok) {
+      toast.success(`${ok} reference caricate`);
+      utils.productArtist.reference.invalidate();
+      // Caricare implica volerle usare: si allinea il modo senza farglielo ricordare.
+      if (modo !== "caricate") salva.mutate({ modo: "caricate" });
+    }
+  };
+
+  const files = reference.data ?? [];
+  const perTipo = (t: string) => files.filter(f => f.tipo === t);
+
+  return (
+    <div className="rounded-xl p-4 space-y-4" style={CARD}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Sparkles className="w-4 h-4 opacity-70" /> Materiale per la prossima notte
+          </h2>
+          <p className="text-xs opacity-55 mt-0.5">
+            Da cosa deve partire l'agente alle 02:00. Non serve tenere niente sul disco.
+          </p>
+        </div>
+        {fonte.data?.aggiornatoIl && (
+          <span className="text-[11px] opacity-45">
+            impostato il {new Date(fonte.data.aggiornatoIl).toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+        {MODI.map(m => {
+          const attivo = modo === m.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => { setModo(m.id); if (m.id !== "url") salva.mutate({ modo: m.id }); }}
+              disabled={salva.isPending}
+              className="text-left rounded-lg px-3 py-2 transition-colors"
+              style={{
+                background: attivo ? "oklch(0.25 0.06 250)" : "oklch(0.11 0.015 260)",
+                border: `1px solid ${attivo ? "oklch(0.5 0.14 250)" : "oklch(0.2 0.015 260)"}`,
+              }}
+            >
+              <div className="text-sm font-medium">{m.label}</div>
+              <div className="text-[11px] opacity-55 leading-snug mt-0.5">{m.desc}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {modo === "url" && (
+        <div className="flex gap-2 flex-wrap items-center">
+          <input
+            value={url}
+            onChange={e => setUrl(e.target.value)}
+            placeholder="https://gernucci.com"
+            className="flex-1 min-w-[240px] bg-transparent text-sm rounded-lg px-3 py-2 outline-none"
+            style={{ border: "1px solid oklch(0.25 0.015 260)" }}
+          />
+          <Button size="sm" disabled={salva.isPending || !url.trim()}
+                  onClick={() => salva.mutate({ modo: "url", url })}>
+            Salva negozio
+          </Button>
+          <p className="w-full text-[11px] opacity-50">
+            L'agente aprirà <code>/collections/all?sort_by=best-selling</code> e userà i primi prodotti come reference.
+            Funziona con qualunque store Shopify.
+          </p>
+        </div>
+      )}
+
+      {modo === "auto" && (
+        <p className="text-xs opacity-60">
+          {fonte.data?.watchlist?.length
+            ? <>Userà i bestseller di <b>{fonte.data.watchlist.length} negozi</b> della tua watchlist: {fonte.data.watchlist.join(", ")}</>
+            : "Salva questa modalità per agganciare i negozi che segui in Product Market FIT."}
+        </p>
+      )}
+
+      <div className="pt-1" style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
+        <div className="flex items-center gap-2 flex-wrap pt-3">
+          <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid oklch(0.25 0.015 260)" }}>
+            {(["apparel", "wallart"] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setTipo(t)}
+                className="px-3 py-1.5 text-xs transition-colors"
+                style={{ background: tipo === t ? "oklch(0.25 0.06 250)" : "transparent" }}
+              >
+                {t === "apparel" ? "abbigliamento" : "wall art"}
+              </button>
+            ))}
+          </div>
+
+          <label className="cursor-pointer">
+            <input type="file" accept="image/*" multiple className="hidden"
+                   onChange={e => { onFiles(e.target.files); e.currentTarget.value = ""; }} />
+            <span className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors hover:bg-white/5"
+                  style={{ border: "1px solid oklch(0.25 0.015 260)" }}>
+              {caricando > 0 ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              {caricando > 0 ? `carico ${caricando}…` : "Carica reference"}
+            </span>
+          </label>
+
+          <span className="text-[11px] opacity-45">
+            {files.length ? `${perTipo("apparel").length} abbigliamento · ${perTipo("wallart").length} wall art` : "nessuna reference caricata per oggi"}
+          </span>
+        </div>
+
+        {files.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {files.map(f => (
+              <span key={f.path}
+                    className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-md"
+                    style={{ background: "oklch(0.11 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+                <span className="opacity-45">{f.tipo === "apparel" ? "👕" : "🖼"}</span>
+                <span className="max-w-[190px] truncate">{f.nome}</span>
+                <button onClick={() => elimina.mutate({ path: f.path })}
+                        disabled={elimina.isPending}
+                        className="opacity-45 hover:opacity-100" title="Rimuovi">
+                  <XIcon className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -293,6 +488,8 @@ export default function ProductArtistApprovals() {
           <span className="ml-2">Aggiorna</span>
         </Button>
       </div>
+
+      <MaterialeProssimaNotte />
 
       {/* Selettore della notte + riepilogo */}
       <div className="flex items-center gap-3 flex-wrap rounded-xl p-3" style={CARD}>

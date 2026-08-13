@@ -65,6 +65,11 @@ import {
   getImmagine,
   decidiDesign,
   decidiMolti,
+  getFonte,
+  setFonte,
+  listaReference,
+  caricaReference,
+  eliminaReference,
 } from "./productArtistApprovals";
 
 function todayRome(): string {
@@ -562,6 +567,62 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         }),
       )
       .mutation(async ({ input }) => decidiMolti(input)),
+
+    /* ── Materiale per la prossima notte ─────────────────────────────────── */
+
+    fonte: protectedProcedure.query(async () => getFonte()),
+
+    /**
+     * Con modo "auto" la watchlist del Product Market FIT viene copiata dentro
+     * la configurazione: cosi' l'agente sul VPS legge un solo file e non ha
+     * bisogno di raggiungere il database.
+     */
+    setFonte: protectedProcedure
+      .input(
+        z.object({
+          modo: z.enum(["caricate", "url", "auto"]),
+          url: z.string().max(500).optional(),
+          note: z.string().max(1000).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        let watchlist: string[] | undefined;
+        if (input.modo === "auto") {
+          const negozi = await listMarketStores(ctx.user.id);
+          watchlist = negozi
+            .filter(n => n.isShopify && n.status !== "paused")
+            .map(n => n.domain);
+          if (!watchlist.length) {
+            throw new Error(
+              "Nessun negozio Shopify attivo nella watchlist di Product Market FIT: " +
+                "aggiungine uno o scegli un'altra modalità.",
+            );
+          }
+        }
+        return setFonte({ ...input, watchlist });
+      }),
+
+    reference: protectedProcedure
+      .input(z.object({ giorno: z.string().optional() }).optional())
+      .query(async ({ input }) => listaReference(input?.giorno)),
+
+    caricaReference: protectedProcedure
+      .input(
+        z.object({
+          tipo: z.enum(["apparel", "wallart"]),
+          nomeFile: z.string().min(1).max(200),
+          base64: z.string().min(1),
+          giorno: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => caricaReference(input)),
+
+    eliminaReference: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        await eliminaReference(input.path);
+        return { ok: true } as const;
+      }),
   }),
 
   // ─── SEO & Research: feed di market intelligence (replica WeAreMarketers) ────
