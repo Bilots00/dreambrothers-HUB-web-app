@@ -362,7 +362,13 @@ export async function pubblicaDesign(
   );
 
   try {
-    const img = await getImmagine(data, design.file);
+    // Se l'upscale ha già prodotto il file di stampa si usa quello: il PNG
+    // grezzo di Gemini è ~765px, che stampato su una maglietta si vede.
+    // Convenzione col motore di upscale: stesso nome + "_print".
+    const filePrint = design.file.replace(/\.png$/i, "_print.png");
+    const img =
+      (filePrint !== design.file ? await getImmagine(data, filePrint) : null) ??
+      (await getImmagine(data, design.file));
     if (!img) throw new Error(`Immagine ${design.file} non trovata nella repo dell'agente.`);
 
     // La stampa non si blocca per la risoluzione, ma l'avviso resta scritto:
