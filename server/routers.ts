@@ -578,9 +578,16 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
      * (token scaduto, Printify giù) e Andrea vuole ritentare senza ri-approvare.
      */
     ripubblica: protectedProcedure
-      .input(z.object({ data: z.string().min(1), id: z.string().min(1) }))
+      .input(
+        z.object({
+          data: z.string().min(1),
+          id: z.string().min(1),
+          /** con che veste pubblicare: senza, vale il tipo dedotto dal manifest */
+          tipo: z.enum(["apparel", "wallart"]).optional(),
+        }),
+      )
       .mutation(async ({ input }) => {
-        await pubblicaDesign(input.data, input.id);
+        await pubblicaDesign(input.data, input.id, input.tipo);
         return getBatch(input.data);
       }),
 

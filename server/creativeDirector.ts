@@ -1,20 +1,24 @@
 /**
- * Creative Director — dalle creatività pubblicitarie per un prodotto approvato.
+ * Creative Director — le creatività pubblicitarie per un prodotto approvato.
  *
- * Non è un generatore di frasi a caso: monta in un colpo solo i due ruoli già
- * mappati nel Brain — il **Creative Director** (`areas/creatives/_hub-creatives`,
- * che detta il loop chi → cosa/perché → visual hook → VOC → filtro anti-AI) e il
- * **Copywriter** (`areas/hr-training/ruoli/copywriter`) — e li fa lavorare sullo
- * stesso design con le schede vere davanti, non con un riassunto.
+ * Il motore NON è un'API a pagamento e non è Gemini: è l'abbonamento Claude Max
+ * già pagato, che gira sul VPS con `claude -p`. Vale la stessa regola di casa
+ * degli altri agenti (vedi Research Hub, Market Intelligence): la web app non
+ * ragiona, mette in coda; l'agente sul VPS pesca, pensa e riconsegna.
  *
- * La strategia non è un parametro fisso: la scelta della piattaforma, dell'avatar
- * e dell'angle nasce dall'incrocio fra il design, la platform matrix del Brain e
- * il momento dell'anno in cui siamo. Una t-shirt identitaria per Aurora a fine
- * agosto non si spinge come una wall art per Money Game a dicembre.
+ *   web app  →  design.creative = { stato: "in_coda" }
+ *   agente   →  GET  /api/creative/pending   (header x-care-secret)
+ *   agente   →  claude -p  con la scheda-ruolo e il Brain locali
+ *   agente   →  POST /api/creative/result
+ *
+ * Chi lavora sono i due ruoli già mappati nel Brain: il **Creative Director**
+ * (`areas/creatives/_hub-creatives`) e il **Copywriter**
+ * (`areas/hr-training/ruoli/copywriter`). La strategia non è un parametro fisso:
+ * piattaforma, avatar e angle nascono dall'incrocio fra design, platform matrix
+ * e momento dell'anno.
  */
 
-import { runResearchLLM } from "./research";
-import { getBrandContext, leggiBrain } from "./brainClient";
+import { getBrandContext } from "./brainClient";
 
 /* ------------------------------------------------------------------ */
 /* Forma del risultato                                                 */
@@ -45,37 +49,23 @@ export type PacchettoCreativo = {
   angle: string;
   creativita: Creativita[];
   noteMediaBuyer: string;
-  /** schede del Brain effettivamente lette: se è vuoto, ha lavorato col solo DNA */
-  fonti: string[];
+};
+
+/** Lo stato della richiesta, come vive dentro il design nel batch. */
+export type RichiestaCreative = {
+  stato: "in_coda" | "pronto" | "errore";
+  richiestoIl: string;
+  presoIlCaricoIl?: string;
+  errore?: string;
+  pacchetto?: PacchettoCreativo;
 };
 
 /* ------------------------------------------------------------------ */
-/* Le schede che i due ruoli leggono prima di scrivere                 */
+/* Il brief che l'agente riceve                                        */
 /* ------------------------------------------------------------------ */
 
-const SCHEDE_BASE = [
-  "areas/creatives/_hub-creatives.md",
-  "areas/hr-training/ruoli/copywriter.md",
-  "areas/marketing/advertising/strategia-ads.md",
-  "areas/copywriting/copy-per-avatar.md",
-  "areas/copywriting/banca-hook.md",
-  "areas/copywriting/regole-anti-ai.md",
-  "areas/marketing/creative-learnings.md",
-  "areas/clienti-mercato/recensioni-voc.md",
-  "areas/design/template-creativita.md",
-];
-
-/** L'avatar dichiarato dal design decide quale scheda-avatar entra nel contesto. */
-function schedaAvatar(avatar: string): string | null {
-  const a = (avatar || "").toLowerCase();
-  if (a.includes("money")) return "areas/business/avatar-money-game.md";
-  if (a.includes("aurora")) return "areas/business/avatar-aurora.md";
-  if (a.includes("sognatrice") || a.includes("sensibile")) return "areas/business/avatar-sognatrice-sensibile.md";
-  return null;
-}
-
-/** Il momento dell'anno, in chiaro: il modello non ha una data affidabile da solo. */
-function momentoCorrente(): string {
+/** Il momento dell'anno in chiaro: il modello non ha una data affidabile da solo. */
+export function momentoCorrente(): string {
   const ora = new Date();
   const fmt = new Intl.DateTimeFormat("it-IT", {
     timeZone: "Europe/Rome",
@@ -88,7 +78,7 @@ function momentoCorrente(): string {
   );
   const stagione =
     mese <= 2 || mese === 12
-      ? "inverno — stagione regalo/proposito di inizio anno"
+      ? "inverno — stagione regalo e proposito di inizio anno"
       : mese <= 5
         ? "primavera — rinnovo, 'nuova versione di me'"
         : mese <= 8
@@ -97,119 +87,71 @@ function momentoCorrente(): string {
   return `${fmt.format(ora)} (${stagione})`;
 }
 
-/* ------------------------------------------------------------------ */
-/* Generazione                                                         */
-/* ------------------------------------------------------------------ */
-
-/** La forma attesa, descritta al modello: il motore free-tier non applica schemi. */
-const FORMA_JSON = `{
-  "avatar": "l'unico avatar scelto",
-  "piattaforma": "la piattaforma ads principale",
-  "perchePiattaforma": "perché questa e non le altre, per QUESTO prodotto e QUESTO avatar",
-  "momento": "cosa cambia per il periodo dell'anno in cui siamo",
-  "angle": "l'angolo di comunicazione",
-  "creativita": [
-    {
-      "formato": "es. Reel 9:16 · Statica 1:1 · Carosello 4:5",
-      "hook": "i primi 3 secondi",
-      "direzione": "script scena per scena se video, direzione visiva se statica",
-      "primaryText": "il testo lungo dell'inserzione",
-      "headline": "titolo breve",
-      "cta": "call to action",
-      "razionale": "perché dovrebbe funzionare su questo avatar"
-    }
-  ],
-  "noteMediaBuyer": "budget di test, pubblico, cosa guardare per capire se funziona"
-}`;
-
-/** Estrae il JSON anche quando il modello lo incarta in un blocco markdown. */
-function estraiJson(testo: string): string {
-  const pulito = testo.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
-  const apre = pulito.indexOf("{");
-  const chiude = pulito.lastIndexOf("}");
-  return apre >= 0 && chiude > apre ? pulito.slice(apre, chiude + 1) : pulito;
-}
-
-export async function generaCreative(input: {
-  /** dal design approvato */
+export type BriefCreative = {
+  data: string;
+  id: string;
   concept: string;
   avatar: string;
   prodotto: string;
   testoDaComporre: string;
   tipo: "apparel" | "wallart";
-  /** link al mockup Printify, se il prodotto è già pubblicato */
   mockup?: string | null;
   prezzoDa?: number | null;
-}): Promise<PacchettoCreativo> {
-  const paths = [...SCHEDE_BASE];
-  const avatarPath = schedaAvatar(input.avatar);
-  if (avatarPath) paths.push(avatarPath);
+  momento: string;
+  richiestoIl: string;
+};
 
-  const [brand, schede] = await Promise.all([getBrandContext(), leggiBrain(paths)]);
+/** Il contesto brand che accompagna la coda, come per market/pending-enrich. */
+export async function contestoPerAgente(): Promise<string> {
+  return getBrandContext();
+}
 
-  const contestoBrain = schede.length
-    ? schede.map(s => `### ${s.path}\n${s.testo}`).join("\n\n")
-    : "(Brain non raggiungibile: lavora sul solo DNA di brand qui sopra e dichiaralo nelle note.)";
+/* ------------------------------------------------------------------ */
+/* Validazione di ciò che l'agente riconsegna                          */
+/* ------------------------------------------------------------------ */
 
-  const prezzo = input.prezzoDa ? `${(input.prezzoDa / 100).toFixed(2)} €` : "non ancora fissato";
+function testo(v: unknown, max = 4000): string {
+  return typeof v === "string" ? v.trim().slice(0, max) : "";
+}
 
-  const system = `Sei due ruoli del team DreamBrothers che lavorano insieme sulla stessa creatività:
-il CREATIVE DIRECTOR (regia visiva, visual hook, psicologia del consumatore) e il COPYWRITER (le parole).
-Segui alla lettera i mansionari e le regole che trovi nelle schede del Brain qui sotto: sono la fonte,
-non un suggerimento.
+/**
+ * Normalizza il pacchetto in arrivo dall'agente.
+ *
+ * Non ci si fida della forma: `claude -p` restituisce testo, e un campo mancante
+ * qui diventerebbe una card rotta nella pagina. Meglio scartare con un errore
+ * parlante che salvare mezzo pacchetto.
+ */
+export function validaPacchetto(grezzo: unknown): PacchettoCreativo {
+  const o = (grezzo ?? {}) as Record<string, unknown>;
+  const listaGrezza = Array.isArray(o.creativita) ? o.creativita : [];
 
-REGOLE NON NEGOZIABILI:
-- UN solo avatar per pacchetto. Mai mischiare le voci.
-- MAI false claims o promesse magiche: un prodotto è un promemoria identitario, non un miracolo.
-- Applica il filtro anti-AI della scheda regole-anti-ai: niente frasi da chatbot, niente em dash,
-  niente parole-vetrina. Scrivi come parla il pubblico, con il lessico che trovi nelle schede VOC.
-- Le creatività servono per ADS a pagamento (traffico freddo o caldo, dichiaralo), non per organico.
-- Scegli UNA piattaforma principale usando la platform matrix del Brain e motiva la scelta con
-  il prodotto, l'avatar e il momento dell'anno che ti vengono dati — non con generiche buone pratiche.
+  const creativita: Creativita[] = listaGrezza
+    .map(c => {
+      const x = (c ?? {}) as Record<string, unknown>;
+      return {
+        formato: testo(x.formato, 120),
+        hook: testo(x.hook, 600),
+        direzione: testo(x.direzione, 3000),
+        primaryText: testo(x.primaryText, 3000),
+        headline: testo(x.headline, 300),
+        cta: testo(x.cta, 120),
+        razionale: testo(x.razionale, 1200),
+      };
+    })
+    .filter(c => c.hook && c.primaryText);
 
-DNA DI BRAND
-${brand}
-
-SCHEDE DEL BRAIN
-${contestoBrain}`;
-
-  const user = `Prodotto appena approvato e pubblicato, da spingere con le ads.
-
-- Concept del design: ${input.concept}
-- Avatar dichiarato dal Product Artist: ${input.avatar}
-- Tipo prodotto: ${input.tipo === "apparel" ? "capo di abbigliamento" : "wall art (quadro/poster)"}
-- Prodotto: ${input.prodotto}
-- Testo stampato sul design: ${input.testoDaComporre}
-- Prezzo di partenza: ${prezzo}
-- Momento in cui stiamo lanciando: ${momentoCorrente()}
-
-Produci il pacchetto creativo: la piattaforma migliore con il perché, l'angle, e 3-4 creatività
-pronte da caricare (hook, direzione visiva o script, primary text, headline, CTA, razionale).
-Chiudi con le note per il Media Buyer: budget di test, tipo di pubblico, cosa guardare per capire
-se sta funzionando.
-
-Rispondi SOLO con un oggetto JSON valido di questa forma, senza testo attorno e senza blocchi
-markdown, con 3 o 4 elementi in "creativita":
-${FORMA_JSON}`;
-
-  const testo = await runResearchLLM(system, user);
-  if (!testo?.trim()) {
-    throw new Error("Il Creative Director non ha restituito nulla. Riprova fra qualche secondo.");
-  }
-
-  let dati: Omit<PacchettoCreativo, "generatoIl" | "fonti">;
-  try {
-    dati = JSON.parse(estraiJson(testo));
-  } catch {
-    throw new Error("Risposta del Creative Director non leggibile (JSON non valido).");
-  }
-  if (!Array.isArray(dati.creativita) || !dati.creativita.length) {
-    throw new Error("Il Creative Director non ha prodotto creatività. Riprova.");
+  if (!creativita.length) {
+    throw new Error("Il pacchetto non contiene creatività utilizzabili (servono almeno hook e primaryText).");
   }
 
   return {
-    ...dati,
     generatoIl: new Date().toISOString(),
-    fonti: schede.map(s => s.path),
+    avatar: testo(o.avatar, 120),
+    piattaforma: testo(o.piattaforma, 120) || "non dichiarata",
+    perchePiattaforma: testo(o.perchePiattaforma, 1500),
+    momento: testo(o.momento, 600),
+    angle: testo(o.angle, 1000),
+    creativita,
+    noteMediaBuyer: testo(o.noteMediaBuyer, 2000),
   };
 }

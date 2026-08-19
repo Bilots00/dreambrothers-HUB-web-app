@@ -480,7 +480,13 @@ type Creativita = {
 type PacchettoCreativo = {
   avatar: string; piattaforma: string; perchePiattaforma: string;
   momento: string; angle: string; creativita: Creativita[];
-  noteMediaBuyer: string; fonti?: string[];
+  noteMediaBuyer: string;
+};
+
+type RichiestaCreative = {
+  stato: "in_coda" | "pronto" | "errore";
+  errore?: string | null;
+  pacchetto?: PacchettoCreativo | null;
 };
 
 /** Le creatività pronte: si aprono a fisarmonica sotto la card, senza uscire dalla pagina. */
@@ -540,13 +546,31 @@ function PannelloCreative({ c }: { c: PacchettoCreativo }) {
           <div className="leading-snug opacity-70 pt-0.5">
             <strong>Per il Media Buyer:</strong> {c.noteMediaBuyer}
           </div>
-          {c.fonti?.length ? (
-            <div className="opacity-35 leading-snug">Fonti Brain: {c.fonti.length} schede lette</div>
-          ) : (
-            <div className="opacity-45 leading-snug">Brain non raggiungibile: generato sul solo DNA di brand.</div>
-          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** In coda, pronto o fallito: il lavoro vero lo fa l'agente Claude sul VPS. */
+function StatoCreative({ r }: { r: RichiestaCreative }) {
+  if (r.stato === "pronto" && r.pacchetto) return <PannelloCreative c={r.pacchetto} />;
+
+  if (r.stato === "errore") {
+    return (
+      <div className="flex items-start gap-1.5 text-[11px] rounded-lg px-2.5 py-1.5"
+           style={{ background: DEC_META.rifiutato.bg, color: DEC_META.rifiutato.fg }}>
+        <TriangleAlert className="w-3 h-3 shrink-0 mt-0.5" />
+        <span className="leading-snug">{r.errore || "Il Creative Director non ce l'ha fatta."}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-[11px] rounded-lg px-2.5 py-1.5"
+         style={{ background: "oklch(0.6 0.15 300 / 0.15)", color: "oklch(0.82 0.13 300)" }}>
+      <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+      <span className="leading-snug">In coda per il Creative Director sul VPS</span>
     </div>
   );
 }
@@ -562,7 +586,11 @@ export default function ProductArtistApprovals() {
       // Mentre un prodotto sta salendo su Printify la pagina si aggiorna da sola:
       // la pubblicazione gira in background sul server, non nella richiesta.
       refetchInterval: q =>
-        q.state.data?.design?.some(d => d.pubblicazione?.stato === "in_corso") ? 4000 : false,
+        q.state.data?.design?.some(
+          d => d.pubblicazione?.stato === "in_corso" || d.creative?.stato === "in_coda",
+        )
+          ? 5000
+          : false,
     },
   );
   const utils = trpc.useUtils();
@@ -606,7 +634,7 @@ export default function ProductArtistApprovals() {
      perché qui Andrea ha premuto un pulsante e sta guardando. */
   const [creativeInCorso, setCreativeInCorso] = useState<string | null>(null);
   const creaCreative = trpc.productArtist.creaCreative.useMutation({
-    onSuccess: () => { toast.success("Creatività pronte"); ricarica(); },
+    onSuccess: () => { toast.success("In coda per il Creative Director"); ricarica(); },
     onError: e => toast.error(e.message),
     onSettled: () => setCreativeInCorso(null),
   });
@@ -782,20 +810,34 @@ export default function ProductArtistApprovals() {
                   onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id })}
                 />
               ) : d.decisione === "approvato" ? (
-                /* Approvato ma senza prodotto: succede ai design decisi prima di
-                   questa automazione, o approvati direttamente sulla repo. */
-                <div className="flex items-center justify-between gap-2 text-[11px] rounded-lg px-2.5 py-1.5 opacity-70"
+                /* Approvato ma senza prodotto. La veste si sceglie qui perché il
+                   tipo dedotto dal manifest non è sempre quello giusto: lo stesso
+                   artwork può uscire come maglietta o come quadro. */
+                <div className="space-y-1.5 text-[11px] rounded-lg px-2.5 py-1.5"
                      style={{ background: "oklch(0.2 0.01 260)" }}>
-                  <span>Prodotto non ancora creato</span>
-                  <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
-                          disabled={ripubblica.isPending}
-                          onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id })}>
-                    pubblica ora
-                  </button>
+                  <div className="opacity-70">Prodotto non ancora creato · pubblica come</div>
+                  <div className="flex gap-1.5">
+                    <button
+                      className="flex-1 flex items-center justify-center gap-1 rounded-md py-1 hover:opacity-80 disabled:opacity-40"
+                      style={{ border: "1px solid oklch(0.3 0.02 260)" }}
+                      disabled={ripubblica.isPending}
+                      onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "apparel" })}
+                    >
+                      <Shirt className="w-3 h-3" /> abbigliamento
+                    </button>
+                    <button
+                      className="flex-1 flex items-center justify-center gap-1 rounded-md py-1 hover:opacity-80 disabled:opacity-40"
+                      style={{ border: "1px solid oklch(0.3 0.02 260)" }}
+                      disabled={ripubblica.isPending}
+                      onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "wallart" })}
+                    >
+                      <Frame className="w-3 h-3" /> wall art
+                    </button>
+                  </div>
                 </div>
               ) : null}
 
-              {d.creative && <PannelloCreative c={d.creative} />}
+              {d.creative && <StatoCreative r={d.creative} />}
 
               <div className="flex gap-2 mt-auto">
                 {d.decisione === "approvato" ? (
@@ -804,16 +846,18 @@ export default function ProductArtistApprovals() {
                      qui non avrebbe più nulla da fare. */
                   <Button
                     size="sm" className="flex-1"
-                    disabled={creaCreative.isPending || !!d.creative}
+                    disabled={creaCreative.isPending || d.creative?.stato === "in_coda"}
                     onClick={() => {
                       setCreativeInCorso(d.id);
                       creaCreative.mutate({ data: batch.data!.data, id: d.id });
                     }}
                   >
                     {creativeInCorso === d.id && creaCreative.isPending ? (
-                      <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Ci penso…</>
-                    ) : d.creative ? (
-                      <><RotateCw className="w-4 h-4 mr-1" /> Creatività pronte</>
+                      <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Metto in coda…</>
+                    ) : d.creative?.stato === "in_coda" ? (
+                      <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> In coda</>
+                    ) : d.creative?.stato === "pronto" ? (
+                      <><RotateCw className="w-4 h-4 mr-1" /> Rifai le creatività</>
                     ) : (
                       <><Megaphone className="w-4 h-4 mr-1" /> Crea Creative</>
                     )}

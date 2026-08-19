@@ -14,7 +14,12 @@
  */
 
 import { pubblicaProdotto, dimensioniPng, MIN_LATO_LUNGO } from "./printify";
-import { generaCreative, type PacchettoCreativo } from "./creativeDirector";
+import {
+  validaPacchetto,
+  momentoCorrente,
+  type RichiestaCreative,
+  type BriefCreative,
+} from "./creativeDirector";
 
 const GH_API = "https://api.github.com";
 
@@ -60,8 +65,8 @@ export type Design = {
   applicato: boolean;
   /** compilato dalla web app quando il design viene approvato */
   pubblicazione?: Pubblicazione;
-  /** le creatività pubblicitarie generate dal Creative Director */
-  creative?: PacchettoCreativo;
+  /** le creatività pubblicitarie: in coda per l'agente VPS, poi il pacchetto */
+  creative?: RichiestaCreative;
 };
 
 export type Batch = {
@@ -328,16 +333,29 @@ async function aggiornaDesign(
  * sì di Andrea resta comunque registrato e l'errore finisce dentro il design,
  * visibile nella pagina, invece di far fallire la decisione.
  */
-export async function pubblicaDesign(data: string, id: string): Promise<void> {
+export async function pubblicaDesign(
+  data: string,
+  id: string,
+  /**
+   * Con che veste pubblicare. Serve perché il tipo dedotto dal manifest non è
+   * sempre quello giusto: una gouache verticale nasce marcata "apparel" ma sta
+   * meglio come quadro, e lo stesso file può vivere in entrambi i mondi.
+   */
+  tipoScelto?: "apparel" | "wallart",
+): Promise<void> {
   const batch = await getBatch(data);
   const design = batch?.design.find(d => d.id === id);
   if (!design) return;
   if (design.pubblicazione?.stato === "pubblicato" || design.pubblicazione?.stato === "in_corso") return;
 
+  const tipo = tipoScelto || design.tipo;
+
   await aggiornaDesign(
     data,
     id,
     d => {
+      // La scelta resta scritta: al prossimo giro la card mostra la veste vera.
+      d.tipo = tipo;
       d.pubblicazione = { stato: "in_corso", avviataIl: new Date().toISOString() };
     },
     `pubblicazione avviata: ${id}`,
@@ -355,14 +373,13 @@ export async function pubblicaDesign(data: string, id: string): Promise<void> {
         ? `Artwork ${dim.w}×${dim.h}px: sotto i ${MIN_LATO_LUNGO}px consigliati per la stampa. Va fatto l'upscale prima di spingerlo con le ads.`
         : undefined;
 
-    const titolo = titoloProdotto(design);
     const pubblicato = await pubblicaProdotto({
       nomeFile: design.file,
       base64: img.base64,
-      titolo,
+      titolo: titoloProdotto({ ...design, tipo }),
       descrizione: descrizioneProdotto(design),
-      tipo: design.tipo,
-      tags: [design.avatar, design.tipo, "DreamBrothers"].filter(Boolean),
+      tipo,
+      tags: [design.avatar, tipo, "DreamBrothers"].filter(Boolean),
     });
 
     await aggiornaDesign(
@@ -433,32 +450,99 @@ function avviaPubblicazione(data: string, id: string): void {
 /* ------------------------------------------------------------------ */
 
 /**
- * Chiama il Creative Director sul design e salva il pacchetto dentro il batch.
+ * Mette il design in coda per il Creative Director.
  *
- * Si aspetta il risultato invece di lanciarlo in background come la
- * pubblicazione: qui Andrea ha premuto un pulsante e sta guardando lo schermo,
- * quindi vuole vedere le creatività, non uno stato "in corso".
+ * Non genera niente qui: il motore è l'abbonamento Claude Max sul VPS, che
+ * pesca la coda con `claude -p`. La web app non paga API e non ragiona — è la
+ * stessa regola di casa del Research Hub e del Market Intelligence.
  */
-export async function creaCreativeDesign(data: string, id: string): Promise<PacchettoCreativo> {
+export async function creaCreativeDesign(data: string, id: string): Promise<RichiestaCreative> {
   const batch = await getBatch(data);
   const design = batch?.design.find(d => d.id === id);
   if (!design) throw new Error(`Design "${id}" non trovato nel batch ${data}`);
   if (design.decisione !== "approvato") {
     throw new Error("Le creatività si fanno solo sui design approvati: prima approva, poi si promuove.");
   }
+  if (design.creative?.stato === "in_coda") return design.creative;
 
-  const creative = await generaCreative({
-    concept: design.concept,
-    avatar: design.avatar,
-    prodotto: design.prodotto,
-    testoDaComporre: design.testoDaComporre,
-    tipo: design.tipo,
-    mockup: design.pubblicazione?.mockup ?? null,
-    prezzoDa: design.pubblicazione?.prezzoDa ?? null,
-  });
+  const richiesta: RichiestaCreative = { stato: "in_coda", richiestoIl: new Date().toISOString() };
+  await aggiornaDesign(data, id, d => { d.creative = richiesta; }, `creatività richieste: ${id}`);
+  return richiesta;
+}
 
-  await aggiornaDesign(data, id, d => { d.creative = creative; }, `creatività generate: ${id}`);
-  return creative;
+/**
+ * La coda per l'agente VPS: i design approvati che aspettano le creatività.
+ *
+ * Si guardano solo gli ultimi batch — una richiesta vecchia di settimane è roba
+ * dimenticata, non lavoro arretrato, e scandire tutta la cartella `output`
+ * significherebbe una chiamata GitHub per ogni notte mai prodotta.
+ */
+export async function creativeInCoda(maxBatch = 7): Promise<BriefCreative[]> {
+  const date = (await listaBatch()).slice(0, maxBatch);
+  const fuori: BriefCreative[] = [];
+  const momento = momentoCorrente();
+
+  for (const data of date) {
+    const batch = await getBatch(data).catch(() => null);
+    if (!batch) continue;
+    for (const d of batch.design) {
+      if (d.creative?.stato !== "in_coda") continue;
+      fuori.push({
+        data,
+        id: d.id,
+        concept: d.concept,
+        avatar: d.avatar,
+        prodotto: d.prodotto,
+        testoDaComporre: d.testoDaComporre,
+        tipo: d.tipo,
+        mockup: d.pubblicazione?.mockup ?? null,
+        prezzoDa: d.pubblicazione?.prezzoDa ?? null,
+        momento,
+        richiestoIl: d.creative.richiestoIl,
+      });
+    }
+  }
+  return fuori;
+}
+
+/** L'agente riconsegna: o il pacchetto valido, o il motivo per cui non ce l'ha fatta. */
+export async function salvaCreative(input: {
+  data: string;
+  id: string;
+  pacchetto?: unknown;
+  errore?: string;
+}): Promise<void> {
+  if (input.errore) {
+    await aggiornaDesign(
+      input.data,
+      input.id,
+      d => {
+        d.creative = {
+          stato: "errore",
+          richiestoIl: d.creative?.richiestoIl || new Date().toISOString(),
+          errore: input.errore!.slice(0, 1000),
+        };
+      },
+      `creatività fallite: ${input.id}`,
+    );
+    return;
+  }
+
+  // Se la forma non regge si alza qui: meglio un errore all'agente che mezzo
+  // pacchetto salvato che poi rompe la pagina.
+  const pacchetto = validaPacchetto(input.pacchetto);
+  await aggiornaDesign(
+    input.data,
+    input.id,
+    d => {
+      d.creative = {
+        stato: "pronto",
+        richiestoIl: d.creative?.richiestoIl || new Date().toISOString(),
+        pacchetto,
+      };
+    },
+    `creatività pronte: ${input.id}`,
+  );
 }
 
 /* ------------------------------------------------------------------ */

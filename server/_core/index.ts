@@ -12,6 +12,7 @@ import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
 import { registerResearchRoutes } from "./researchRoutes";
 import { registerMarketRoutes } from "./marketRoutes";
+import { registerCreativeRoutes } from "./creativeRoutes";
 import { registerAdsLibraryRoutes } from "./adsLibraryRoutes";
 import { registerDailySchedules } from "./scheduler";
 import { appRouter } from "../routers";
@@ -531,6 +532,7 @@ async function startServer() {
   registerImageProxy(app);
   registerResearchRoutes(app);
   registerMarketRoutes(app);
+  registerCreativeRoutes(app);
   registerAdsLibraryRoutes(app);
   // tRPC API
   app.use(
