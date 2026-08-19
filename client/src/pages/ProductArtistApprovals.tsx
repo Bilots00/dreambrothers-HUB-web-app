@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Check, X as XIcon, RefreshCw, Loader2, Shirt, Frame,
   CheckCheck, Trash2, Calendar1, ChevronDown, Maximize2, Upload, Sparkles,
+  ExternalLink, Megaphone, TriangleAlert, RotateCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -400,11 +401,170 @@ function Anteprima({ data, file, alt }: { data: string; file: string; alt: strin
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Catena a valle: il prodotto su Printify e le creatività per le ads   */
+/* ------------------------------------------------------------------ */
+
+type Pubblicazione = {
+  stato: "in_corso" | "pubblicato" | "errore";
+  url?: string | null;
+  prezzoDa?: number | null;
+  varianti?: number | null;
+  errore?: string | null;
+  avvisoQualita?: string | null;
+};
+
+/** Cosa è successo al prodotto dopo il sì: sta salendo, è online, o è fallito. */
+function StatoProdotto({ p, onRiprova, inCorso }: {
+  p: Pubblicazione;
+  onRiprova: () => void;
+  inCorso: boolean;
+}) {
+  if (p.stato === "in_corso") {
+    return (
+      <div className="flex items-center gap-2 text-[11px] rounded-lg px-2.5 py-1.5"
+           style={{ background: "oklch(0.6 0.15 250 / 0.15)", color: "oklch(0.8 0.14 250)" }}>
+        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+        <span>Sto creando il prodotto su Printify…</span>
+      </div>
+    );
+  }
+
+  if (p.stato === "errore") {
+    return (
+      <div className="space-y-1.5 rounded-lg px-2.5 py-1.5 text-[11px]"
+           style={{ background: DEC_META.rifiutato.bg, color: DEC_META.rifiutato.fg }}>
+        <div className="flex items-start gap-1.5">
+          <TriangleAlert className="w-3 h-3 shrink-0 mt-0.5" />
+          <span className="leading-snug">{p.errore || "Pubblicazione fallita."}</span>
+        </div>
+        <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                disabled={inCorso} onClick={onRiprova}>
+          riprova
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1 rounded-lg px-2.5 py-1.5 text-[11px]"
+         style={{ background: DEC_META.approvato.bg, color: DEC_META.approvato.fg }}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5">
+          <Check className="w-3 h-3" /> Online su Shopify
+          {p.prezzoDa ? ` · da ${(p.prezzoDa / 100).toFixed(2)} €` : ""}
+          {p.varianti ? ` · ${p.varianti} varianti` : ""}
+        </span>
+        {p.url && (
+          <a href={p.url} target="_blank" rel="noreferrer"
+             className="underline underline-offset-2 hover:opacity-80 flex items-center gap-1 shrink-0">
+            Printify <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+      </div>
+      {p.avvisoQualita && (
+        <div className="flex items-start gap-1.5 opacity-80">
+          <TriangleAlert className="w-3 h-3 shrink-0 mt-0.5" />
+          <span className="leading-snug">{p.avvisoQualita}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Creativita = {
+  formato: string; hook: string; direzione: string;
+  primaryText: string; headline: string; cta: string; razionale: string;
+};
+
+type PacchettoCreativo = {
+  avatar: string; piattaforma: string; perchePiattaforma: string;
+  momento: string; angle: string; creativita: Creativita[];
+  noteMediaBuyer: string; fonti?: string[];
+};
+
+/** Le creatività pronte: si aprono a fisarmonica sotto la card, senza uscire dalla pagina. */
+function PannelloCreative({ c }: { c: PacchettoCreativo }) {
+  const [aperto, setAperto] = useState(false);
+  const [copiato, setCopiato] = useState<string | null>(null);
+
+  const copia = async (testo: string, chiave: string) => {
+    await navigator.clipboard.writeText(testo);
+    setCopiato(chiave);
+    setTimeout(() => setCopiato(null), 1500);
+  };
+
+  return (
+    <div className="rounded-lg text-[11px]" style={{ background: "oklch(0.17 0.02 285)", border: "1px solid oklch(0.24 0.03 285)" }}>
+      <button className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left"
+              onClick={() => setAperto(a => !a)}>
+        <span className="flex items-center gap-1.5" style={{ color: "oklch(0.82 0.13 300)" }}>
+          <Megaphone className="w-3 h-3" />
+          {c.creativita.length} creatività · {c.piattaforma}
+        </span>
+        <ChevronDown className={`w-3 h-3 transition-transform ${aperto ? "rotate-180" : ""}`} />
+      </button>
+
+      {aperto && (
+        <div className="px-2.5 pb-2.5 space-y-2.5">
+          <div className="space-y-1 opacity-70 leading-snug">
+            <div><strong>Avatar:</strong> {c.avatar}</div>
+            <div><strong>Perché {c.piattaforma}:</strong> {c.perchePiattaforma}</div>
+            <div><strong>Momento:</strong> {c.momento}</div>
+            <div><strong>Angle:</strong> {c.angle}</div>
+          </div>
+
+          {c.creativita.map((cr, i) => (
+            <div key={i} className="rounded-md p-2 space-y-1.5"
+                 style={{ background: "oklch(0.13 0.015 285)", border: "1px solid oklch(0.22 0.02 285)" }}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium opacity-90">{cr.formato}</span>
+                <button className="underline underline-offset-2 opacity-60 hover:opacity-100"
+                        onClick={() => copia(
+                          `HOOK: ${cr.hook}\n\nPRIMARY TEXT:\n${cr.primaryText}\n\nHEADLINE: ${cr.headline}\nCTA: ${cr.cta}\n\nDIREZIONE:\n${cr.direzione}`,
+                          `${i}`,
+                        )}>
+                  {copiato === `${i}` ? "copiato" : "copia"}
+                </button>
+              </div>
+              <div className="leading-snug"><span className="opacity-50">Hook </span>{cr.hook}</div>
+              <div className="leading-snug opacity-80"><span className="opacity-60">Visual </span>{cr.direzione}</div>
+              <div className="leading-snug whitespace-pre-wrap">{cr.primaryText}</div>
+              <div className="leading-snug opacity-80">
+                <span className="opacity-60">Headline </span>{cr.headline} · <span className="opacity-60">CTA </span>{cr.cta}
+              </div>
+              <div className="leading-snug opacity-50 italic">{cr.razionale}</div>
+            </div>
+          ))}
+
+          <div className="leading-snug opacity-70 pt-0.5">
+            <strong>Per il Media Buyer:</strong> {c.noteMediaBuyer}
+          </div>
+          {c.fonti?.length ? (
+            <div className="opacity-35 leading-snug">Fonti Brain: {c.fonti.length} schede lette</div>
+          ) : (
+            <div className="opacity-45 leading-snug">Brain non raggiungibile: generato sul solo DNA di brand.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProductArtistApprovals() {
   const [dataSel, setDataSel] = useState<string | undefined>(undefined);
 
   const batches = trpc.productArtist.batches.useQuery();
-  const batch = trpc.productArtist.batch.useQuery({ data: dataSel }, { refetchOnWindowFocus: false });
+  const batch = trpc.productArtist.batch.useQuery(
+    { data: dataSel },
+    {
+      refetchOnWindowFocus: false,
+      // Mentre un prodotto sta salendo su Printify la pagina si aggiorna da sola:
+      // la pubblicazione gira in background sul server, non nella richiesta.
+      refetchInterval: q =>
+        q.state.data?.design?.some(d => d.pubblicazione?.stato === "in_corso") ? 4000 : false,
+    },
+  );
   const utils = trpc.useUtils();
 
   useEffect(() => {
@@ -434,6 +594,21 @@ export default function ProductArtistApprovals() {
       ricarica();
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const ripubblica = trpc.productArtist.ripubblica.useMutation({
+    onSuccess: () => { toast.success("Riprovo la pubblicazione"); ricarica(); },
+    onError: e => toast.error(e.message),
+  });
+
+  /* Il Creative Director lavora con le schede del Brain davanti e ci mette
+     qualche secondo: si aspetta il risultato invece di lanciarlo in background,
+     perché qui Andrea ha premuto un pulsante e sta guardando. */
+  const [creativeInCorso, setCreativeInCorso] = useState<string | null>(null);
+  const creaCreative = trpc.productArtist.creaCreative.useMutation({
+    onSuccess: () => { toast.success("Creatività pronte"); ricarica(); },
+    onError: e => toast.error(e.message),
+    onSettled: () => setCreativeInCorso(null),
   });
 
   const design = batch.data?.design ?? [];
@@ -600,13 +775,45 @@ export default function ProductArtistApprovals() {
                 </div>
               )}
 
+              {d.pubblicazione && (
+                <StatoProdotto
+                  p={d.pubblicazione}
+                  inCorso={ripubblica.isPending}
+                  onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id })}
+                />
+              )}
+
+              {d.creative && <PannelloCreative c={d.creative} />}
+
               <div className="flex gap-2 mt-auto">
-                <Button
-                  size="sm" className="flex-1" disabled={bloccato || d.decisione === "approvato"}
-                  onClick={() => decidi.mutate({ data: batch.data!.data, id: d.id, decisione: "approvato" })}
-                >
-                  <Check className="w-4 h-4 mr-1" /> Approva
-                </Button>
+                {d.decisione === "approvato" ? (
+                  /* Approvato: il prodotto è già in viaggio, il passo dopo è
+                     promuoverlo. Il pulsante prende il posto di "Approva", che
+                     qui non avrebbe più nulla da fare. */
+                  <Button
+                    size="sm" className="flex-1"
+                    disabled={creaCreative.isPending || !!d.creative}
+                    onClick={() => {
+                      setCreativeInCorso(d.id);
+                      creaCreative.mutate({ data: batch.data!.data, id: d.id });
+                    }}
+                  >
+                    {creativeInCorso === d.id && creaCreative.isPending ? (
+                      <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Ci penso…</>
+                    ) : d.creative ? (
+                      <><RotateCw className="w-4 h-4 mr-1" /> Creatività pronte</>
+                    ) : (
+                      <><Megaphone className="w-4 h-4 mr-1" /> Crea Creative</>
+                    )}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm" className="flex-1" disabled={bloccato}
+                    onClick={() => decidi.mutate({ data: batch.data!.data, id: d.id, decisione: "approvato" })}
+                  >
+                    <Check className="w-4 h-4 mr-1" /> Approva
+                  </Button>
+                )}
                 <Button
                   size="sm" variant="outline" className="flex-1" disabled={bloccato || d.decisione === "rifiutato"}
                   onClick={() => decidi.mutate({ data: batch.data!.data, id: d.id, decisione: "rifiutato" })}

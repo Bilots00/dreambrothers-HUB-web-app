@@ -52,6 +52,28 @@ async function brainRead(baseUrl: string, path: string): Promise<string | null> 
   }
 }
 
+/**
+ * Legge più schede del Brain in parallelo, troncate.
+ *
+ * Serve a chi deve ragionare con il mansionario vero davanti (Creative Director,
+ * Copywriter) invece che con un riassunto: i file mancanti si saltano in
+ * silenzio, così una scheda rinominata nel Brain non fa fallire la richiesta.
+ */
+export async function leggiBrain(
+  paths: string[],
+  maxPerFile = 6000,
+): Promise<{ path: string; testo: string }[]> {
+  const url = process.env.BRAIN_MCP_URL;
+  if (!url) return [];
+  const letti = await Promise.all(
+    paths.map(async p => {
+      const testo = await brainRead(url, p);
+      return testo ? { path: p, testo: testo.slice(0, maxPerFile) } : null;
+    }),
+  );
+  return letti.filter((x): x is { path: string; testo: string } => x !== null);
+}
+
 /** Contesto brand da usare nel ragionamento dell'agente. `override` = eventuale market_brand_context salvato. */
 export async function getBrandContext(override?: string): Promise<string> {
   const url = process.env.BRAIN_MCP_URL;

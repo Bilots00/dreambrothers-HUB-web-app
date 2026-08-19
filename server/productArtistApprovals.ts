@@ -13,11 +13,36 @@
  * produrre; se l'agente è fermo le decisioni restano comunque registrate.
  */
 
+import { pubblicaProdotto, dimensioniPng, MIN_LATO_LUNGO } from "./printify";
+import { generaCreative, type PacchettoCreativo } from "./creativeDirector";
+
 const GH_API = "https://api.github.com";
 
 export type DecisioneDesign = "in_attesa" | "approvato" | "rifiutato";
 
 export const DECISIONI_DESIGN: DecisioneDesign[] = ["in_attesa", "approvato", "rifiutato"];
+
+/**
+ * Stato della pubblicazione su Printify → Shopify.
+ *
+ * Vive dentro il design e non in un database: se la web app riparte, lo stato
+ * è ancora lì, e l'agente sul VPS lo legge al `git pull` successivo senza dover
+ * interrogare nessuno.
+ */
+export type Pubblicazione = {
+  stato: "in_corso" | "pubblicato" | "errore";
+  avviataIl: string;
+  productId?: string;
+  shopId?: number;
+  url?: string;
+  mockup?: string | null;
+  prezzoDa?: number | null;
+  varianti?: number;
+  conclusaIl?: string;
+  errore?: string;
+  /** avviso non bloccante: artwork sotto la risoluzione di stampa consigliata */
+  avvisoQualita?: string;
+};
 
 export type Design = {
   id: string;
@@ -33,6 +58,10 @@ export type Design = {
   note: string | null;
   /** true quando la catena a valle è già stata eseguita dall'agente */
   applicato: boolean;
+  /** compilato dalla web app quando il design viene approvato */
+  pubblicazione?: Pubblicazione;
+  /** le creatività pubblicitarie generate dal Creative Director */
+  creative?: PacchettoCreativo;
 };
 
 export type Batch = {
@@ -218,6 +247,12 @@ export async function decidiDesign(input: {
   batch.inAttesa = batch.design.filter(d => d.decisione === "in_attesa").length;
 
   await scriviBatch(batch, `decisione: ${input.id} → ${input.decisione}`);
+
+  // Approvare È la decisione: da qui il prodotto parte da solo verso Printify
+  // e quindi Shopify. Non si aspetta il risultato, così un Printify lento non
+  // blocca la pagina; lo stato compare dentro il design.
+  if (input.decisione === "approvato") avviaPubblicazione(input.data, input.id);
+
   return batch;
 }
 
@@ -242,7 +277,188 @@ export async function decidiMolti(input: {
 
   batch.inAttesa = batch.design.filter(d => d.decisione === "in_attesa").length;
   await scriviBatch(batch, `decisione multipla: ${toccati} design → ${input.decisione}`);
+
+  if (input.decisione === "approvato") {
+    for (const id of input.ids) avviaPubblicazione(input.data, id);
+  }
+
   return batch;
+}
+
+/* ------------------------------------------------------------------ */
+/* Pubblicazione su Printify → Shopify                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Le scritture su batch.json passano tutte da qui, una per volta.
+ *
+ * Approvare più design insieme fa partire più pubblicazioni in parallelo: senza
+ * questa coda ognuna rileggerebbe il file prima che la precedente lo abbia
+ * scritto, e l'ultima cancellerebbe il lavoro delle altre.
+ */
+let coda: Promise<unknown> = Promise.resolve();
+
+function inCoda<T>(lavoro: () => Promise<T>): Promise<T> {
+  const prossimo = coda.then(lavoro, lavoro);
+  coda = prossimo.catch(() => {});
+  return prossimo;
+}
+
+/** Applica una modifica a un design rileggendo sempre lo stato fresco. */
+async function aggiornaDesign(
+  data: string,
+  id: string,
+  patch: (d: Design) => void,
+  messaggio: string,
+): Promise<void> {
+  await inCoda(async () => {
+    const batch = await getBatch(data);
+    if (!batch) return;
+    const design = batch.design.find(d => d.id === id);
+    if (!design) return;
+    patch(design);
+    await scriviBatch(batch, messaggio);
+  });
+}
+
+/**
+ * Porta un design approvato su Printify e da lì sullo store Shopify.
+ *
+ * Gira in background rispetto all'approvazione: se Printify è lento o giù, il
+ * sì di Andrea resta comunque registrato e l'errore finisce dentro il design,
+ * visibile nella pagina, invece di far fallire la decisione.
+ */
+export async function pubblicaDesign(data: string, id: string): Promise<void> {
+  const batch = await getBatch(data);
+  const design = batch?.design.find(d => d.id === id);
+  if (!design) return;
+  if (design.pubblicazione?.stato === "pubblicato" || design.pubblicazione?.stato === "in_corso") return;
+
+  await aggiornaDesign(
+    data,
+    id,
+    d => {
+      d.pubblicazione = { stato: "in_corso", avviataIl: new Date().toISOString() };
+    },
+    `pubblicazione avviata: ${id}`,
+  );
+
+  try {
+    const img = await getImmagine(data, design.file);
+    if (!img) throw new Error(`Immagine ${design.file} non trovata nella repo dell'agente.`);
+
+    // La stampa non si blocca per la risoluzione, ma l'avviso resta scritto:
+    // un artwork piccolo stampato grande si vede, e va saputo prima dei resi.
+    const dim = dimensioniPng(img.base64);
+    const avvisoQualita =
+      dim && Math.max(dim.w, dim.h) < MIN_LATO_LUNGO
+        ? `Artwork ${dim.w}×${dim.h}px: sotto i ${MIN_LATO_LUNGO}px consigliati per la stampa. Va fatto l'upscale prima di spingerlo con le ads.`
+        : undefined;
+
+    const titolo = titoloProdotto(design);
+    const pubblicato = await pubblicaProdotto({
+      nomeFile: design.file,
+      base64: img.base64,
+      titolo,
+      descrizione: descrizioneProdotto(design),
+      tipo: design.tipo,
+      tags: [design.avatar, design.tipo, "DreamBrothers"].filter(Boolean),
+    });
+
+    await aggiornaDesign(
+      data,
+      id,
+      d => {
+        d.pubblicazione = {
+          stato: "pubblicato",
+          avviataIl: d.pubblicazione?.avviataIl || new Date().toISOString(),
+          conclusaIl: pubblicato.pubblicatoIl,
+          productId: pubblicato.productId,
+          shopId: pubblicato.shopId,
+          url: pubblicato.url,
+          mockup: pubblicato.mockup,
+          prezzoDa: pubblicato.prezzoDa,
+          varianti: pubblicato.varianti,
+          avvisoQualita,
+        };
+        d.applicato = true;
+      },
+      `pubblicato su Printify: ${id}`,
+    );
+  } catch (e) {
+    const errore = e instanceof Error ? e.message : String(e);
+    await aggiornaDesign(
+      data,
+      id,
+      d => {
+        d.pubblicazione = {
+          stato: "errore",
+          avviataIl: d.pubblicazione?.avviataIl || new Date().toISOString(),
+          conclusaIl: new Date().toISOString(),
+          errore,
+        };
+      },
+      `pubblicazione fallita: ${id}`,
+    );
+  }
+}
+
+/** Titolo commerciale: il testo del design è già la promessa, il resto è contorno. */
+function titoloProdotto(d: Design): string {
+  const frase = (d.testoDaComporre || "").replace(/"/g, "").split("/")[0].trim();
+  const capo = d.tipo === "apparel" ? "T-Shirt" : "Wall Art";
+  return (frase ? `${frase} — ${capo} DreamBrothers` : `${d.concept} — ${capo} DreamBrothers`).slice(0, 140);
+}
+
+function descrizioneProdotto(d: Design): string {
+  const frase = (d.testoDaComporre || "").replace(/"/g, "").replace(/\s*\/\s*/g, " · ");
+  return [
+    frase && `<p><strong>${frase}</strong></p>`,
+    `<p>${d.concept}</p>`,
+    `<p>Wall Art + Streetwear per chi rifiuta la media. Stampa su ordinazione, spedita dal centro di produzione più vicino a te.</p>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Fa partire la pubblicazione senza far aspettare chi ha premuto "Approva". */
+function avviaPubblicazione(data: string, id: string): void {
+  void pubblicaDesign(data, id).catch(err => {
+    console.warn("[productArtist] pubblicazione fallita", id, err);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Creatività pubblicitarie                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Chiama il Creative Director sul design e salva il pacchetto dentro il batch.
+ *
+ * Si aspetta il risultato invece di lanciarlo in background come la
+ * pubblicazione: qui Andrea ha premuto un pulsante e sta guardando lo schermo,
+ * quindi vuole vedere le creatività, non uno stato "in corso".
+ */
+export async function creaCreativeDesign(data: string, id: string): Promise<PacchettoCreativo> {
+  const batch = await getBatch(data);
+  const design = batch?.design.find(d => d.id === id);
+  if (!design) throw new Error(`Design "${id}" non trovato nel batch ${data}`);
+  if (design.decisione !== "approvato") {
+    throw new Error("Le creatività si fanno solo sui design approvati: prima approva, poi si promuove.");
+  }
+
+  const creative = await generaCreative({
+    concept: design.concept,
+    avatar: design.avatar,
+    prodotto: design.prodotto,
+    testoDaComporre: design.testoDaComporre,
+    tipo: design.tipo,
+    mockup: design.pubblicazione?.mockup ?? null,
+    prezzoDa: design.pubblicazione?.prezzoDa ?? null,
+  });
+
+  await aggiornaDesign(data, id, d => { d.creative = creative; }, `creatività generate: ${id}`);
+  return creative;
 }
 
 /* ------------------------------------------------------------------ */

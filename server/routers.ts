@@ -70,6 +70,8 @@ import {
   listaReference,
   caricaReference,
   eliminaReference,
+  pubblicaDesign,
+  creaCreativeDesign,
 } from "./productArtistApprovals";
 
 function todayRome(): string {
@@ -567,6 +569,28 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         }),
       )
       .mutation(async ({ input }) => decidiMolti(input)),
+
+    /* ── Catena a valle: prodotto e creatività ───────────────────────────── */
+
+    /**
+     * Riprova la pubblicazione su Printify.
+     * Approvando parte da sola: questo serve solo quando è andata in errore
+     * (token scaduto, Printify giù) e Andrea vuole ritentare senza ri-approvare.
+     */
+    ripubblica: protectedProcedure
+      .input(z.object({ data: z.string().min(1), id: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        await pubblicaDesign(input.data, input.id);
+        return getBatch(input.data);
+      }),
+
+    /**
+     * Creative Director + Copywriter sul design approvato: piattaforma, angle e
+     * 3-4 creatività pronte per le ads, scelte in base ad avatar e periodo.
+     */
+    creaCreative: protectedProcedure
+      .input(z.object({ data: z.string().min(1), id: z.string().min(1) }))
+      .mutation(async ({ input }) => creaCreativeDesign(input.data, input.id)),
 
     /* ── Materiale per la prossima notte ─────────────────────────────────── */
 
