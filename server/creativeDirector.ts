@@ -13,7 +13,7 @@
  * agosto non si spinge come una wall art per Money Game a dicembre.
  */
 
-import { invokeLLM, type OutputSchema } from "./_core/llm";
+import { runResearchLLM } from "./research";
 import { getBrandContext, leggiBrain } from "./brainClient";
 
 /* ------------------------------------------------------------------ */
@@ -101,50 +101,34 @@ function momentoCorrente(): string {
 /* Generazione                                                         */
 /* ------------------------------------------------------------------ */
 
-const SCHEMA: OutputSchema = {
-  name: "pacchetto_creativo",
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    required: [
-      "avatar",
-      "piattaforma",
-      "perchePiattaforma",
-      "momento",
-      "angle",
-      "creativita",
-      "noteMediaBuyer",
-    ],
-    properties: {
-      avatar: { type: "string" },
-      piattaforma: { type: "string" },
-      perchePiattaforma: { type: "string" },
-      momento: { type: "string" },
-      angle: { type: "string" },
-      noteMediaBuyer: { type: "string" },
-      creativita: {
-        type: "array",
-        minItems: 3,
-        maxItems: 4,
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["formato", "hook", "direzione", "primaryText", "headline", "cta", "razionale"],
-          properties: {
-            formato: { type: "string" },
-            hook: { type: "string" },
-            direzione: { type: "string" },
-            primaryText: { type: "string" },
-            headline: { type: "string" },
-            cta: { type: "string" },
-            razionale: { type: "string" },
-          },
-        },
-      },
-    },
-  },
-  strict: true,
-};
+/** La forma attesa, descritta al modello: il motore free-tier non applica schemi. */
+const FORMA_JSON = `{
+  "avatar": "l'unico avatar scelto",
+  "piattaforma": "la piattaforma ads principale",
+  "perchePiattaforma": "perché questa e non le altre, per QUESTO prodotto e QUESTO avatar",
+  "momento": "cosa cambia per il periodo dell'anno in cui siamo",
+  "angle": "l'angolo di comunicazione",
+  "creativita": [
+    {
+      "formato": "es. Reel 9:16 · Statica 1:1 · Carosello 4:5",
+      "hook": "i primi 3 secondi",
+      "direzione": "script scena per scena se video, direzione visiva se statica",
+      "primaryText": "il testo lungo dell'inserzione",
+      "headline": "titolo breve",
+      "cta": "call to action",
+      "razionale": "perché dovrebbe funzionare su questo avatar"
+    }
+  ],
+  "noteMediaBuyer": "budget di test, pubblico, cosa guardare per capire se funziona"
+}`;
+
+/** Estrae il JSON anche quando il modello lo incarta in un blocco markdown. */
+function estraiJson(testo: string): string {
+  const pulito = testo.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const apre = pulito.indexOf("{");
+  const chiude = pulito.lastIndexOf("}");
+  return apre >= 0 && chiude > apre ? pulito.slice(apre, chiude + 1) : pulito;
+}
 
 export async function generaCreative(input: {
   /** dal design approvato */
@@ -202,25 +186,25 @@ ${contestoBrain}`;
 Produci il pacchetto creativo: la piattaforma migliore con il perché, l'angle, e 3-4 creatività
 pronte da caricare (hook, direzione visiva o script, primary text, headline, CTA, razionale).
 Chiudi con le note per il Media Buyer: budget di test, tipo di pubblico, cosa guardare per capire
-se sta funzionando.`;
+se sta funzionando.
 
-  const res = await invokeLLM({
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    outputSchema: SCHEMA,
-  });
+Rispondi SOLO con un oggetto JSON valido di questa forma, senza testo attorno e senza blocchi
+markdown, con 3 o 4 elementi in "creativita":
+${FORMA_JSON}`;
 
-  const testo =
-    typeof res?.choices?.[0]?.message?.content === "string" ? res.choices[0].message.content : "";
-  if (!testo) throw new Error("Il Creative Director non ha restituito nulla. Riprova fra qualche secondo.");
+  const testo = await runResearchLLM(system, user);
+  if (!testo?.trim()) {
+    throw new Error("Il Creative Director non ha restituito nulla. Riprova fra qualche secondo.");
+  }
 
   let dati: Omit<PacchettoCreativo, "generatoIl" | "fonti">;
   try {
-    dati = JSON.parse(testo);
+    dati = JSON.parse(estraiJson(testo));
   } catch {
     throw new Error("Risposta del Creative Director non leggibile (JSON non valido).");
+  }
+  if (!Array.isArray(dati.creativita) || !dati.creativita.length) {
+    throw new Error("Il Creative Director non ha prodotto creatività. Riprova.");
   }
 
   return {
