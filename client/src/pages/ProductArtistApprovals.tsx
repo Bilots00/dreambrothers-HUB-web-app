@@ -775,13 +775,25 @@ export default function ProductArtistApprovals() {
                 </div>
               )}
 
-              {d.pubblicazione && (
+              {d.pubblicazione ? (
                 <StatoProdotto
                   p={d.pubblicazione}
                   inCorso={ripubblica.isPending}
                   onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id })}
                 />
-              )}
+              ) : d.decisione === "approvato" ? (
+                /* Approvato ma senza prodotto: succede ai design decisi prima di
+                   questa automazione, o approvati direttamente sulla repo. */
+                <div className="flex items-center justify-between gap-2 text-[11px] rounded-lg px-2.5 py-1.5 opacity-70"
+                     style={{ background: "oklch(0.2 0.01 260)" }}>
+                  <span>Prodotto non ancora creato</span>
+                  <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                          disabled={ripubblica.isPending}
+                          onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id })}>
+                    pubblica ora
+                  </button>
+                </div>
+              ) : null}
 
               {d.creative && <PannelloCreative c={d.creative} />}
 
