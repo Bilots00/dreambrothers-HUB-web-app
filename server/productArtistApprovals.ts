@@ -83,6 +83,9 @@ export type SchedaStampa = {
    */
   titolo?: string | null;
   descrizione?: string | null;
+  /** meta tag SEO: devono differire da titolo e descrizione, mai copiarli */
+  metaTitle?: string | null;
+  metaDescription?: string | null;
   note?: string | null;
   decisaIl: string;
   decisaDa: "agente" | "default";
@@ -658,40 +661,79 @@ const titoloCase = (s: string) =>
     : s;
 
 /**
+ * Le regole di copy del brand, applicate al testo generato qui.
+ *
+ * - **Inglese, sempre**: il negozio parla inglese a un pubblico internazionale
+ *   (target primario USA); l'italiano si ottiene a valle con la traduzione.
+ * - **Mai l'em dash** "—" né l'en dash "–": è la firma tipografica dei testi
+ *   generati, e nessuno lo digita davvero. Virgola, punto o a capo.
+ * - **Mai il nome del brand nel titolo del prodotto**: ruba caratteri alla
+ *   keyword e non aiuta in SERP. Nel meta title sta in coda, e basta.
+ */
+const RIPULISCI_TRATTINI = (s: string) => s.replace(/\s*[—–]\s*/g, ", ");
+
+/**
  * Titolo commerciale. Se il copywriter dell'agente ne ha scritto uno, è quello:
  * qui si costruisce solo il ripiego, con le parole del design invece del
  * concept di regia (che dava "BORN — T-Shirt DreamBrothers").
  */
 export function titoloProdotto(d: Design): string {
   const scritto = d.stampa?.titolo?.trim();
-  if (scritto) return scritto.slice(0, 140);
+  if (scritto) return RIPULISCI_TRATTINI(scritto).slice(0, 140);
 
-  const capo = d.tipo === "apparel" ? "T-Shirt" : "Stampa d'Arte";
+  // Formula del brand: [soggetto] | [beneficio identitario] | [tipo].
+  const capo = d.tipo === "apparel" ? "Unisex T-Shirt" : "Art Print";
   const { titolo, slogan } = paroleDesign(d);
-  const testa = [titolo, slogan && titoloCase(slogan)].filter(Boolean).join(" — ");
-  return `${testa || titoloCase(d.concept || "DreamBrothers")} | ${capo} DreamBrothers`.slice(0, 140);
+  const pezzi = [titolo || titoloCase(d.concept || "Dreamers"), slogan && titoloCase(slogan), capo];
+  return RIPULISCI_TRATTINI(pezzi.filter(Boolean).join(" | ")).slice(0, 140);
 }
 
 export function descrizioneProdotto(d: Design): string {
   const scritta = d.stampa?.descrizione?.trim();
-  if (scritta) return scritta;
+  if (scritta) return RIPULISCI_TRATTINI(scritta);
 
   const { titolo, slogan } = paroleDesign(d);
-  const capo = d.tipo === "apparel" ? "questa maglietta" : "questa stampa";
   const claim = [titolo, slogan && titoloCase(slogan)].filter(Boolean).join(" · ");
   return [
     claim && `<p><strong>${claim}</strong></p>`,
     // Niente `concept` e niente `avatar`: il primo è la nota di regia per il
     // generatore, il secondo un'etichetta interna di segmentazione. Nessuno dei
-    // due è roba da vetrina.
-    `<p>${capo[0].toUpperCase()}${capo.slice(1)} dice da sola di che pasta sei, senza che tu debba spiegarlo.</p>`,
+    // due è roba da vetrina. Niente "it's not just a tee, it's...": è il
+    // pattern che il Brain vieta esplicitamente.
     d.tipo === "apparel"
-      ? `<p>Cotone pettinato, vestibilità unisex. Stampa diretta su tessuto: niente rilievo plastico, il disegno resta morbido al tatto e regge i lavaggi.</p>`
-      : `<p>Carta spessa opaca, colori a pigmento. Pensata per essere incorniciata e restare al muro per anni.</p>`,
-    `<p>Stampata su ordinazione e spedita dal centro di produzione più vicino a te — nessun magazzino, nessuna sovrapproduzione.</p>`,
+      ? `<p>Printed on ringspun cotton with a soft hand feel, so the graphic sits in the fabric instead of on top of it. Unisex fit, true to size.</p>`
+      : `<p>Printed on heavyweight matte paper with pigment inks, made to be framed and to stay on the wall for years.</p>`,
+    `<p>Made to order and shipped from the production house closest to you. No warehouse, no overproduction, no leftovers.</p>`,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Meta title e meta description: NON sono il titolo e la descrizione del
+ * prodotto ripetuti (era il difetto trovato dall'audit SEO su 128 pagine su
+ * 141). Il meta title compete in SERP contro dieci alternative, quindi è un
+ * annuncio: qui il brand in coda ci sta, nel titolo del prodotto no.
+ */
+export function metaProdotto(d: Design): { title: string; description: string } {
+  const { titolo, slogan } = paroleDesign(d);
+  const capo = d.tipo === "apparel" ? "Tee" : "Print";
+  const nome = titolo || titoloCase(d.concept || "Dreamers");
+
+  const title = RIPULISCI_TRATTINI(
+    d.stampa?.metaTitle?.trim() ||
+      [`${nome} ${capo}`, slogan && titoloCase(slogan), "DreamBrothers"].filter(Boolean).join(" | "),
+  ).slice(0, 60);
+
+  const description = RIPULISCI_TRATTINI(
+    d.stampa?.metaDescription?.trim() ||
+      `${[nome, slogan && titoloCase(slogan)].filter(Boolean).join(", ")}. ` +
+        (d.tipo === "apparel"
+          ? "Soft ringspun cotton, unisex fit, made to order and shipped from the closest print house."
+          : "Heavyweight matte paper and pigment inks, made to order and shipped from the closest print house."),
+  ).slice(0, 160);
+
+  return { title, description };
 }
 
 /** Fa partire la pubblicazione senza far aspettare chi ha premuto "Approva". */
@@ -811,6 +853,8 @@ export async function salvaStampa(input: {
   fronteStile?: string | null;
   titolo?: string | null;
   descrizione?: string | null;
+  metaTitle?: string | null;
+  metaDescription?: string | null;
   note?: string | null;
 }): Promise<void> {
   const colori = input.colori.map(c => String(c).trim()).filter(Boolean).slice(0, 6);
@@ -825,6 +869,8 @@ export async function salvaStampa(input: {
     fronteStile: input.fronteStile?.slice(0, 20) || null,
     titolo: input.titolo?.trim().slice(0, 140) || null,
     descrizione: input.descrizione?.trim().slice(0, 4000) || null,
+    metaTitle: input.metaTitle?.trim().slice(0, 60) || null,
+    metaDescription: input.metaDescription?.trim().slice(0, 160) || null,
     note: input.note?.slice(0, 1000) || null,
     decisaIl: new Date().toISOString(),
     decisaDa: "agente",

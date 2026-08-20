@@ -78,14 +78,14 @@ export function registerCreativeRoutes(app: Express) {
     if (!checkSecret(req, res)) return;
     try {
       const { data, id, posizione, colori, fronteComplementare, fronteTesto, fronteRiga2, fronteStile,
-              titolo, descrizione, note } = req.body ?? {};
+              titolo, descrizione, metaTitle, metaDescription, note } = req.body ?? {};
       if (!data || !id) { res.status(400).json({ error: "servono 'data' e 'id'" }); return; }
       if (!Array.isArray(colori) || !colori.length) { res.status(400).json({ error: "serve 'colori' non vuoto" }); return; }
       await salvaStampa({
         data: String(data), id: String(id),
         posizione: posizione === "back" ? "back" : "front",
         colori: colori.map(String), fronteComplementare, fronteTesto, fronteRiga2, fronteStile,
-        titolo, descrizione, note,
+        titolo, descrizione, metaTitle, metaDescription, note,
       });
       res.json({ success: true });
     } catch (e) {
