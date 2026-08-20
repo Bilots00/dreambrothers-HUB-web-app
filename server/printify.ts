@@ -410,10 +410,12 @@ export async function aggiornaArtworkEsistente(input: {
     `/catalog/blueprints/${prodotto.blueprint_id}/print_providers/${prodotto.print_provider_id}/variants.json`,
   );
   const colorePer = new Map(cat.variants.map(v => [v.id, (v.options?.color || "").toLowerCase()]));
-  const attive = (prodotto.variants || []).filter(v => v.is_enabled);
-  if (!attive.length) throw new Error(`Il prodotto ${input.productId} non ha varianti attive.`);
-  const scure = attive.filter(v => colorePer.get(v.id) === "black");
-  const chiare = attive.filter(v => colorePer.get(v.id) !== "black");
+  // Printify pretende che OGNI variante del prodotto (anche quelle spente)
+  // compaia in una print area: si partizionano tutte, non solo le attive.
+  const tutte = prodotto.variants || [];
+  if (!tutte.some(v => v.is_enabled)) throw new Error(`Il prodotto ${input.productId} non ha varianti attive.`);
+  const scure = tutte.filter(v => colorePer.get(v.id) === "black");
+  const chiare = tutte.filter(v => colorePer.get(v.id) !== "black");
 
   const up = await api<{ id: string }>("/uploads/images.json", {
     method: "POST",
@@ -448,7 +450,7 @@ export async function aggiornaArtworkEsistente(input: {
   const printAreas =
     upChiaro && scure.length
       ? [area(up.id, scure.map(v => v.id)), area(upChiaro.id, chiare.map(v => v.id))]
-      : [area(upChiaro && !scure.length ? upChiaro.id : up.id, attive.map(v => v.id))];
+      : [area(upChiaro && !scure.length ? upChiaro.id : up.id, tutte.map(v => v.id))];
 
   await api(`/shops/${shop.id}/products/${input.productId}.json`, {
     method: "PUT",
