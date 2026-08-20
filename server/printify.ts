@@ -377,6 +377,110 @@ export async function pubblicaProdotto(input: {
   };
 }
 
+/**
+ * Aggiorna l'artwork di un prodotto Printify GIA' pubblicato, SENZA creare una
+ * nuova listing: si caricano i file nuovi, si riscrivono le print area del
+ * prodotto esistente e si ripubblica SOLO le immagini. Titolo, descrizione,
+ * prezzo, varianti e la pagina Shopify (recensioni, url, metafield) restano
+ * quelli che sono.
+ *
+ * Serve dopo un fix all'artwork (i pixel bianchi del leone, 20/08): rifare il
+ * prodotto da zero butterebbe via la listing con la sua storia.
+ */
+export async function aggiornaArtworkEsistente(input: {
+  productId: string;
+  nomeFile: string;
+  url: string;
+  chiaro?: { nomeFile: string; url: string } | null;
+  fronte?: { nomeFile: string; url: string } | null;
+  posizione?: "front" | "back";
+  titolo?: string;
+  descrizione?: string;
+}): Promise<{ variantiScure: number; variantiChiare: number }> {
+  const shop = await negozio();
+  const prodotto = await api<ProductResp & {
+    blueprint_id: number;
+    print_provider_id: number;
+    variants?: { id: number; is_enabled: boolean }[];
+  }>(`/shops/${shop.id}/products/${input.productId}.json`);
+
+  // I colori delle varianti si leggono dal catalogo: il prodotto salvato ha
+  // solo gli id.
+  const cat = await api<{ variants: Variante[] }>(
+    `/catalog/blueprints/${prodotto.blueprint_id}/print_providers/${prodotto.print_provider_id}/variants.json`,
+  );
+  const colorePer = new Map(cat.variants.map(v => [v.id, (v.options?.color || "").toLowerCase()]));
+  const attive = (prodotto.variants || []).filter(v => v.is_enabled);
+  if (!attive.length) throw new Error(`Il prodotto ${input.productId} non ha varianti attive.`);
+  const scure = attive.filter(v => colorePer.get(v.id) === "black");
+  const chiare = attive.filter(v => colorePer.get(v.id) !== "black");
+
+  const up = await api<{ id: string }>("/uploads/images.json", {
+    method: "POST",
+    body: { file_name: input.nomeFile, url: input.url },
+  });
+  let upChiaro: { id: string } | null = null;
+  if (input.chiaro && chiare.length) {
+    upChiaro = await api<{ id: string }>("/uploads/images.json", {
+      method: "POST",
+      body: { file_name: input.chiaro.nomeFile, url: input.chiaro.url },
+    });
+  }
+  let upFronte: { id: string } | null = null;
+  const posizione = input.posizione || "back";
+  if (posizione === "back" && input.fronte) {
+    upFronte = await api<{ id: string }>("/uploads/images.json", {
+      method: "POST",
+      body: { file_name: input.fronte.nomeFile, url: input.fronte.url },
+    });
+  }
+
+  const area = (imgId: string, ids: number[]) => ({
+    variant_ids: ids,
+    placeholders: [
+      ...(upFronte
+        ? [{ position: "front", images: [{ id: upFronte.id, x: 0.5, y: 0.38, scale: 0.42, angle: 0 }] }]
+        : []),
+      { position: posizione, images: [{ id: imgId, x: 0.5, y: 0.47, scale: 0.9, angle: 0 }] },
+    ],
+  });
+
+  const printAreas =
+    upChiaro && scure.length
+      ? [area(up.id, scure.map(v => v.id)), area(upChiaro.id, chiare.map(v => v.id))]
+      : [area(upChiaro && !scure.length ? upChiaro.id : up.id, attive.map(v => v.id))];
+
+  await api(`/shops/${shop.id}/products/${input.productId}.json`, {
+    method: "PUT",
+    body: {
+      ...(input.titolo ? { title: input.titolo } : {}),
+      ...(input.descrizione ? { description: input.descrizione } : {}),
+      print_areas: printAreas,
+    },
+  });
+
+  // Printify rigenera i mockup dopo la PUT: un attimo di respiro prima di
+  // spingerli, altrimenti la publish parte con i vecchi.
+  await new Promise(r => setTimeout(r, 45000));
+
+  // SOLO le immagini: titolo, descrizione e varianti su Shopify non si toccano
+  // (la copy giusta e' gia' sulla pagina, insieme a metafield e recensioni).
+  await api(`/shops/${shop.id}/products/${input.productId}/publish.json`, {
+    method: "POST",
+    body: {
+      title: false,
+      description: false,
+      images: true,
+      variants: false,
+      tags: false,
+      keyFeatures: false,
+      shipping_template: false,
+    },
+  });
+
+  return { variantiScure: scure.length, variantiChiare: chiare.length };
+}
+
 /* ------------------------------------------------------------------ */
 /* Qualita' di stampa                                                  */
 /* ------------------------------------------------------------------ */

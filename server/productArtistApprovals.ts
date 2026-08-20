@@ -13,7 +13,7 @@
  * produrre; se l'agente è fermo le decisioni restano comunque registrate.
  */
 
-import { pubblicaProdotto, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI } from "./printify";
+import { pubblicaProdotto, aggiornaArtworkEsistente, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI } from "./printify";
 import { linkArtwork } from "./artworkLink";
 import {
   validaPacchetto,
@@ -734,6 +734,41 @@ export function metaProdotto(d: Design): { title: string; description: string } 
   ).slice(0, 160);
 
   return { title, description };
+}
+
+/**
+ * Aggiorna l'artwork del prodotto Printify GIA' pubblicato per un design,
+ * senza creare una nuova listing. Usa gli stessi file e la stessa scelta di
+ * posizione della pubblicazione, ma li applica al prodotto esistente.
+ */
+export async function aggiornaArtwork(data: string, id: string): Promise<{ variantiScure: number; variantiChiare: number }> {
+  const batch = await getBatch(data);
+  const design = batch?.design.find(d => d.id === id);
+  if (!design) throw new Error(`Design ${id} non trovato nel batch ${data}.`);
+  const productId = design.pubblicazioni?.apparel?.productId;
+  if (!productId) throw new Error(`Il design ${id} non ha un prodotto Printify pubblicato da aggiornare.`);
+
+  const files = await listaFileBatch(data);
+  const nome = (suffisso: string) => design.file.replace(/\.png$/i, suffisso);
+  const link = (n: string) => {
+    const u = files.some(f => f.name === n) ? linkArtwork(data, n) : null;
+    return u ? { nomeFile: n, url: u } : null;
+  };
+
+  const print = link(nome("_print.png"));
+  if (!print) throw new Error("File _print.png non trovato o URL pubblico non disponibile.");
+  const scheda = design.stampa;
+
+  return aggiornaArtworkEsistente({
+    productId,
+    nomeFile: print.nomeFile,
+    url: print.url,
+    chiaro: link(nome("_print_chiaro.png")),
+    fronte: link(nome("_fronte.png")),
+    posizione: scheda?.posizione || "back",
+    titolo: titoloProdotto({ ...design, tipo: "apparel" }),
+    descrizione: descrizioneProdotto(design),
+  });
 }
 
 /** Fa partire la pubblicazione senza far aspettare chi ha premuto "Approva". */

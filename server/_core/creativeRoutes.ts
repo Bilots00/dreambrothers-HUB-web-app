@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import {
-  creativeInCoda, salvaCreative, getImmagine, stampaInCoda, salvaStampa,
+  creativeInCoda, salvaCreative, getImmagine, stampaInCoda, salvaStampa, aggiornaArtwork,
 } from "../productArtistApprovals";
 import { contestoPerAgente } from "../creativeDirector";
 import { verificaLink } from "../artworkLink";
@@ -91,6 +91,22 @@ export function registerCreativeRoutes(app: Express) {
     } catch (e) {
       console.warn("[creative/stampa]", e);
       res.status(500).json({ error: e instanceof Error ? e.message : "stampa failed" });
+    }
+  });
+
+  /* Aggiorna l'artwork del prodotto Printify esistente (niente nuova listing).
+     Route con secret perche' la usa anche il PC di Andrea via curl, non solo
+     la UI: e' l'uscita di emergenza quando l'artwork era sbagliato. */
+  app.post("/api/creative/aggiorna-artwork", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { data, id } = req.body ?? {};
+      if (!data || !id) { res.status(400).json({ error: "servono 'data' e 'id'" }); return; }
+      const esito = await aggiornaArtwork(String(data), String(id));
+      res.json({ success: true, ...esito });
+    } catch (e) {
+      console.warn("[creative/aggiorna-artwork]", e);
+      res.status(500).json({ error: e instanceof Error ? e.message : "aggiorna-artwork failed" });
     }
   });
 
