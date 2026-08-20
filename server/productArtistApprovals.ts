@@ -13,7 +13,7 @@
  * produrre; se l'agente è fermo le decisioni restano comunque registrate.
  */
 
-import { pubblicaProdotto, dimensioniPng, MIN_LATO_LUNGO } from "./printify";
+import { pubblicaProdotto, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI } from "./printify";
 import { linkArtwork } from "./artworkLink";
 import {
   validaPacchetto,
@@ -533,9 +533,16 @@ export async function pubblicaDesign(
       const nomeChiaro = design.file.replace(/\.png$/i, "_print_chiaro.png");
       const files = await listaFileBatch(data).catch(() => []);
       const urlChiaro = files.some(f => f.name === nomeChiaro) ? linkArtwork(data, nomeChiaro) : null;
+      // L'avviso guarda i colori EFFETTIVI: quelli della scheda (o del default,
+      // che include White) filtrati sulla palette ammessa — gli stessi con cui
+      // pubblicaProdotto creera' le varianti.
+      const ammessi = COLORI_CAPO_AMMESSI.map(c => c.toLowerCase());
+      const capiChiariEffettivi = (scheda.colori || [])
+        .filter(c => ammessi.includes(c.toLowerCase()))
+        .some(c => c.toLowerCase() !== "black");
       if (urlChiaro) {
         chiaro = { nomeFile: nomeChiaro, url: urlChiaro };
-      } else if ((design.stampa?.colori || []).some(c => c.toLowerCase() !== "black")) {
+      } else if (capiChiariEffettivi) {
         avvisoChiaro =
           "Manca la variante chiara del design: i capi chiari stampano il file scuro. " +
           "Sul PC: `node engine/upscale-batch.mjs` la genera, poi premi rifai.";

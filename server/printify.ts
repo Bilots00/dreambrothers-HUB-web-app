@@ -285,6 +285,8 @@ export async function pubblicaProdotto(input: {
   const areaDiStampa = (imgId: string, variantIds: number[]) => ({
     variant_ids: variantIds,
     placeholders: [
+      // Il fronte e' lo stesso per capi scuri e chiari: la tipografia di
+      // engine/fronte.py nasce cremisi con contorno scuro, leggibile ovunque.
       ...(upFronte
         ? [{
             position: "front",
