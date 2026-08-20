@@ -69,6 +69,12 @@ export type SchedaStampa = {
   colori: string[];
   /** cosa mettere sul fronte quando la grafica principale va dietro */
   fronteComplementare?: string | null;
+  /** le PAROLE ESATTE del fronte (regola fronte/retro: l'ancora identitaria) */
+  fronteTesto?: string | null;
+  /** riga secondaria opzionale del fronte */
+  fronteRiga2?: string | null;
+  /** stile tipografico del fronte: gothic | script | marker | hand | stencil */
+  fronteStile?: string | null;
   note?: string | null;
   decisaIl: string;
   decisaDa: "agente" | "default";
@@ -411,6 +417,8 @@ export async function pubblicaDesign(
   /** rifa' il prodotto anche se ne esiste gia' uno: crea un prodotto NUOVO su
    *  Printify, quello vecchio va cancellato a mano. */
   forza = false,
+  /** dove mettere la grafica: senza, decide la scheda dell'agente */
+  posizioneScelta?: "front" | "back",
 ): Promise<void> {
   const batch = await getBatch(data);
   const design = batch?.design.find(d => d.id === id);
@@ -502,6 +510,19 @@ export async function pubblicaDesign(
         : undefined;
 
     const scheda = design.stampa || schedaDiDefault(img.base64);
+    const posizione = posizioneScelta || scheda.posizione;
+
+    // Se la grafica va sul retro, il fronte non resta vuoto: la tipografia
+    // generata da engine/fronte.py (regola fronte/retro: l'ancora identitaria
+    // davanti, la manifestazione dietro). Se il file non c'e' ancora si
+    // pubblica comunque, solo retro.
+    let fronte: { nomeFile: string; url: string } | null = null;
+    if (tipo === "apparel" && posizione === "back") {
+      const nomeFronte = design.file.replace(/\.png$/i, "_fronte.png");
+      const cFronte = await getImmagine(data, nomeFronte).catch(() => null);
+      const urlFronte = cFronte ? linkArtwork(data, nomeFronte) : null;
+      if (urlFronte) fronte = { nomeFile: nomeFronte, url: urlFronte };
+    }
 
     const pubblicato = await pubblicaProdotto({
       nomeFile: fileUsato,
@@ -509,11 +530,12 @@ export async function pubblicaDesign(
       // Printify scarica da qui invece di ricevere 30 MB in base64 nel POST,
       // che gli fanno rispondere 413.
       url: linkArtwork(data, fileUsato),
+      fronte,
       titolo: titoloProdotto({ ...design, tipo }),
       descrizione: descrizioneProdotto(design),
       tipo,
       colori: tipo === "apparel" ? scheda.colori : undefined,
-      posizione: tipo === "apparel" ? scheda.posizione : undefined,
+      posizione: tipo === "apparel" ? posizione : undefined,
       tags: [design.avatar, tipo, "DreamBrothers"].filter(Boolean),
     });
 
@@ -702,6 +724,9 @@ export async function salvaStampa(input: {
   posizione: "front" | "back";
   colori: string[];
   fronteComplementare?: string | null;
+  fronteTesto?: string | null;
+  fronteRiga2?: string | null;
+  fronteStile?: string | null;
   note?: string | null;
 }): Promise<void> {
   const colori = input.colori.map(c => String(c).trim()).filter(Boolean).slice(0, 6);
@@ -711,6 +736,9 @@ export async function salvaStampa(input: {
     posizione: input.posizione === "back" ? "back" : "front",
     colori,
     fronteComplementare: input.fronteComplementare?.slice(0, 1000) || null,
+    fronteTesto: input.fronteTesto?.slice(0, 80) || null,
+    fronteRiga2: input.fronteRiga2?.slice(0, 120) || null,
+    fronteStile: input.fronteStile?.slice(0, 20) || null,
     note: input.note?.slice(0, 1000) || null,
     decisaIl: new Date().toISOString(),
     decisaDa: "agente",

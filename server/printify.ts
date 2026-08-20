@@ -20,6 +20,13 @@ const MARKUP = Number(process.env.PRINTIFY_MARKUP || 3.4);
 
 export type TipoDesign = "apparel" | "wallart";
 
+/**
+ * I colori di capo ammessi sul brand (decisione di Andrea, 20/08: "beige,
+ * bianco, nero o al massimo un grigio" — il verde bottiglia era orrendo).
+ * Qualsiasi cosa l'agente proponga fuori da questa lista viene scartata.
+ */
+export const COLORI_CAPO_AMMESSI = ["Black", "White", "Sand", "Sport Grey"];
+
 export type ProdottoPubblicato = {
   productId: string;
   shopId: number;
@@ -134,7 +141,9 @@ async function modello(
   // resta il default solo quando nessuno ha deciso niente.
   let varianti = cat.variants;
   if (tipo === "apparel") {
-    const volute = (colori?.length ? colori : ["Black"]).map(c => c.toLowerCase());
+    const ammessi = COLORI_CAPO_AMMESSI.map(c => c.toLowerCase());
+    const filtrati = (colori?.length ? colori : ["Black"]).filter(c => ammessi.includes(c.toLowerCase()));
+    const volute = (filtrati.length ? filtrati : ["Black"]).map(c => c.toLowerCase());
     varianti = cat.variants.filter(v => volute.includes((v.options?.color || "").toLowerCase()));
     if (!varianti.length) {
       const disponibili = Array.from(
@@ -225,6 +234,8 @@ export async function pubblicaProdotto(input: {
    * Serve per i file di stampa: in base64 dentro il POST darebbero 413.
    */
   url?: string | null;
+  /** grafica del fronte (tipografia generata), quando la principale va sul retro */
+  fronte?: { nomeFile: string; url: string } | null;
 }): Promise<ProdottoPubblicato> {
   const shop = await negozio();
   // L'orientamento si legge dall'artwork vero, non si assume.
@@ -242,6 +253,15 @@ export async function pubblicaProdotto(input: {
       : { file_name: input.nomeFile, contents: input.base64 },
   });
 
+  // Il fronte e' tipografia leggera: si carica solo se la grafica va sul retro.
+  let upFronte: { id: string } | null = null;
+  if (posizione === "back" && input.fronte) {
+    upFronte = await api<{ id: string }>("/uploads/images.json", {
+      method: "POST",
+      body: { file_name: input.fronte.nomeFile, url: input.fronte.url },
+    });
+  }
+
   const creato = await api<ProductResp>(`/shops/${shop.id}/products.json`, {
     method: "POST",
     body: {
@@ -256,6 +276,12 @@ export async function pubblicaProdotto(input: {
         {
           variant_ids: varianti.map(v => v.id),
           placeholders: [
+            ...(upFronte
+              ? [{
+                  position: "front",
+                  images: [{ id: upFronte.id, x: 0.5, y: 0.38, scale: 0.42, angle: 0 }],
+                }]
+              : []),
             {
               position: posizione,
               images: [

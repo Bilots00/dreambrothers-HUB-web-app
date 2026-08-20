@@ -923,14 +923,27 @@ export default function ProductArtistApprovals() {
                   </div>
                   <div className="flex gap-1.5">
                     {!d.pubblicazioni?.apparel && (
-                      <button
-                        className="flex-1 flex items-center justify-center gap-1 rounded-md py-1 hover:opacity-80 disabled:opacity-40"
-                        style={{ border: "1px solid oklch(0.3 0.02 260)" }}
-                        disabled={ripubblica.isPending}
-                        onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "apparel" })}
-                      >
-                        <Shirt className="w-3 h-3" /> abbigliamento
-                      </button>
+                      /* Fronte, retro, o lascia decidere all'agente: la regola
+                         fronte/retro (ancora identitaria davanti, narrativa
+                         dietro) la applica lui, ma l'ultima parola resta qui. */
+                      <div className="flex-1 rounded-md py-1 px-1.5 space-y-1"
+                           style={{ border: "1px solid oklch(0.3 0.02 260)" }}>
+                        <div className="flex items-center justify-center gap-1 opacity-90">
+                          <Shirt className="w-3 h-3" /> abbigliamento
+                        </div>
+                        <div className="flex gap-1 text-[10px]">
+                          {([["front", "fronte"], ["back", "retro"], [undefined, "decide l'agente"]] as const).map(([pos, label]) => (
+                            <button key={label}
+                              className="flex-1 rounded px-1 py-0.5 hover:bg-white/10 disabled:opacity-40"
+                              style={{ background: "oklch(0.24 0.02 260)" }}
+                              disabled={ripubblica.isPending}
+                              onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "apparel", posizione: pos })}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
                     {!d.pubblicazioni?.wallart && (
                       <button

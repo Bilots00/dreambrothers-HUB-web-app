@@ -587,10 +587,12 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
           tipo: z.enum(["apparel", "wallart"]).optional(),
           /** rifa' il prodotto da capo: ne crea uno nuovo su Printify */
           forza: z.boolean().optional(),
+          /** dove mettere la grafica sul capo; senza, decide l'agente */
+          posizione: z.enum(["front", "back"]).optional(),
         }),
       )
       .mutation(async ({ input }) => {
-        await pubblicaDesign(input.data, input.id, input.tipo, input.forza);
+        await pubblicaDesign(input.data, input.id, input.tipo, input.forza, input.posizione);
         return getBatch(input.data);
       }),
 
