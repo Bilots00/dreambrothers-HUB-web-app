@@ -480,8 +480,17 @@ export async function pubblicaDesign(
     // Convenzione col motore di upscale: stesso nome + "_print".
     const filePrint = design.file.replace(/\.png$/i, "_print.png");
     const daStampa = filePrint !== design.file ? await getImmagine(data, filePrint) : null;
-    const fileUsato = daStampa ? filePrint : design.file;
-    const img = daStampa ?? (await getImmagine(data, design.file));
+    // Sul capo il file di stampa non e' un optional: l'originale e' 765px col
+    // fondo pieno, e stampato viene sgranato dentro un rettangolo di colore
+    // (il disastro del 20/08). Meglio fermarsi con le istruzioni giuste.
+    if (!daStampa) {
+      throw new Error(
+        "File di stampa non ancora pronto per questo capo. Sul PC, nella repo dell'agente, lancia: " +
+          "`node engine/upscale-batch.mjs` (scontorna con il metodo bordi e upscala con Topaz), poi premi riprova.",
+      );
+    }
+    const fileUsato = filePrint;
+    const img = daStampa;
     if (!img) throw new Error(`Immagine ${design.file} non trovata nella repo dell'agente.`);
 
     // La stampa non si blocca per la risoluzione, ma l'avviso resta scritto:
