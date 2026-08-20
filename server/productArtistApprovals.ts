@@ -14,6 +14,7 @@
  */
 
 import { pubblicaProdotto, dimensioniPng, MIN_LATO_LUNGO } from "./printify";
+import { linkArtwork } from "./artworkLink";
 import {
   validaPacchetto,
   momentoCorrente,
@@ -49,6 +50,25 @@ export type Pubblicazione = {
   avvisoQualita?: string;
 };
 
+/**
+ * Come questo design va stampato su un capo.
+ *
+ * Non è deducibile dall'immagine: un artwork può stare bene sul petto o solo
+ * sulla schiena, e i colori del capo che lo reggono dipendono da com'è fatto.
+ * La decide il Product Artist sul VPS (che ragiona come un product designer);
+ * finché non c'è, si usano i default prudenti calcolati dall'immagine.
+ */
+export type SchedaStampa = {
+  posizione: "front" | "back";
+  /** i colori del capo, nomi come li chiama Printify: "Black", "White", … */
+  colori: string[];
+  /** cosa mettere sul fronte quando la grafica principale va dietro */
+  fronteComplementare?: string | null;
+  note?: string | null;
+  decisaIl: string;
+  decisaDa: "agente" | "default";
+};
+
 export type Design = {
   id: string;
   file: string;
@@ -67,6 +87,8 @@ export type Design = {
   pubblicazione?: Pubblicazione;
   /** le creatività pubblicitarie: in coda per l'agente VPS, poi il pacchetto */
   creative?: RichiestaCreative;
+  /** come stamparlo: posizione e colori del capo */
+  stampa?: SchedaStampa;
 };
 
 export type Batch = {
@@ -366,9 +388,9 @@ export async function pubblicaDesign(
     // grezzo di Gemini è ~765px, che stampato su una maglietta si vede.
     // Convenzione col motore di upscale: stesso nome + "_print".
     const filePrint = design.file.replace(/\.png$/i, "_print.png");
-    const img =
-      (filePrint !== design.file ? await getImmagine(data, filePrint) : null) ??
-      (await getImmagine(data, design.file));
+    const daStampa = filePrint !== design.file ? await getImmagine(data, filePrint) : null;
+    const fileUsato = daStampa ? filePrint : design.file;
+    const img = daStampa ?? (await getImmagine(data, design.file));
     if (!img) throw new Error(`Immagine ${design.file} non trovata nella repo dell'agente.`);
 
     // La stampa non si blocca per la risoluzione, ma l'avviso resta scritto:
@@ -379,12 +401,19 @@ export async function pubblicaDesign(
         ? `Artwork ${dim.w}×${dim.h}px: sotto i ${MIN_LATO_LUNGO}px consigliati per la stampa. Va fatto l'upscale prima di spingerlo con le ads.`
         : undefined;
 
+    const scheda = design.stampa || schedaDiDefault(img.base64);
+
     const pubblicato = await pubblicaProdotto({
-      nomeFile: design.file,
+      nomeFile: fileUsato,
       base64: img.base64,
+      // Printify scarica da qui invece di ricevere 30 MB in base64 nel POST,
+      // che gli fanno rispondere 413.
+      url: linkArtwork(data, fileUsato),
       titolo: titoloProdotto({ ...design, tipo }),
       descrizione: descrizioneProdotto(design),
       tipo,
+      colori: tipo === "apparel" ? scheda.colori : undefined,
+      posizione: tipo === "apparel" ? scheda.posizione : undefined,
       tags: [design.avatar, tipo, "DreamBrothers"].filter(Boolean),
     });
 
@@ -424,6 +453,23 @@ export async function pubblicaDesign(
       `pubblicazione fallita: ${id}`,
     );
   }
+}
+
+/**
+ * La scheda di stampa quando l'agente non l'ha ancora decisa.
+ *
+ * Nero e bianco sono le due basi sicure: un artwork qualsiasi regge almeno una
+ * delle due. Quali altri colori stiano bene con QUESTO design è una scelta da
+ * product designer, e la fa l'agente sul VPS — qui non si tira a indovinare.
+ */
+function schedaDiDefault(_base64: string): SchedaStampa {
+  return {
+    posizione: "front",
+    colori: ["Black", "White"],
+    note: "Default prudente: l'agente non ha ancora deciso posizione e colori.",
+    decisaIl: new Date().toISOString(),
+    decisaDa: "default",
+  };
 }
 
 /** Titolo commerciale: il testo del design è già la promessa, il resto è contorno. */
@@ -509,6 +555,67 @@ export async function creativeInCoda(maxBatch = 7): Promise<BriefCreative[]> {
     }
   }
   return fuori;
+}
+
+/** Toglie il design dalla coda: serve quando l'agente VPS non risponde. */
+export async function annullaCreative(data: string, id: string): Promise<void> {
+  await aggiornaDesign(data, id, d => { delete d.creative; }, `creativita' annullate: ${id}`);
+}
+
+/**
+ * I design approvati che non hanno ancora una scheda di stampa.
+ *
+ * È la seconda coda dell'agente: decidere se un artwork va sul petto o sulla
+ * schiena e su quali colori di capo regge è mestiere da product designer, non
+ * roba che si indovina da un'euristica.
+ */
+export async function stampaInCoda(maxBatch = 7): Promise<
+  Array<{ data: string; id: string; concept: string; avatar: string; testoDaComporre: string; artwork: string | null }>
+> {
+  const date = (await listaBatch()).slice(0, maxBatch);
+  const fuori = [];
+  for (const data of date) {
+    const batch = await getBatch(data).catch(() => null);
+    if (!batch) continue;
+    for (const d of batch.design) {
+      if (d.decisione !== "approvato" || d.tipo !== "apparel") continue;
+      if (d.stampa?.decisaDa === "agente") continue;
+      fuori.push({
+        data,
+        id: d.id,
+        concept: d.concept,
+        avatar: d.avatar,
+        testoDaComporre: d.testoDaComporre,
+        // L'agente guarda il design prima di decidere: senza vederlo non può
+        // sapere se il soggetto regge il petto o vuole tutta la schiena.
+        artwork: linkArtwork(data, d.file),
+      });
+    }
+  }
+  return fuori;
+}
+
+/** L'agente consegna la scheda di stampa decisa per un design. */
+export async function salvaStampa(input: {
+  data: string;
+  id: string;
+  posizione: "front" | "back";
+  colori: string[];
+  fronteComplementare?: string | null;
+  note?: string | null;
+}): Promise<void> {
+  const colori = input.colori.map(c => String(c).trim()).filter(Boolean).slice(0, 6);
+  if (!colori.length) throw new Error("Serve almeno un colore di capo.");
+
+  const scheda: SchedaStampa = {
+    posizione: input.posizione === "back" ? "back" : "front",
+    colori,
+    fronteComplementare: input.fronteComplementare?.slice(0, 1000) || null,
+    note: input.note?.slice(0, 1000) || null,
+    decisaIl: new Date().toISOString(),
+    decisaDa: "agente",
+  };
+  await aggiornaDesign(input.data, input.id, d => { d.stampa = scheda; }, `scheda di stampa: ${input.id}`);
 }
 
 /** L'agente riconsegna: o il pacchetto valido, o il motivo per cui non ce l'ha fatta. */

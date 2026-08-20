@@ -485,6 +485,7 @@ type PacchettoCreativo = {
 
 type RichiestaCreative = {
   stato: "in_coda" | "pronto" | "errore";
+  richiestoIl?: string;
   errore?: string | null;
   pacchetto?: PacchettoCreativo | null;
 };
@@ -553,7 +554,9 @@ function PannelloCreative({ c }: { c: PacchettoCreativo }) {
 }
 
 /** In coda, pronto o fallito: il lavoro vero lo fa l'agente Claude sul VPS. */
-function StatoCreative({ r }: { r: RichiestaCreative }) {
+function StatoCreative({ r, onAnnulla, annullando }: {
+  r: RichiestaCreative; onAnnulla: () => void; annullando: boolean;
+}) {
   if (r.stato === "pronto" && r.pacchetto) return <PannelloCreative c={r.pacchetto} />;
 
   if (r.stato === "errore") {
@@ -566,11 +569,34 @@ function StatoCreative({ r }: { r: RichiestaCreative }) {
     );
   }
 
+  /* Se l'agente sul VPS non gira (cron non ancora installato, macchina giu'),
+     la rotellina girerebbe per sempre facendo credere che stia lavorando.
+     Dopo un quarto d'ora si dice com'e' e si offre la via d'uscita. */
+  const attesaMin = r.richiestoIl
+    ? Math.floor((Date.now() - new Date(r.richiestoIl).getTime()) / 60000)
+    : 0;
+  const fermo = attesaMin >= 15;
+
   return (
-    <div className="flex items-center gap-2 text-[11px] rounded-lg px-2.5 py-1.5"
-         style={{ background: "oklch(0.6 0.15 300 / 0.15)", color: "oklch(0.82 0.13 300)" }}>
-      <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-      <span className="leading-snug">In coda per il Creative Director sul VPS</span>
+    <div className="space-y-1 text-[11px] rounded-lg px-2.5 py-1.5"
+         style={fermo
+           ? { background: DEC_META.in_attesa.bg, color: DEC_META.in_attesa.fg }
+           : { background: "oklch(0.6 0.15 300 / 0.15)", color: "oklch(0.82 0.13 300)" }}>
+      <div className="flex items-center gap-2">
+        {fermo ? <TriangleAlert className="w-3 h-3 shrink-0" />
+               : <Loader2 className="w-3 h-3 animate-spin shrink-0" />}
+        <span className="leading-snug">
+          {fermo
+            ? `In coda da ${attesaMin} min: l'agente sul VPS non ha ancora risposto.`
+            : "In coda per il Creative Director sul VPS"}
+        </span>
+      </div>
+      {fermo && (
+        <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                disabled={annullando} onClick={onAnnulla}>
+          togli dalla coda
+        </button>
+      )}
     </div>
   );
 }
@@ -637,6 +663,11 @@ export default function ProductArtistApprovals() {
     onSuccess: () => { toast.success("In coda per il Creative Director"); ricarica(); },
     onError: e => toast.error(e.message),
     onSettled: () => setCreativeInCorso(null),
+  });
+
+  const annullaCreative = trpc.productArtist.annullaCreative.useMutation({
+    onSuccess: () => { toast.success("Tolto dalla coda"); ricarica(); },
+    onError: e => toast.error(e.message),
   });
 
   const design = batch.data?.design ?? [];
@@ -837,7 +868,13 @@ export default function ProductArtistApprovals() {
                 </div>
               ) : null}
 
-              {d.creative && <StatoCreative r={d.creative} />}
+              {d.creative && (
+                <StatoCreative
+                  r={d.creative}
+                  annullando={annullaCreative.isPending}
+                  onAnnulla={() => annullaCreative.mutate({ data: batch.data!.data, id: d.id })}
+                />
+              )}
 
               <div className="flex gap-2 mt-auto">
                 {d.decisione === "approvato" ? (

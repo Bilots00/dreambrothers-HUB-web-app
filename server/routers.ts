@@ -72,6 +72,7 @@ import {
   eliminaReference,
   pubblicaDesign,
   creaCreativeDesign,
+  annullaCreative,
 } from "./productArtistApprovals";
 
 function todayRome(): string {
@@ -598,6 +599,14 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
     creaCreative: protectedProcedure
       .input(z.object({ data: z.string().min(1), id: z.string().min(1) }))
       .mutation(async ({ input }) => creaCreativeDesign(input.data, input.id)),
+
+    /** Toglie dalla coda: se l'agente VPS e' fermo, la card non resta a girare. */
+    annullaCreative: protectedProcedure
+      .input(z.object({ data: z.string().min(1), id: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        await annullaCreative(input.data, input.id);
+        return { ok: true } as const;
+      }),
 
     /* ── Materiale per la prossima notte ─────────────────────────────────── */
 

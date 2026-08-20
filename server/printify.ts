@@ -89,7 +89,10 @@ type Variante = { id: number; title: string; options: Record<string, string> };
  * o arriva dalle env, o si cerca a catalogo, cosi' un id sbagliato non finisce
  * a creare prodotti sul negozio vero.
  */
-async function modello(tipo: TipoDesign): Promise<{ blueprint: number; provider: number; varianti: Variante[] }> {
+async function modello(
+  tipo: TipoDesign,
+  colori?: string[],
+): Promise<{ blueprint: number; provider: number; varianti: Variante[] }> {
   const envBlueprint = Number(
     tipo === "apparel" ? process.env.PRINTIFY_BLUEPRINT_APPAREL : process.env.PRINTIFY_BLUEPRINT_WALLART,
   );
@@ -125,12 +128,23 @@ async function modello(tipo: TipoDesign): Promise<{ blueprint: number; provider:
     `/catalog/blueprints/${blueprint}/print_providers/${provider}/variants.json`,
   );
 
-  // Sull'apparel si stampa solo sul nero: e' il capo base del brand, e mescolare
-  // i colori qui significherebbe generare decine di varianti che nessuno cura.
-  const varianti =
-    tipo === "apparel"
-      ? cat.variants.filter(v => (v.options?.color || "").toLowerCase() === "black")
-      : cat.variants;
+  // Sull'apparel si stampa nei colori decisi per QUESTO design: un artwork
+  // chiaro su un capo bianco sparisce, uno scuro su un capo nero pure. Il nero
+  // resta il default solo quando nessuno ha deciso niente.
+  let varianti = cat.variants;
+  if (tipo === "apparel") {
+    const volute = (colori?.length ? colori : ["Black"]).map(c => c.toLowerCase());
+    varianti = cat.variants.filter(v => volute.includes((v.options?.color || "").toLowerCase()));
+    if (!varianti.length) {
+      const disponibili = Array.from(
+        new Set(cat.variants.map(v => v.options?.color).filter(Boolean)),
+      );
+      throw new Error(
+        `Nessuna variante per i colori ${JSON.stringify(colori)}. ` +
+          `Su questo capo esistono: ${disponibili.slice(0, 20).join(", ")}.`,
+      );
+    }
+  }
 
   if (!varianti.length) throw new Error(`Nessuna variante utilizzabile per il blueprint ${blueprint}.`);
   return { blueprint, provider, varianti };
@@ -167,13 +181,27 @@ export async function pubblicaProdotto(input: {
   descrizione: string;
   tipo: TipoDesign;
   tags?: string[];
+  /** i colori del capo, decisi per questo design. Vuoto = solo nero. */
+  colori?: string[];
+  /** dove va la grafica: sul petto o sulla schiena */
+  posizione?: "front" | "back";
+  /**
+   * URL pubblico e firmato da cui Printify scarica l'artwork.
+   * Serve per i file di stampa: in base64 dentro il POST darebbero 413.
+   */
+  url?: string | null;
 }): Promise<ProdottoPubblicato> {
   const shop = await negozio();
-  const { blueprint, provider, varianti } = await modello(input.tipo);
+  const { blueprint, provider, varianti } = await modello(input.tipo, input.colori);
+  const posizione = input.posizione || "front";
 
+  // Per URL non c'e' limite di dimensione; il base64 resta come rete di
+  // sicurezza per quando l'app non sa qual e' il suo indirizzo pubblico.
   const up = await api<{ id: string; width: number; height: number }>("/uploads/images.json", {
     method: "POST",
-    body: { file_name: input.nomeFile, contents: input.base64 },
+    body: input.url
+      ? { file_name: input.nomeFile, url: input.url }
+      : { file_name: input.nomeFile, contents: input.base64 },
   });
 
   const creato = await api<ProductResp>(`/shops/${shop.id}/products.json`, {
@@ -191,7 +219,7 @@ export async function pubblicaProdotto(input: {
           variant_ids: varianti.map(v => v.id),
           placeholders: [
             {
-              position: "front",
+              position: posizione,
               images: [
                 {
                   id: up.id,
