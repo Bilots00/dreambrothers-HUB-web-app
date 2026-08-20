@@ -75,6 +75,14 @@ export type SchedaStampa = {
   fronteRiga2?: string | null;
   /** stile tipografico del fronte: gothic | script | marker | hand | stencil */
   fronteStile?: string | null;
+  /**
+   * Copy del prodotto, scritta dal copywriter dell'agente insieme alla scheda.
+   * Il `concept` del manifest è una nota di regia per il generatore ("leone
+   * frontale, cross lighting") e sul negozio fa una figura pessima: quando
+   * questi campi ci sono, sono loro il titolo e la descrizione.
+   */
+  titolo?: string | null;
+  descrizione?: string | null;
   note?: string | null;
   decisaIl: string;
   decisaDa: "agente" | "default";
@@ -620,19 +628,67 @@ function schedaDiDefault(_base64: string): SchedaStampa {
   };
 }
 
-/** Titolo commerciale: il testo del design è già la promessa, il resto è contorno. */
-function titoloProdotto(d: Design): string {
-  const frase = (d.testoDaComporre || "").replace(/"/g, "").split("/")[0].trim();
-  const capo = d.tipo === "apparel" ? "T-Shirt" : "Wall Art";
-  return (frase ? `${frase} — ${capo} DreamBrothers` : `${d.concept} — ${capo} DreamBrothers`).slice(0, 140);
+/**
+ * Le parole del design, ripulite e in ordine di peso.
+ *
+ * `testoDaComporre` arriva come lista separata da "/" nell'ordine in cui le
+ * frasi stanno nell'immagine ("BORN / TO LEAD / LEO"). La parola forte per il
+ * negozio è di solito la più corta e identitaria (il nome del segno), non la
+ * prima in alto: chi cerca cerca "Leone", non "BORN".
+ */
+function paroleDesign(d: Design): { titolo: string; slogan: string } {
+  const parti = (d.testoDaComporre || "")
+    .replace(/["']/g, "")
+    .split("/")
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (!parti.length) return { titolo: "", slogan: "" };
+
+  // La più corta fa da nome, le altre ricomposte fanno da slogan. A parità di
+  // lunghezza vince l'ultima: nei design zodiacali il segno sta in fondo.
+  let nome = parti[0];
+  for (const p of parti) if (p.length <= nome.length) nome = p;
+  const slogan = parti.filter(p => p !== nome).join(" ");
+  return { titolo: nome, slogan };
 }
 
-function descrizioneProdotto(d: Design): string {
-  const frase = (d.testoDaComporre || "").replace(/"/g, "").replace(/\s*\/\s*/g, " · ");
+const titoloCase = (s: string) =>
+  s.length > 4 && s === s.toUpperCase()
+    ? s.toLowerCase().replace(/(^|[\s'])(\S)/g, (_m, sep: string, c: string) => sep + c.toUpperCase())
+    : s;
+
+/**
+ * Titolo commerciale. Se il copywriter dell'agente ne ha scritto uno, è quello:
+ * qui si costruisce solo il ripiego, con le parole del design invece del
+ * concept di regia (che dava "BORN — T-Shirt DreamBrothers").
+ */
+export function titoloProdotto(d: Design): string {
+  const scritto = d.stampa?.titolo?.trim();
+  if (scritto) return scritto.slice(0, 140);
+
+  const capo = d.tipo === "apparel" ? "T-Shirt" : "Stampa d'Arte";
+  const { titolo, slogan } = paroleDesign(d);
+  const testa = [titolo, slogan && titoloCase(slogan)].filter(Boolean).join(" — ");
+  return `${testa || titoloCase(d.concept || "DreamBrothers")} | ${capo} DreamBrothers`.slice(0, 140);
+}
+
+export function descrizioneProdotto(d: Design): string {
+  const scritta = d.stampa?.descrizione?.trim();
+  if (scritta) return scritta;
+
+  const { titolo, slogan } = paroleDesign(d);
+  const capo = d.tipo === "apparel" ? "questa maglietta" : "questa stampa";
+  const claim = [titolo, slogan && titoloCase(slogan)].filter(Boolean).join(" · ");
   return [
-    frase && `<p><strong>${frase}</strong></p>`,
-    `<p>${d.concept}</p>`,
-    `<p>Wall Art + Streetwear per chi rifiuta la media. Stampa su ordinazione, spedita dal centro di produzione più vicino a te.</p>`,
+    claim && `<p><strong>${claim}</strong></p>`,
+    // Niente `concept` e niente `avatar`: il primo è la nota di regia per il
+    // generatore, il secondo un'etichetta interna di segmentazione. Nessuno dei
+    // due è roba da vetrina.
+    `<p>${capo[0].toUpperCase()}${capo.slice(1)} dice da sola di che pasta sei, senza che tu debba spiegarlo.</p>`,
+    d.tipo === "apparel"
+      ? `<p>Cotone pettinato, vestibilità unisex. Stampa diretta su tessuto: niente rilievo plastico, il disegno resta morbido al tatto e regge i lavaggi.</p>`
+      : `<p>Carta spessa opaca, colori a pigmento. Pensata per essere incorniciata e restare al muro per anni.</p>`,
+    `<p>Stampata su ordinazione e spedita dal centro di produzione più vicino a te — nessun magazzino, nessuna sovrapproduzione.</p>`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -753,6 +809,8 @@ export async function salvaStampa(input: {
   fronteTesto?: string | null;
   fronteRiga2?: string | null;
   fronteStile?: string | null;
+  titolo?: string | null;
+  descrizione?: string | null;
   note?: string | null;
 }): Promise<void> {
   const colori = input.colori.map(c => String(c).trim()).filter(Boolean).slice(0, 6);
@@ -765,6 +823,8 @@ export async function salvaStampa(input: {
     fronteTesto: input.fronteTesto?.slice(0, 80) || null,
     fronteRiga2: input.fronteRiga2?.slice(0, 120) || null,
     fronteStile: input.fronteStile?.slice(0, 20) || null,
+    titolo: input.titolo?.trim().slice(0, 140) || null,
+    descrizione: input.descrizione?.trim().slice(0, 4000) || null,
     note: input.note?.slice(0, 1000) || null,
     decisaIl: new Date().toISOString(),
     decisaDa: "agente",
