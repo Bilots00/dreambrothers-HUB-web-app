@@ -241,6 +241,12 @@ export async function pubblicaProdotto(input: {
   url?: string | null;
   /** grafica del fronte (tipografia generata), quando la principale va sul retro */
   fronte?: { nomeFile: string; url: string } | null;
+  /**
+   * Variante del design per i capi chiari (testi chiari scuriti da
+   * engine/variante-chiara.py): White/Sand/Sport Grey stampano questa, il
+   * Black stampa il file normale. Senza, tutti i capi stampano lo stesso file.
+   */
+  chiaro?: { nomeFile: string; url: string } | null;
 }): Promise<ProdottoPubblicato> {
   const shop = await negozio();
   // L'orientamento si legge dall'artwork vero, non si assume.
@@ -267,6 +273,54 @@ export async function pubblicaProdotto(input: {
     });
   }
 
+  // La variante per i capi chiari, se il design ce l'ha.
+  let upChiaro: { id: string } | null = null;
+  if (input.tipo === "apparel" && input.chiaro) {
+    upChiaro = await api<{ id: string }>("/uploads/images.json", {
+      method: "POST",
+      body: { file_name: input.chiaro.nomeFile, url: input.chiaro.url },
+    });
+  }
+
+  const areaDiStampa = (imgId: string, variantIds: number[]) => ({
+    variant_ids: variantIds,
+    placeholders: [
+      ...(upFronte
+        ? [{
+            position: "front",
+            images: [{ id: upFronte.id, x: 0.5, y: 0.38, scale: 0.42, angle: 0 }],
+          }]
+        : []),
+      {
+        position: posizione,
+        images: [
+          {
+            id: imgId,
+            // 0.5/0.5 e' il centro dell'area di stampa. Sull'apparel si alza
+            // un filo: una grafica centrata geometricamente, indossata, sembra bassa.
+            x: 0.5,
+            y: input.tipo === "apparel" ? 0.47 : 0.5,
+            scale: input.tipo === "apparel" ? 0.9 : 1,
+            angle: 0,
+          },
+        ],
+      },
+    ],
+  });
+
+  // Capi scuri e capi chiari stampano file diversi quando esiste la variante
+  // chiara: e' cosi' che il testo crema resta leggibile anche su White/Sand
+  // (regola del 20/08). Della palette ammessa solo il Black e' scuro.
+  const scure = varianti.filter(v => (v.options?.color || "").toLowerCase() === "black");
+  const chiare = varianti.filter(v => (v.options?.color || "").toLowerCase() !== "black");
+  const printAreas =
+    upChiaro && chiare.length
+      ? [
+          ...(scure.length ? [areaDiStampa(up.id, scure.map(v => v.id))] : []),
+          areaDiStampa(upChiaro.id, chiare.map(v => v.id)),
+        ]
+      : [areaDiStampa(up.id, varianti.map(v => v.id))];
+
   const creato = await api<ProductResp>(`/shops/${shop.id}/products.json`, {
     method: "POST",
     body: {
@@ -277,33 +331,7 @@ export async function pubblicaProdotto(input: {
       tags: input.tags || [],
       // Prezzo provvisorio: viene riscritto sotto sui costi reali.
       variants: varianti.map(v => ({ id: v.id, price: 3200, is_enabled: true })),
-      print_areas: [
-        {
-          variant_ids: varianti.map(v => v.id),
-          placeholders: [
-            ...(upFronte
-              ? [{
-                  position: "front",
-                  images: [{ id: upFronte.id, x: 0.5, y: 0.38, scale: 0.42, angle: 0 }],
-                }]
-              : []),
-            {
-              position: posizione,
-              images: [
-                {
-                  id: up.id,
-                  // 0.5/0.5 e' il centro dell'area di stampa. Sull'apparel si alza
-                  // un filo: una grafica centrata geometricamente, indossata, sembra bassa.
-                  x: 0.5,
-                  y: input.tipo === "apparel" ? 0.47 : 0.5,
-                  scale: input.tipo === "apparel" ? 0.9 : 1,
-                  angle: 0,
-                },
-              ],
-            },
-          ],
-        },
-      ],
+      print_areas: printAreas,
     },
   });
 

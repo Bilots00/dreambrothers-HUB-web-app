@@ -524,6 +524,24 @@ export async function pubblicaDesign(
       if (urlFronte) fronte = { nomeFile: nomeFronte, url: urlFronte };
     }
 
+    // Variante per i capi chiari (testi chiari scuriti): la produce
+    // upscale-batch accanto al _print. Se manca e la scheda chiede capi
+    // chiari, si pubblica lo stesso ma l'avviso resta scritto.
+    let chiaro: { nomeFile: string; url: string } | null = null;
+    let avvisoChiaro: string | undefined;
+    if (tipo === "apparel") {
+      const nomeChiaro = design.file.replace(/\.png$/i, "_print_chiaro.png");
+      const files = await listaFileBatch(data).catch(() => []);
+      const urlChiaro = files.some(f => f.name === nomeChiaro) ? linkArtwork(data, nomeChiaro) : null;
+      if (urlChiaro) {
+        chiaro = { nomeFile: nomeChiaro, url: urlChiaro };
+      } else if ((design.stampa?.colori || []).some(c => c.toLowerCase() !== "black")) {
+        avvisoChiaro =
+          "Manca la variante chiara del design: i capi chiari stampano il file scuro. " +
+          "Sul PC: `node engine/upscale-batch.mjs` la genera, poi premi rifai.";
+      }
+    }
+
     const pubblicato = await pubblicaProdotto({
       nomeFile: fileUsato,
       base64: img.base64,
@@ -531,6 +549,7 @@ export async function pubblicaDesign(
       // che gli fanno rispondere 413.
       url: linkArtwork(data, fileUsato),
       fronte,
+      chiaro,
       titolo: titoloProdotto({ ...design, tipo }),
       descrizione: descrizioneProdotto(design),
       tipo,
@@ -553,7 +572,7 @@ export async function pubblicaDesign(
           mockup: pubblicato.mockup,
           prezzoDa: pubblicato.prezzoDa,
           varianti: pubblicato.varianti,
-          avvisoQualita,
+          avvisoQualita: [avvisoQualita, avvisoChiaro].filter(Boolean).join(" ") || undefined,
         });
         d.applicato = true;
       },
