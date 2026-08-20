@@ -345,7 +345,15 @@ function inCoda<T>(lavoro: () => Promise<T>): Promise<T> {
   return prossimo;
 }
 
-/** Applica una modifica a un design rileggendo sempre lo stato fresco. */
+/**
+ * Applica una modifica a un design rileggendo sempre lo stato fresco.
+ *
+ * Il ritentativo non è per capriccio: subito dopo una scrittura, l'API Contents
+ * di GitHub può ancora servire lo sha vecchio, e il PUT successivo si becca un
+ * 409. Succede proprio qui, dove si scrive "in corso" e mezzo secondo dopo
+ * l'esito. Si rilegge e si riprova invece di riportare un conflitto che non
+ * significa niente per chi guarda la pagina.
+ */
 async function aggiornaDesign(
   data: string,
   id: string,
@@ -353,12 +361,21 @@ async function aggiornaDesign(
   messaggio: string,
 ): Promise<void> {
   await inCoda(async () => {
-    const batch = await getBatch(data);
-    if (!batch) return;
-    const design = batch.design.find(d => d.id === id);
-    if (!design) return;
-    patch(design);
-    await scriviBatch(batch, messaggio);
+    for (let tentativo = 0; ; tentativo++) {
+      const batch = await getBatch(data);
+      if (!batch) return;
+      const design = batch.design.find(d => d.id === id);
+      if (!design) return;
+      patch(design);
+      try {
+        await scriviBatch(batch, messaggio);
+        return;
+      } catch (e) {
+        const conflitto = e instanceof Error && /Conflitto su GitHub|409/i.test(e.message);
+        if (!conflitto || tentativo >= 3) throw e;
+        await new Promise(r => setTimeout(r, 400 * (tentativo + 1)));
+      }
+    }
   });
 }
 
