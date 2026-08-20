@@ -364,11 +364,15 @@ export async function pubblicaDesign(
    * meglio come quadro, e lo stesso file può vivere in entrambi i mondi.
    */
   tipoScelto?: "apparel" | "wallart",
+  /** rifa' il prodotto anche se ne esiste gia' uno: crea un prodotto NUOVO su
+   *  Printify, quello vecchio va cancellato a mano. */
+  forza = false,
 ): Promise<void> {
   const batch = await getBatch(data);
   const design = batch?.design.find(d => d.id === id);
   if (!design) return;
-  if (design.pubblicazione?.stato === "pubblicato" || design.pubblicazione?.stato === "in_corso") return;
+  if (design.pubblicazione?.stato === "in_corso") return;
+  if (design.pubblicazione?.stato === "pubblicato" && !forza) return;
 
   const tipo = tipoScelto || design.tipo;
 
@@ -379,6 +383,8 @@ export async function pubblicaDesign(
       // La scelta resta scritta: al prossimo giro la card mostra la veste vera.
       d.tipo = tipo;
       d.pubblicazione = { stato: "in_corso", avviataIl: new Date().toISOString() };
+      // Rifacendolo la catena a valle riparte: non e' piu' "gia' eseguito".
+      if (forza) d.applicato = false;
     },
     `pubblicazione avviata: ${id}`,
   );

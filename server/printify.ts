@@ -92,6 +92,7 @@ type Variante = { id: number; title: string; options: Record<string, string> };
 async function modello(
   tipo: TipoDesign,
   colori?: string[],
+  orientamento?: Orientamento,
 ): Promise<{ blueprint: number; provider: number; varianti: Variante[] }> {
   const envBlueprint = Number(
     tipo === "apparel" ? process.env.PRINTIFY_BLUEPRINT_APPAREL : process.env.PRINTIFY_BLUEPRINT_WALLART,
@@ -146,8 +147,42 @@ async function modello(
     }
   }
 
+  // Sulla wall art l'orientamento non e' un dettaglio: un artwork 3:4 verticale
+  // messo su un poster orizzontale viene riempito e ritagliato, e il testo sopra
+  // e sotto sparisce (visto sul primo poster pubblicato il 20/08).
+  if (tipo === "wallart" && orientamento) {
+    const stessoVerso = varianti.filter(v => orientamentoVariante(v) === orientamento);
+    if (stessoVerso.length) varianti = stessoVerso;
+  }
+
   if (!varianti.length) throw new Error(`Nessuna variante utilizzabile per il blueprint ${blueprint}.`);
   return { blueprint, provider, varianti };
+}
+
+export type Orientamento = "verticale" | "orizzontale" | "quadrato";
+
+export function orientamentoDa(w: number, h: number): Orientamento {
+  const r = w / h;
+  if (r > 1.05) return "orizzontale";
+  if (r < 0.95) return "verticale";
+  return "quadrato";
+}
+
+/**
+ * L'orientamento di una variante, letto dalle misure nel titolo.
+ *
+ * I titoli dei poster sono tipo `12" x 18"` o `30x40 cm`: si prendono i primi
+ * due numeri. Se non se ne trovano, la variante non si esclude — meglio tenerla
+ * che buttare via tutto il catalogo per un titolo scritto in modo strano.
+ */
+function orientamentoVariante(v: Variante): Orientamento | null {
+  const testo = `${v.title} ${Object.values(v.options || {}).join(" ")}`;
+  const numeri = testo.match(/\d+(?:[.,]\d+)?/g);
+  if (!numeri || numeri.length < 2) return null;
+  const a = parseFloat(numeri[0].replace(",", "."));
+  const b = parseFloat(numeri[1].replace(",", "."));
+  if (!a || !b) return null;
+  return orientamentoDa(a, b);
 }
 
 /* ------------------------------------------------------------------ */
@@ -192,7 +227,10 @@ export async function pubblicaProdotto(input: {
   url?: string | null;
 }): Promise<ProdottoPubblicato> {
   const shop = await negozio();
-  const { blueprint, provider, varianti } = await modello(input.tipo, input.colori);
+  // L'orientamento si legge dall'artwork vero, non si assume.
+  const dim = dimensioniPng(input.base64);
+  const orientamento = dim ? orientamentoDa(dim.w, dim.h) : undefined;
+  const { blueprint, provider, varianti } = await modello(input.tipo, input.colori, orientamento);
   const posizione = input.posizione || "front";
 
   // Per URL non c'e' limite di dimensione; il base64 resta come rete di

@@ -415,9 +415,10 @@ type Pubblicazione = {
 };
 
 /** Cosa è successo al prodotto dopo il sì: sta salendo, è online, o è fallito. */
-function StatoProdotto({ p, onRiprova, inCorso }: {
+function StatoProdotto({ p, onRiprova, onRifai, inCorso }: {
   p: Pubblicazione;
   onRiprova: () => void;
+  onRifai: () => void;
   inCorso: boolean;
 }) {
   if (p.stato === "in_corso") {
@@ -455,12 +456,20 @@ function StatoProdotto({ p, onRiprova, inCorso }: {
           {p.prezzoDa ? ` · da ${(p.prezzoDa / 100).toFixed(2)} €` : ""}
           {p.varianti ? ` · ${p.varianti} varianti` : ""}
         </span>
-        {p.url && (
-          <a href={p.url} target="_blank" rel="noreferrer"
-             className="underline underline-offset-2 hover:opacity-80 flex items-center gap-1 shrink-0">
-            Printify <ExternalLink className="w-3 h-3" />
-          </a>
-        )}
+        <span className="flex items-center gap-2 shrink-0">
+          {p.url && (
+            <a href={p.url} target="_blank" rel="noreferrer"
+               className="underline underline-offset-2 hover:opacity-80 flex items-center gap-1">
+              Printify <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
+          {/* Serve dopo un fix all'artwork: crea un prodotto NUOVO, il vecchio
+              va cancellato a mano su Printify. */}
+          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                  disabled={inCorso} onClick={onRifai}>
+            rifai
+          </button>
+        </span>
       </div>
       {p.avvisoQualita && (
         <div className="flex items-start gap-1.5 opacity-80">
@@ -839,6 +848,14 @@ export default function ProductArtistApprovals() {
                   p={d.pubblicazione}
                   inCorso={ripubblica.isPending}
                   onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id })}
+                  onRifai={() => {
+                    const ok = confirm(
+                      "Crea un prodotto NUOVO su Printify con l'artwork aggiornato. " +
+                        "Quello vecchio resta: va cancellato a mano da Printify. Procedo?",
+                    );
+                    if (!ok) return;
+                    ripubblica.mutate({ data: batch.data!.data, id: d.id, forza: true });
+                  }}
                 />
               ) : d.decisione === "approvato" ? (
                 /* Approvato ma senza prodotto. La veste si sceglie qui perché il
