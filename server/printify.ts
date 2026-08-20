@@ -15,8 +15,13 @@
 
 const API = "https://api.printify.com/v1";
 
-/** Ricarico sul costo di stampa. 3.4x tiene il margine sopra il 70% del Brain. */
+/** Ricarico sul costo di stampa. 3.4x tiene il margine sopra il 70% del Brain —
+ *  regola nata sui poster, dove il costo e' basso. Su un capo a doppia stampa
+ *  (costo ~24 €) lo stesso ricarico produce 80.99 €, fuori mercato (visto il
+ *  20/08 sul leone): l'apparel ha il suo ricarico, piu' basso. 1.8x porta la
+ *  doppia stampa a ~43 € e la singola a ~25 € (margine ~44%). */
 const MARKUP = Number(process.env.PRINTIFY_MARKUP || 3.4);
+const MARKUP_APPAREL = Number(process.env.PRINTIFY_MARKUP_APPAREL || 1.8);
 
 export type TipoDesign = "apparel" | "wallart";
 
@@ -207,8 +212,8 @@ type ProductResp = {
 };
 
 /** Prezzo al pubblico dal costo di stampa: ricarico e poi arrotondamento a .99 */
-function prezzoDaCosto(costo: number): number {
-  const grezzo = costo * MARKUP;
+function prezzoDaCosto(costo: number, tipo: TipoDesign): number {
+  const grezzo = costo * (tipo === "apparel" ? MARKUP_APPAREL : MARKUP);
   return Math.max(Math.ceil(grezzo / 100) * 100 - 1, 999);
 }
 
@@ -306,7 +311,7 @@ export async function pubblicaProdotto(input: {
   let prezzoDa: number | null = null;
   const conCosto = (creato.variants || []).filter(v => v.is_enabled && v.cost > 0);
   if (conCosto.length) {
-    const nuovi = conCosto.map(v => ({ id: v.id, price: prezzoDaCosto(v.cost), is_enabled: true }));
+    const nuovi = conCosto.map(v => ({ id: v.id, price: prezzoDaCosto(v.cost, input.tipo), is_enabled: true }));
     prezzoDa = Math.min(...nuovi.map(v => v.price));
     await api(`/shops/${shop.id}/products/${creato.id}.json`, {
       method: "PUT",

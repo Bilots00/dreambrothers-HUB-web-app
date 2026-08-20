@@ -424,10 +424,13 @@ function StatoProdotto({ p, veste, onRiprova, onRifai, inCorso }: {
   p: Pubblicazione;
   veste: Veste;
   onRiprova: () => void;
-  onRifai: () => void;
+  onRifai: (posizione?: "front" | "back") => void;
   inCorso: boolean;
 }) {
   const Icona = veste === "apparel" ? Shirt : Frame;
+  /* Sull'apparel "rifai" non parte subito: prima chiede dove va la grafica,
+     come alla prima pubblicazione. Sulla wall art non c'è niente da scegliere. */
+  const [scegliPosizione, setScegliPosizione] = useState(false);
   if (p.stato === "in_corso") {
     return (
       <div className="flex items-center gap-2 text-[11px] rounded-lg px-2.5 py-1.5"
@@ -465,7 +468,7 @@ function StatoProdotto({ p, veste, onRiprova, onRifai, inCorso }: {
           </div>
         )}
         <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40 opacity-70"
-                disabled={inCorso} onClick={onRifai}>
+                disabled={inCorso} onClick={() => onRifai()}>
           rigenera i link
         </button>
       </div>
@@ -507,11 +510,26 @@ function StatoProdotto({ p, veste, onRiprova, onRifai, inCorso }: {
           {/* Serve dopo un fix all'artwork: crea un prodotto NUOVO, il vecchio
               va cancellato a mano su Printify. */}
           <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
-                  disabled={inCorso} onClick={onRifai}>
+                  disabled={inCorso}
+                  onClick={() => (veste === "apparel" ? setScegliPosizione(v => !v) : onRifai())}>
             rifai
           </button>
         </span>
       </div>
+      {scegliPosizione && (
+        <div className="flex gap-1 text-[10px] pt-0.5">
+          {([["front", "fronte"], ["back", "retro"], [undefined, "decide l'agente"]] as const).map(([pos, label]) => (
+            <button key={label}
+              className="flex-1 rounded px-1 py-0.5 hover:bg-white/10 disabled:opacity-40"
+              style={{ background: "oklch(0.24 0.02 260)" }}
+              disabled={inCorso}
+              onClick={() => { setScegliPosizione(false); onRifai(pos); }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       {p.avvisoQualita && (
         <div className="flex items-start gap-1.5 opacity-80">
           <TriangleAlert className="w-3 h-3 shrink-0 mt-0.5" />
@@ -896,7 +914,7 @@ export default function ProductArtistApprovals() {
                     p={pub}
                     inCorso={ripubblica.isPending}
                     onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: v })}
-                    onRifai={() => {
+                    onRifai={(posizione) => {
                       if (v === "apparel") {
                         const ok = confirm(
                           "Crea un prodotto NUOVO su Printify con l'artwork aggiornato. " +
@@ -904,7 +922,7 @@ export default function ProductArtistApprovals() {
                         );
                         if (!ok) return;
                       }
-                      ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: v, forza: true });
+                      ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: v, forza: true, posizione });
                     }}
                   />
                 );
