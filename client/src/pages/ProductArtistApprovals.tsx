@@ -407,6 +407,8 @@ function Anteprima({ data, file, alt }: { data: string; file: string; alt: strin
 
 type FileStampa = { tag: string; nome: string; url: string | null; size: number };
 
+type Veste = "apparel" | "wallart";
+
 type Pubblicazione = {
   stato: "in_corso" | "pubblicato" | "pronto_download" | "errore";
   url?: string | null;
@@ -418,18 +420,21 @@ type Pubblicazione = {
 };
 
 /** Cosa è successo al prodotto dopo il sì: sta salendo, è online, o è fallito. */
-function StatoProdotto({ p, onRiprova, onRifai, inCorso }: {
+function StatoProdotto({ p, veste, onRiprova, onRifai, inCorso }: {
   p: Pubblicazione;
+  veste: Veste;
   onRiprova: () => void;
   onRifai: () => void;
   inCorso: boolean;
 }) {
+  const Icona = veste === "apparel" ? Shirt : Frame;
   if (p.stato === "in_corso") {
     return (
       <div className="flex items-center gap-2 text-[11px] rounded-lg px-2.5 py-1.5"
            style={{ background: "oklch(0.6 0.15 250 / 0.15)", color: "oklch(0.8 0.14 250)" }}>
         <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-        <span>Sto creando il prodotto su Printify…</span>
+        <Icona className="w-3 h-3 shrink-0" />
+        <span>{veste === "apparel" ? "Sto creando il prodotto su Printify…" : "Preparo i file per il Bulk Creator…"}</span>
       </div>
     );
   }
@@ -442,7 +447,7 @@ function StatoProdotto({ p, onRiprova, onRifai, inCorso }: {
       <div className="space-y-1.5 rounded-lg px-2.5 py-1.5 text-[11px]"
            style={{ background: DEC_META.approvato.bg, color: DEC_META.approvato.fg }}>
         <div className="flex items-center gap-1.5">
-          <Check className="w-3 h-3" /> File pronti per il Bulk Creator
+          <Check className="w-3 h-3" /> <Frame className="w-3 h-3" /> Quadro: file pronti per il Bulk Creator
         </div>
         <div className="flex gap-1.5 flex-wrap">
           {(p.fileStampa || []).map(f => (
@@ -488,7 +493,7 @@ function StatoProdotto({ p, onRiprova, onRifai, inCorso }: {
          style={{ background: DEC_META.approvato.bg, color: DEC_META.approvato.fg }}>
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5">
-          <Check className="w-3 h-3" /> Online su Shopify
+          <Check className="w-3 h-3" /> <Shirt className="w-3 h-3" /> Capo online su Shopify
           {p.prezzoDa ? ` · da ${(p.prezzoDa / 100).toFixed(2)} €` : ""}
           {p.varianti ? ` · ${p.varianti} varianti` : ""}
         </span>
@@ -658,7 +663,9 @@ export default function ProductArtistApprovals() {
       // la pubblicazione gira in background sul server, non nella richiesta.
       refetchInterval: q =>
         q.state.data?.design?.some(
-          d => d.pubblicazione?.stato === "in_corso" || d.creative?.stato === "in_coda",
+          d =>
+            Object.values(d.pubblicazioni ?? {}).some(p => p?.stato === "in_corso") ||
+            d.creative?.stato === "in_coda",
         )
           ? 5000
           : false,
@@ -879,47 +886,65 @@ export default function ProductArtistApprovals() {
                 </div>
               )}
 
-              {d.pubblicazione ? (
-                <StatoProdotto
-                  p={d.pubblicazione}
-                  inCorso={ripubblica.isPending}
-                  onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id })}
-                  onRifai={() => {
-                    const ok = confirm(
-                      "Crea un prodotto NUOVO su Printify con l'artwork aggiornato. " +
-                        "Quello vecchio resta: va cancellato a mano da Printify. Procedo?",
-                    );
-                    if (!ok) return;
-                    ripubblica.mutate({ data: batch.data!.data, id: d.id, forza: true });
-                  }}
-                />
-              ) : d.decisione === "approvato" ? (
-                /* Approvato ma senza prodotto. La veste si sceglie qui perché il
-                   tipo dedotto dal manifest non è sempre quello giusto: lo stesso
-                   artwork può uscire come maglietta o come quadro. */
+              {(["apparel", "wallart"] as const).map(v => {
+                const pub = d.pubblicazioni?.[v];
+                if (!pub) return null;
+                return (
+                  <StatoProdotto
+                    key={v}
+                    veste={v}
+                    p={pub}
+                    inCorso={ripubblica.isPending}
+                    onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: v })}
+                    onRifai={() => {
+                      if (v === "apparel") {
+                        const ok = confirm(
+                          "Crea un prodotto NUOVO su Printify con l'artwork aggiornato. " +
+                            "Quello vecchio resta: va cancellato a mano da Printify. Procedo?",
+                        );
+                        if (!ok) return;
+                      }
+                      ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: v, forza: true });
+                    }}
+                  />
+                );
+              })}
+
+              {/* La stessa grafica vive in due vesti: quadro su Gelato e capo su
+                  Printify. Qui compaiono solo le vesti che mancano ancora. */}
+              {d.decisione === "approvato" &&
+                (!d.pubblicazioni?.apparel || !d.pubblicazioni?.wallart) && (
                 <div className="space-y-1.5 text-[11px] rounded-lg px-2.5 py-1.5"
                      style={{ background: "oklch(0.2 0.01 260)" }}>
-                  <div className="opacity-70">Prodotto non ancora creato · pubblica come</div>
+                  <div className="opacity-70">
+                    {d.pubblicazioni?.apparel || d.pubblicazioni?.wallart
+                      ? "Pubblica anche come"
+                      : "Prodotto non ancora creato · pubblica come"}
+                  </div>
                   <div className="flex gap-1.5">
-                    <button
-                      className="flex-1 flex items-center justify-center gap-1 rounded-md py-1 hover:opacity-80 disabled:opacity-40"
-                      style={{ border: "1px solid oklch(0.3 0.02 260)" }}
-                      disabled={ripubblica.isPending}
-                      onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "apparel" })}
-                    >
-                      <Shirt className="w-3 h-3" /> abbigliamento
-                    </button>
-                    <button
-                      className="flex-1 flex items-center justify-center gap-1 rounded-md py-1 hover:opacity-80 disabled:opacity-40"
-                      style={{ border: "1px solid oklch(0.3 0.02 260)" }}
-                      disabled={ripubblica.isPending}
-                      onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "wallart" })}
-                    >
-                      <Frame className="w-3 h-3" /> wall art
-                    </button>
+                    {!d.pubblicazioni?.apparel && (
+                      <button
+                        className="flex-1 flex items-center justify-center gap-1 rounded-md py-1 hover:opacity-80 disabled:opacity-40"
+                        style={{ border: "1px solid oklch(0.3 0.02 260)" }}
+                        disabled={ripubblica.isPending}
+                        onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "apparel" })}
+                      >
+                        <Shirt className="w-3 h-3" /> abbigliamento
+                      </button>
+                    )}
+                    {!d.pubblicazioni?.wallart && (
+                      <button
+                        className="flex-1 flex items-center justify-center gap-1 rounded-md py-1 hover:opacity-80 disabled:opacity-40"
+                        style={{ border: "1px solid oklch(0.3 0.02 260)" }}
+                        disabled={ripubblica.isPending}
+                        onClick={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: "wallart" })}
+                      >
+                        <Frame className="w-3 h-3" /> wall art
+                      </button>
+                    )}
                   </div>
                 </div>
-              ) : null}
+              )}
 
               {d.creative && (
                 <StatoCreative

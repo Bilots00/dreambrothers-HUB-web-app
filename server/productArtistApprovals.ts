@@ -88,7 +88,12 @@ export type Design = {
   note: string | null;
   /** true quando la catena a valle è già stata eseguita dall'agente */
   applicato: boolean;
-  /** compilato dalla web app quando il design viene approvato */
+  /**
+   * Stato per veste: la stessa grafica puo' vivere come capo E come quadro
+   * (la stella: quadro su Gelato e retro-maglietta su Printify insieme).
+   */
+  pubblicazioni?: { apparel?: Pubblicazione; wallart?: Pubblicazione };
+  /** campo storico, migrato in `pubblicazioni` alla lettura */
   pubblicazione?: Pubblicazione;
   /** le creatività pubblicitarie: in coda per l'agente VPS, poi il pacchetto */
   creative?: RichiestaCreative;
@@ -220,6 +225,14 @@ export async function getBatch(data?: string): Promise<Batch | null> {
   const batch = JSON.parse(json) as Batch;
   batch.sha = file.sha;
   batch.inAttesa = batch.design.filter(d => d.decisione === "in_attesa").length;
+  // I batch scritti prima del 20/08 hanno un solo stato di pubblicazione:
+  // si sposta sotto la veste giusta, cosi' il resto del codice vede una forma sola.
+  for (const d of batch.design) {
+    if (d.pubblicazione && !d.pubblicazioni) {
+      d.pubblicazioni = { [d.tipo]: d.pubblicazione };
+      delete d.pubblicazione;
+    }
+  }
   return batch;
 }
 
@@ -402,22 +415,23 @@ export async function pubblicaDesign(
   const batch = await getBatch(data);
   const design = batch?.design.find(d => d.id === id);
   if (!design) return;
-  if (design.pubblicazione?.stato === "in_corso") return;
-  if (design.pubblicazione?.stato === "pubblicato" && !forza) return;
 
   const tipo = tipoScelto || design.tipo;
+  const attuale = design.pubblicazioni?.[tipo];
+  if (attuale?.stato === "in_corso") return;
+  if ((attuale?.stato === "pubblicato" || attuale?.stato === "pronto_download") && !forza) return;
+
+  const segna = (d: Design, pub: Pubblicazione) => {
+    d.pubblicazioni = { ...(d.pubblicazioni || {}), [tipo]: pub };
+  };
 
   await aggiornaDesign(
     data,
     id,
     d => {
-      // La scelta resta scritta: al prossimo giro la card mostra la veste vera.
-      d.tipo = tipo;
-      d.pubblicazione = { stato: "in_corso", avviataIl: new Date().toISOString() };
-      // Rifacendolo la catena a valle riparte: non e' piu' "gia' eseguito".
-      if (forza) d.applicato = false;
+      segna(d, { stato: "in_corso", avviataIl: new Date().toISOString() });
     },
-    `pubblicazione avviata: ${id}`,
+    `pubblicazione avviata (${tipo}): ${id}`,
   );
 
   try {
@@ -444,16 +458,16 @@ export async function pubblicaDesign(
         data,
         id,
         d => {
-          d.pubblicazione = {
+          segna(d, {
             stato: "pronto_download",
-            avviataIl: d.pubblicazione?.avviataIl || new Date().toISOString(),
+            avviataIl: d.pubblicazioni?.[tipo]?.avviataIl || new Date().toISOString(),
             conclusaIl: new Date().toISOString(),
             fileStampa: trovati,
             avvisoQualita:
               trovati.length < 2
                 ? "Manca uno dei due formati: rilancia upscale-batch per avere sia (3x4) sia (5x7)."
                 : undefined,
-          };
+          });
           d.applicato = true;
         },
         `file wall art pronti: ${id}`,
@@ -498,9 +512,9 @@ export async function pubblicaDesign(
       data,
       id,
       d => {
-        d.pubblicazione = {
+        segna(d, {
           stato: "pubblicato",
-          avviataIl: d.pubblicazione?.avviataIl || new Date().toISOString(),
+          avviataIl: d.pubblicazioni?.[tipo]?.avviataIl || new Date().toISOString(),
           conclusaIl: pubblicato.pubblicatoIl,
           productId: pubblicato.productId,
           shopId: pubblicato.shopId,
@@ -509,7 +523,7 @@ export async function pubblicaDesign(
           prezzoDa: pubblicato.prezzoDa,
           varianti: pubblicato.varianti,
           avvisoQualita,
-        };
+        });
         d.applicato = true;
       },
       `pubblicato su Printify: ${id}`,
@@ -520,12 +534,12 @@ export async function pubblicaDesign(
       data,
       id,
       d => {
-        d.pubblicazione = {
+        segna(d, {
           stato: "errore",
-          avviataIl: d.pubblicazione?.avviataIl || new Date().toISOString(),
+          avviataIl: d.pubblicazioni?.[tipo]?.avviataIl || new Date().toISOString(),
           conclusaIl: new Date().toISOString(),
           errore,
-        };
+        });
       },
       `pubblicazione fallita: ${id}`,
     );
@@ -624,8 +638,8 @@ export async function creativeInCoda(maxBatch = 7): Promise<BriefCreative[]> {
         prodotto: d.prodotto,
         testoDaComporre: d.testoDaComporre,
         tipo: d.tipo,
-        mockup: d.pubblicazione?.mockup ?? null,
-        prezzoDa: d.pubblicazione?.prezzoDa ?? null,
+        mockup: d.pubblicazioni?.apparel?.mockup ?? d.pubblicazioni?.wallart?.mockup ?? null,
+        prezzoDa: d.pubblicazioni?.apparel?.prezzoDa ?? null,
         momento,
         richiestoIl: d.creative.richiestoIl,
       });
