@@ -35,8 +35,11 @@ export const DECISIONI_DESIGN: DecisioneDesign[] = ["in_attesa", "approvato", "r
  * è ancora lì, e l'agente sul VPS lo legge al `git pull` successivo senza dover
  * interrogare nessuno.
  */
+export type FileStampa = { tag: string; nome: string; url: string | null; size: number };
+
 export type Pubblicazione = {
-  stato: "in_corso" | "pubblicato" | "errore";
+  /** `pronto_download` e' lo stato finale della wall art: file consegnati, niente da pubblicare */
+  stato: "in_corso" | "pubblicato" | "pronto_download" | "errore";
   avviataIl: string;
   productId?: string;
   shopId?: number;
@@ -48,6 +51,8 @@ export type Pubblicazione = {
   errore?: string;
   /** avviso non bloccante: artwork sotto la risoluzione di stampa consigliata */
   avvisoQualita?: string;
+  /** wall art: i file pronti da scaricare e passare al Bulk Creator */
+  fileStampa?: FileStampa[];
 };
 
 /**
@@ -189,6 +194,15 @@ export async function listaBatch(): Promise<string[]> {
     .map(i => i.name)
     .sort()
     .reverse();
+}
+
+/** I file presenti nella cartella di una notte: serve per trovare quelli di stampa. */
+async function listaFileBatch(data: string): Promise<{ name: string; size: number }[]> {
+  const { owner, repo } = repoSlug();
+  const items = await ghJson<(ContentItem & { size: number })[]>(
+    `/repos/${owner}/${repo}/contents/output/${encodeURIComponent(data)}`,
+  ).catch(() => []);
+  return items.filter(i => i.type === "file").map(i => ({ name: i.name, size: i.size }));
 }
 
 /** Il batch di una data. Senza argomento prende il più recente. */
@@ -390,6 +404,46 @@ export async function pubblicaDesign(
   );
 
   try {
+    /* ── Wall art: nessun Printify ────────────────────────────────────────
+       I quadri li stampa Gelato, e la pubblicazione la fa Andrea dal Bulk
+       Creator. Qui si consegnano solo i file gia' tagliati nei due rapporti
+       del catalogo, con i nomi che il Bulk Creator sa leggere. */
+    if (tipo === "wallart") {
+      const files = await listaFileBatch(data);
+      const trovati: FileStampa[] = [];
+      for (const tag of ["3x4", "5x7"]) {
+        const f = files.find(x => x.name.includes(`(${tag})`) && /\.png$/i.test(x.name));
+        if (f) trovati.push({ tag, nome: f.name, url: linkArtwork(data, f.name), size: f.size });
+      }
+
+      if (!trovati.length) {
+        throw new Error(
+          "I file di stampa non ci sono ancora. Lanciali sul PC con " +
+            "`node engine/upscale-batch.mjs` nella repo dell'agente: produce i due formati (3x4) e (5x7).",
+        );
+      }
+
+      await aggiornaDesign(
+        data,
+        id,
+        d => {
+          d.pubblicazione = {
+            stato: "pronto_download",
+            avviataIl: d.pubblicazione?.avviataIl || new Date().toISOString(),
+            conclusaIl: new Date().toISOString(),
+            fileStampa: trovati,
+            avvisoQualita:
+              trovati.length < 2
+                ? "Manca uno dei due formati: rilancia upscale-batch per avere sia (3x4) sia (5x7)."
+                : undefined,
+          };
+          d.applicato = true;
+        },
+        `file wall art pronti: ${id}`,
+      );
+      return;
+    }
+
     // Se l'upscale ha già prodotto il file di stampa si usa quello: il PNG
     // grezzo di Gemini è ~765px, che stampato su una maglietta si vede.
     // Convenzione col motore di upscale: stesso nome + "_print".

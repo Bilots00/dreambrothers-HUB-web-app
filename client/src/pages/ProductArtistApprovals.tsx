@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Check, X as XIcon, RefreshCw, Loader2, Shirt, Frame,
   CheckCheck, Trash2, Calendar1, ChevronDown, Maximize2, Upload, Sparkles,
-  ExternalLink, Megaphone, TriangleAlert, RotateCw,
+  ExternalLink, Megaphone, TriangleAlert, RotateCw, Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -405,13 +405,16 @@ function Anteprima({ data, file, alt }: { data: string; file: string; alt: strin
 /* Catena a valle: il prodotto su Printify e le creatività per le ads   */
 /* ------------------------------------------------------------------ */
 
+type FileStampa = { tag: string; nome: string; url: string | null; size: number };
+
 type Pubblicazione = {
-  stato: "in_corso" | "pubblicato" | "errore";
+  stato: "in_corso" | "pubblicato" | "pronto_download" | "errore";
   url?: string | null;
   prezzoDa?: number | null;
   varianti?: number | null;
   errore?: string | null;
   avvisoQualita?: string | null;
+  fileStampa?: FileStampa[] | null;
 };
 
 /** Cosa è successo al prodotto dopo il sì: sta salendo, è online, o è fallito. */
@@ -427,6 +430,39 @@ function StatoProdotto({ p, onRiprova, onRifai, inCorso }: {
            style={{ background: "oklch(0.6 0.15 250 / 0.15)", color: "oklch(0.8 0.14 250)" }}>
         <Loader2 className="w-3 h-3 animate-spin shrink-0" />
         <span>Sto creando il prodotto su Printify…</span>
+      </div>
+    );
+  }
+
+  /* Wall art: non c'e' niente da pubblicare qui. I quadri li stampa Gelato e
+     il prodotto lo crea Andrea dal Bulk Creator: quello che serve sono i file
+     nei due rapporti del catalogo, pronti da scaricare. */
+  if (p.stato === "pronto_download") {
+    return (
+      <div className="space-y-1.5 rounded-lg px-2.5 py-1.5 text-[11px]"
+           style={{ background: DEC_META.approvato.bg, color: DEC_META.approvato.fg }}>
+        <div className="flex items-center gap-1.5">
+          <Check className="w-3 h-3" /> File pronti per il Bulk Creator
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          {(p.fileStampa || []).map(f => (
+            <a key={f.tag} href={f.url || "#"} download={f.nome}
+               className="flex items-center gap-1 rounded-md px-2 py-1 hover:opacity-80"
+               style={{ border: "1px solid currentColor" }}>
+              <Download className="w-3 h-3" /> {f.tag} · {(f.size / 1048576).toFixed(0)} MB
+            </a>
+          ))}
+        </div>
+        {p.avvisoQualita && (
+          <div className="flex items-start gap-1.5 opacity-80">
+            <TriangleAlert className="w-3 h-3 shrink-0 mt-0.5" />
+            <span className="leading-snug">{p.avvisoQualita}</span>
+          </div>
+        )}
+        <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40 opacity-70"
+                disabled={inCorso} onClick={onRifai}>
+          rigenera i link
+        </button>
       </div>
     );
   }
