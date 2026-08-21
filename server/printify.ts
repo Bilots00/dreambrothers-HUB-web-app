@@ -16,14 +16,48 @@
 const API = "https://api.printify.com/v1";
 
 /** Ricarico sul costo di stampa. 3.4x tiene il margine sopra il 70% del Brain —
- *  regola nata sui poster, dove il costo e' basso. Su un capo a doppia stampa
- *  (costo ~24 €) lo stesso ricarico produce 80.99 €, fuori mercato (visto il
- *  20/08 sul leone): l'apparel ha il suo ricarico, piu' basso. 1.8x porta la
- *  doppia stampa a ~43 € e la singola a ~25 € (margine ~44%). */
+ *  regola nata sui poster, dove il costo e' basso. Resta SOLO per la wall art:
+ *  sull'apparel il ricarico moltiplicativo e' stato la causa dei 58.99 € del
+ *  leone (costo x1.8, arrotondato per eccesso al centesimo di euro superiore).
+ *  Vedi `prezzoApparel`. */
 const MARKUP = Number(process.env.PRINTIFY_MARKUP || 3.4);
-const MARKUP_APPAREL = Number(process.env.PRINTIFY_MARKUP_APPAREL || 1.8);
+
+/**
+ * LISTINO APPAREL — prezzi decisi da Andrea il 21/08/2026, in centesimi di EURO
+ * (la valuta del negozio Shopify e' EUR; i costi Printify invece sono in USD).
+ *
+ * Il prezzo di una maglietta non si calcola dal costo: si sceglie sul mercato e
+ * poi si sceglie il fornitore che ci sta dentro. Il ricarico moltiplicativo
+ * faceva l'opposto — un fornitore caro produceva un prezzo fuori mercato invece
+ * di essere scartato.
+ */
+const PREZZO_FRONTE = Number(process.env.PRINTIFY_PREZZO_APPAREL_FRONTE || 2990);
+const PREZZO_FRONTE_RETRO = Number(process.env.PRINTIFY_PREZZO_APPAREL_FRONTE_RETRO || 3790);
+
+/** Printify fattura in USD, il negozio incassa in EUR: senza cambio il margine e' fantasia. */
+const USD_EUR = Number(process.env.PRINTIFY_USD_EUR || 0.86);
+/** Spedizione assorbita, in centesimi di USD (OPT OnDemand → Italia, primo capo). */
+const SPEDIZIONE_USD = Number(process.env.PRINTIFY_SPEDIZIONE_USD || 449);
+/** Sotto questo margine lordo il listino fisso non regge e il prezzo sale da solo. */
+const MARGINE_MINIMO = Number(process.env.PRINTIFY_MARGINE_MINIMO || 0.4);
 
 export type TipoDesign = "apparel" | "wallart";
+
+/**
+ * Taglie a catalogo (decisione di Andrea, 21/08/2026: si arriva alla 2XL e basta).
+ *
+ * Le taglie oltre la 2XL costano fino al 45% in piu' del capo base e obbligano o
+ * a un prezzo diverso per taglia — brutto sulla scheda prodotto — o a vendere in
+ * perdita. La XS non c'e' perche' la Gildan 5000 non esiste in XS: il capo parte
+ * dalla S (la XS e' solo sulla linea youth 5000B, un altro blueprint).
+ */
+export const TAGLIE_AMMESSE = ["S", "M", "L", "XL", "2XL"];
+
+/** I fornitori scrivono la doppia X in due modi: "2XL" e "XXL" sono la stessa taglia. */
+function taglia(v: Variante): string {
+  const s = (v.options?.size || "").toUpperCase().replace(/\s+/g, "");
+  return s === "XXL" ? "2XL" : s;
+}
 
 /**
  * I colori di capo ammessi sul brand (decisione di Andrea, 20/08: "beige,
@@ -96,10 +130,19 @@ type Variante = { id: number; title: string; options: Record<string, string> };
 /**
  * Blueprint e print provider per tipo di design.
  *
- * L'apparel usa i valori gia' validati dall'agente (Gildan 5000 + Printful, che
- * stampa in Europa). Per la wall art non c'e' un default sicuro da indovinare:
- * o arriva dalle env, o si cerca a catalogo, cosi' un id sbagliato non finisce
- * a creare prodotti sul negozio vero.
+ * L'apparel usa la Gildan 5000 (blueprint 6) da OPT OnDemand (provider 30).
+ *
+ * Il default era Printful (410) ed e' costato caro: misurato il 21/08/2026 sullo
+ * stesso capo, stessa taglia, stessa Italia, Printful chiede 14.15 USD di capo e
+ * 9.38 di seconda stampa, contro 8.90 e 7.08 di OPT OnDemand — e sopra la XL
+ * rincara ogni taglia, mentre OPT tiene lo stesso prezzo fino alla 2XL. Con la
+ * doppia stampa erano 23.53 USD contro 15.98: il 47% in piu' per la stessa
+ * maglietta. Alternativa a pari qualita' se OPT dovesse deludere: Textildruck
+ * Europa (26), 9.72 USD di capo e 4.79 di spedizione in Italia.
+ *
+ * Per la wall art non c'e' un default sicuro da indovinare: o arriva dalle env,
+ * o si cerca a catalogo, cosi' un id sbagliato non finisce a creare prodotti sul
+ * negozio vero.
  */
 async function modello(
   tipo: TipoDesign,
@@ -114,7 +157,7 @@ async function modello(
   );
 
   let blueprint = envBlueprint || (tipo === "apparel" ? 6 : 0);
-  let provider = envProvider || (tipo === "apparel" ? 410 : 0);
+  let provider = envProvider || (tipo === "apparel" ? 30 : 0);
 
   if (!blueprint) {
     // Wall art senza configurazione: si cerca a catalogo un poster/canvas.
@@ -159,6 +202,18 @@ async function modello(
           `Su questo capo esistono: ${disponibili.slice(0, 20).join(", ")}.`,
       );
     }
+
+    // Dalla 3XL in su il capo rincara e il prezzo unico non regge: si taglia qui,
+    // prima che le varianti finiscano nel prodotto (vedi TAGLIE_AMMESSE).
+    const inTaglia = varianti.filter(v => TAGLIE_AMMESSE.includes(taglia(v)));
+    if (!inTaglia.length) {
+      const disponibili = Array.from(new Set(varianti.map(taglia).filter(Boolean)));
+      throw new Error(
+        `Nessuna taglia ammessa (${TAGLIE_AMMESSE.join(", ")}) sul blueprint ${blueprint}. ` +
+          `Il fornitore offre: ${disponibili.join(", ")}.`,
+      );
+    }
+    varianti = inTaglia;
   }
 
   // Sulla wall art l'orientamento non e' un dettaglio: un artwork 3:4 verticale
@@ -211,10 +266,30 @@ type ProductResp = {
   variants?: { id: number; cost: number; price: number; is_enabled: boolean }[];
 };
 
-/** Prezzo al pubblico dal costo di stampa: ricarico e poi arrotondamento a .99 */
+/** Prezzo al pubblico della wall art: ricarico sul costo e arrotondamento a .99 */
 function prezzoDaCosto(costo: number, tipo: TipoDesign): number {
-  const grezzo = costo * (tipo === "apparel" ? MARKUP_APPAREL : MARKUP);
+  const grezzo = costo * MARKUP;
   return Math.max(Math.ceil(grezzo / 100) * 100 - 1, 999);
+}
+
+/**
+ * Prezzo al pubblico di un capo: listino fisso, non ricarico.
+ *
+ * Il listino e' lo stesso per tutte le taglie ammesse — su OPT OnDemand il capo
+ * costa uguale dalla S alla 2XL, quindi non c'e' niente da far pagare in piu' e
+ * una scheda prodotto con sei prezzi diversi vende meno.
+ *
+ * Il pavimento serve solo come rete: se un giorno il fornitore rincara (o si
+ * pubblica su uno caro), invece di vendere sotto il `MARGINE_MINIMO` il prezzo
+ * sale da solo al primo .90 utile. `costo` arriva da Printify in centesimi di
+ * USD, il listino e' in centesimi di EUR: senza il cambio si confronterebbero
+ * due valute diverse.
+ */
+export function prezzoApparel(costo: number, doppiaStampa: boolean): number {
+  const listino = doppiaStampa ? PREZZO_FRONTE_RETRO : PREZZO_FRONTE;
+  const costoEur = (costo + SPEDIZIONE_USD) * USD_EUR;
+  const pavimento = Math.ceil(costoEur / (1 - MARGINE_MINIMO) / 100) * 100 - 10;
+  return Math.max(listino, pavimento);
 }
 
 /**
@@ -337,11 +412,20 @@ export async function pubblicaProdotto(input: {
     },
   });
 
+  // Il capo si paga a stampa: fronte + retro sono due addebiti, non uno. Il
+  // listino alto vale solo quando il capo e' davvero stampato da due parti.
+  const doppiaStampa = input.tipo === "apparel" && posizione === "back" && !!upFronte;
+
   // Prezzi sui costi reali: solo ora Printify li espone, variante per variante.
   let prezzoDa: number | null = null;
   const conCosto = (creato.variants || []).filter(v => v.is_enabled && v.cost > 0);
   if (conCosto.length) {
-    const nuovi = conCosto.map(v => ({ id: v.id, price: prezzoDaCosto(v.cost, input.tipo), is_enabled: true }));
+    const nuovi = conCosto.map(v => ({
+      id: v.id,
+      price:
+        input.tipo === "apparel" ? prezzoApparel(v.cost, doppiaStampa) : prezzoDaCosto(v.cost, input.tipo),
+      is_enabled: true,
+    }));
     prezzoDa = Math.min(...nuovi.map(v => v.price));
     await api(`/shops/${shop.id}/products/${creato.id}.json`, {
       method: "PUT",
