@@ -73,7 +73,7 @@ function taglia(v: Variante): string {
  * bianco, nero o al massimo un grigio" — il verde bottiglia era orrendo).
  * Qualsiasi cosa l'agente proponga fuori da questa lista viene scartata.
  */
-export const COLORI_CAPO_AMMESSI = ["Black", "White", "Sand", "Sport Grey"];
+export const COLORI_CAPO_AMMESSI = ["Black", "Navy", "White", "Sand", "Sport Grey"];
 
 /**
  * ETICHETTA AL COLLO — il logo DreamBrothers stampato dentro il capo, al posto
@@ -101,8 +101,17 @@ const ETICHETTA_ATTIVA = process.env.PRINTIFY_ETICHETTA_COLLO !== "off";
  * finisca invisibile dentro un collo blu notte.
  */
 const CAPI_SCURI = ["black", "navy", "charcoal", "dark heather", "forest green", "maroon"];
+/**
+ * Un capo scuro regge il design così com'è: niente variante chiara, logo al
+ * collo chiaro. Serve per nome e non per variante perché la stessa domanda se
+ * la fanno anche la scheda di stampa e l'aggiornamento di un prodotto già
+ * creato, che hanno in mano solo il nome del colore.
+ */
+export function coloreScuro(nome: string): boolean {
+  return CAPI_SCURI.includes((nome || "").toLowerCase());
+}
 function capoScuro(v: Variante): boolean {
-  return CAPI_SCURI.includes((v.options?.color || "").toLowerCase());
+  return coloreScuro(v.options?.color || "");
 }
 
 export type ProdottoPubblicato = {
@@ -583,8 +592,8 @@ export async function aggiornaArtworkEsistente(input: {
   // compaia in una print area: si partizionano tutte, non solo le attive.
   const tutte = prodotto.variants || [];
   if (!tutte.some(v => v.is_enabled)) throw new Error(`Il prodotto ${input.productId} non ha varianti attive.`);
-  const scure = tutte.filter(v => colorePer.get(v.id) === "black");
-  const chiare = tutte.filter(v => colorePer.get(v.id) !== "black");
+  const scure = tutte.filter(v => coloreScuro(colorePer.get(v.id) || ""));
+  const chiare = tutte.filter(v => !coloreScuro(colorePer.get(v.id) || ""));
 
   const up = await api<{ id: string }>("/uploads/images.json", {
     method: "POST",

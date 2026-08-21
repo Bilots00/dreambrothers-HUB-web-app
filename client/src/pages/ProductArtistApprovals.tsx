@@ -401,6 +401,80 @@ function Anteprima({ data, file, alt }: { data: string; file: string; alt: strin
   );
 }
 
+/**
+ * Il fronte tipografico che l'agente genera quando la grafica va sul retro.
+ *
+ * Non si stampa finché non lo si è guardato: è testo inventato dal modello e
+ * finisce sul petto del capo, dove si vede più del retro. Il 21/08 è uscito un
+ * "RIGHT ON TIME" che col design non c'entrava niente.
+ */
+function FronteDaApprovare({ data, file, testo, approvato, onDecidi, inCorso }: {
+  data: string;
+  file: string;
+  testo?: string | null;
+  approvato?: boolean;
+  onDecidi: (ok: boolean) => void;
+  inCorso: boolean;
+}) {
+  const nome = file.replace(/\.png$/i, "_fronte.png");
+  const q = trpc.productArtist.immagine.useQuery(
+    { data, file: nome },
+    { staleTime: 60 * 60_000, refetchOnWindowFocus: false, retry: false },
+  );
+  // Nessun file: l'upscale non l'ha ancora generato, non c'è niente da decidere.
+  if (!q.data) return null;
+
+  const deciso = approvato === true || approvato === false;
+  return (
+    <div className="space-y-1.5 rounded-lg px-2.5 py-2 text-[11px]"
+         style={{ background: "oklch(0.6 0.15 250 / 0.12)", color: "oklch(0.82 0.12 250)" }}>
+      <div className="flex items-center gap-1.5">
+        <Shirt className="w-3 h-3 shrink-0" />
+        <span>Fronte generato{testo ? `: "${testo}"` : ""}</span>
+      </div>
+      <img
+        src={`data:${q.data.mime};base64,${q.data.base64}`}
+        alt={`fronte di ${file}`}
+        className="w-full rounded-md"
+        style={{ background: "oklch(0.11 0.015 260)" }}
+      />
+      {approvato === true ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1"><Check className="w-3 h-3" /> lo stampiamo davanti</span>
+          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                  disabled={inCorso} onClick={() => onDecidi(false)}>
+            togli
+          </button>
+        </div>
+      ) : approvato === false ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="opacity-70">scartato: il capo esce col solo retro</span>
+          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                  disabled={inCorso} onClick={() => onDecidi(true)}>
+            ripensaci
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                  disabled={inCorso} onClick={() => onDecidi(true)}>
+            usa questo fronte
+          </button>
+          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40 opacity-70"
+                  disabled={inCorso} onClick={() => onDecidi(false)}>
+            no, solo retro
+          </button>
+        </div>
+      )}
+      {!deciso && (
+        <div className="opacity-70 leading-snug">
+          Finché non decidi, il capo si pubblica con il solo retro.
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Catena a valle: il prodotto su Printify e le creatività per le ads   */
 /* ------------------------------------------------------------------ */
@@ -720,6 +794,11 @@ export default function ProductArtistApprovals() {
     onError: (e) => toast.error(e.message),
   });
 
+  const decidiFronte = trpc.productArtist.decidiFronte.useMutation({
+    onSuccess: () => { toast.success("Fronte aggiornato"); ricarica(); },
+    onError: e => toast.error(e.message),
+  });
+
   const ripubblica = trpc.productArtist.ripubblica.useMutation({
     onSuccess: () => { toast.success("Riprovo la pubblicazione"); ricarica(); },
     onError: e => toast.error(e.message),
@@ -902,6 +981,17 @@ export default function ProductArtistApprovals() {
                     annulla
                   </button>
                 </div>
+              )}
+
+              {d.tipo === "apparel" && d.stampa?.posizione === "back" && (
+                <FronteDaApprovare
+                  data={batch.data!.data}
+                  file={d.file}
+                  testo={d.stampa?.fronteTesto}
+                  approvato={d.fronteApprovato}
+                  inCorso={decidiFronte.isPending}
+                  onDecidi={ok => decidiFronte.mutate({ data: batch.data!.data, id: d.id, ok })}
+                />
               )}
 
               {(["apparel", "wallart"] as const).map(v => {

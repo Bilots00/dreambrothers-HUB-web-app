@@ -13,7 +13,7 @@
  * produrre; se l'agente è fermo le decisioni restano comunque registrate.
  */
 
-import { pubblicaProdotto, aggiornaArtworkEsistente, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI, salvaRicettaStampa } from "./printify";
+import { pubblicaProdotto, aggiornaArtworkEsistente, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI, coloreScuro, salvaRicettaStampa } from "./printify";
 import { linkArtwork } from "./artworkLink";
 import {
   validaPacchetto,
@@ -49,6 +49,16 @@ export type Pubblicazione = {
   varianti?: number;
   conclusaIl?: string;
   errore?: string;
+  /**
+   * Dove è stata messa la grafica su questo tentativo.
+   *
+   * Non è un dato decorativo: senza, il "riprova" dopo un errore ripartiva a
+   * mani vuote e ricadeva sulla scheda dell'agente, ribaltando sul retro una
+   * grafica che Andrea aveva mandato sul fronte (successo il 21/08 su
+   * `waiting_v1`: primo tentativo "fronte" fallito per il file di stampa
+   * mancante, riprova → pubblicata dietro).
+   */
+  posizione?: "front" | "back";
   /** avviso non bloccante: artwork sotto la risoluzione di stampa consigliata */
   avvisoQualita?: string;
   /** wall art: i file pronti da scaricare e passare al Bulk Creator */
@@ -116,6 +126,15 @@ export type Design = {
   creative?: RichiestaCreative;
   /** come stamparlo: posizione e colori del capo */
   stampa?: SchedaStampa;
+  /**
+   * Il fronte tipografico generato dall'agente è stato guardato e approvato?
+   *
+   * Finché è diverso da `true` il capo esce col solo retro. La tipografia
+   * automatica non è neutra — il 21/08 su `waiting_v1` è uscito un "RIGHT ON
+   * TIME" che col design non c'entrava niente — e va vista prima di finire
+   * stampata sul petto, non dopo.
+   */
+  fronteApprovato?: boolean;
 };
 
 export type Batch = {
@@ -227,6 +246,27 @@ async function listaFileBatch(data: string): Promise<{ name: string; size: numbe
   return items.filter(i => i.type === "file").map(i => ({ name: i.name, size: i.size }));
 }
 
+/**
+ * Un JSON di servizio scritto accanto ai file di stampa (oggi: la misura dei
+ * capi chiari). Torna null se non c'è: i batch vecchi non ce l'hanno, e la loro
+ * assenza non deve mai bloccare una pubblicazione.
+ */
+async function getJson<T>(data: string, file: string): Promise<T | null> {
+  if (file.includes("..") || file.includes("/")) return null;
+  const { owner, repo } = repoSlug();
+  const meta = await ghJson<{ content: string; encoding: string }>(
+    `/repos/${owner}/${repo}/contents/output/${encodeURIComponent(data)}/${encodeURIComponent(file)}`,
+  ).catch(() => null);
+  if (!meta?.content) return null;
+  try {
+    return JSON.parse(
+      Buffer.from(meta.content, (meta.encoding as BufferEncoding) || "base64").toString("utf8"),
+    ) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Il batch di una data. Senza argomento prende il più recente. */
 export async function getBatch(data?: string): Promise<Batch | null> {
   const date = data || (await listaBatch())[0];
@@ -288,6 +328,24 @@ export async function getImmagine(data: string, file: string): Promise<{ base64:
 /* ------------------------------------------------------------------ */
 /* Scrittura                                                           */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Il sì o il no al fronte tipografico generato in automatico.
+ *
+ * Separato dall'approvazione del design perché sono due domande diverse: il
+ * design può piacere e la scritta davanti no.
+ */
+export async function decidiFronte(data: string, id: string, ok: boolean): Promise<Batch | null> {
+  await aggiornaDesign(
+    data,
+    id,
+    d => {
+      d.fronteApprovato = ok;
+    },
+    `fronte ${ok ? "approvato" : "scartato"}: ${id}`,
+  );
+  return getBatch(data);
+}
 
 export async function decidiDesign(input: {
   data: string;
@@ -440,8 +498,14 @@ export async function pubblicaDesign(
   if (attuale?.stato === "in_corso") return;
   if ((attuale?.stato === "pubblicato" || attuale?.stato === "pronto_download") && !forza) return;
 
+  // Solo la scelta ESPLICITA (questo click o uno dei precedenti): la posizione
+  // della scheda non si cristallizza qui, così se l'agente la corregge il
+  // tentativo dopo la legge aggiornata.
+  const posizioneRicordata = posizioneScelta || attuale?.posizione;
+
   const segna = (d: Design, pub: Pubblicazione) => {
     d.pubblicazioni = { ...(d.pubblicazioni || {}), [tipo]: pub };
+    if (posizioneRicordata) d.pubblicazioni[tipo]!.posizione = posizioneRicordata;
   };
 
   await aggiornaDesign(
@@ -521,18 +585,29 @@ export async function pubblicaDesign(
         : undefined;
 
     const scheda = design.stampa || schedaDiDefault(img.base64);
-    const posizione = posizioneScelta || scheda.posizione;
+    // La scelta di Andrea vale più della scheda dell'agente, e vale anche al
+    // secondo giro: il "riprova" del riquadro d'errore non passa nessuna
+    // posizione, quindi senza `attuale?.posizione` la sua decisione andrebbe
+    // persa proprio quando l'errore è già stato risolto.
+    const posizione = posizioneRicordata || scheda.posizione;
 
     // Se la grafica va sul retro, il fronte non resta vuoto: la tipografia
     // generata da engine/fronte.py (regola fronte/retro: l'ancora identitaria
     // davanti, la manifestazione dietro). Se il file non c'e' ancora si
     // pubblica comunque, solo retro.
     let fronte: { nomeFile: string; url: string } | null = null;
+    let avvisoFronte: string | undefined;
     if (tipo === "apparel" && posizione === "back") {
       const nomeFronte = design.file.replace(/\.png$/i, "_fronte.png");
       const cFronte = await getImmagine(data, nomeFronte).catch(() => null);
       const urlFronte = cFronte ? linkArtwork(data, nomeFronte) : null;
-      if (urlFronte) fronte = { nomeFile: nomeFronte, url: urlFronte };
+      if (urlFronte && design.fronteApprovato === true) {
+        fronte = { nomeFile: nomeFronte, url: urlFronte };
+      } else if (urlFronte) {
+        avvisoFronte =
+          "Fronte tipografico generato ma non ancora approvato: il capo esce col solo retro. " +
+          "Guardalo nella scheda del design e approvalo, poi premi rifai.";
+      }
     }
 
     // Variante per i capi chiari (testi chiari scuriti): la produce
@@ -540,6 +615,9 @@ export async function pubblicaDesign(
     // chiari, si pubblica lo stesso ma l'avviso resta scritto.
     let chiaro: { nomeFile: string; url: string } | null = null;
     let avvisoChiaro: string | undefined;
+    // I colori con cui si creeranno davvero le varianti: partono dalla scheda,
+    // ma il guard-rail sotto puo' toglierne.
+    let coloriEffettivi = scheda.colori;
     if (tipo === "apparel") {
       const nomeChiaro = design.file.replace(/\.png$/i, "_print_chiaro.png");
       const files = await listaFileBatch(data).catch(() => []);
@@ -550,13 +628,36 @@ export async function pubblicaDesign(
       const ammessi = COLORI_CAPO_AMMESSI.map(c => c.toLowerCase());
       const capiChiariEffettivi = (scheda.colori || [])
         .filter(c => ammessi.includes(c.toLowerCase()))
-        .some(c => c.toLowerCase() !== "black");
+        .some(c => !coloreScuro(c));
       if (urlChiaro) {
         chiaro = { nomeFile: nomeChiaro, url: urlChiaro };
       } else if (capiChiariEffettivi) {
         avvisoChiaro =
           "Manca la variante chiara del design: i capi chiari stampano il file scuro. " +
           "Sul PC: `node engine/upscale-batch.mjs` la genera, poi premi rifai.";
+      }
+
+      /* ── Guard-rail sui capi chiari ───────────────────────────────────────
+         Avere la variante chiara non basta: bisogna sapere se ha funzionato.
+         Su `waiting_v1` la maschera ha preso solo un quinto del crema (il resto
+         era piu' giallo della soglia) e il capo bianco e' uscito con il testo
+         invisibile — pubblicato davvero, il 21/08. Il PC misura quanto
+         inchiostro resta chiaro DOPO la variante e lo scrive accanto al file di
+         stampa: se e' troppo, qui i capi chiari si tolgono da soli.
+         Senza misura (design vecchi) non si cambia niente: si pubblica come
+         prima e non si inventa un verdetto. */
+      const meta = await getJson<{ residuoChiaro?: number; capiChiariOk?: boolean }>(
+        data,
+        filePrint.replace(/\.png$/i, ".meta.json"),
+      );
+      if (meta && meta.capiChiariOk === false && capiChiariEffettivi) {
+        const scuri = (coloriEffettivi || []).filter(c => coloreScuro(c));
+        coloriEffettivi = scuri.length ? scuri : ["Black"];
+        const quota = Math.round((meta.residuoChiaro ?? 0) * 100);
+        avvisoChiaro =
+          `Capi chiari esclusi: dopo la variante chiara resta chiaro il ${quota}% dell'inchiostro, ` +
+          `su bianco o sabbia sparirebbe. Pubblicato solo su ${coloriEffettivi.join(", ")}.`;
+        chiaro = null;
       }
     }
 
@@ -571,7 +672,7 @@ export async function pubblicaDesign(
       titolo: titoloProdotto({ ...design, tipo }),
       descrizione: descrizioneProdotto(design),
       tipo,
-      colori: tipo === "apparel" ? scheda.colori : undefined,
+      colori: tipo === "apparel" ? coloriEffettivi : undefined,
       posizione: tipo === "apparel" ? posizione : undefined,
       tags: [design.avatar, tipo, "DreamBrothers"].filter(Boolean),
     });
@@ -604,7 +705,7 @@ export async function pubblicaDesign(
           mockup: pubblicato.mockup,
           prezzoDa: pubblicato.prezzoDa,
           varianti: pubblicato.varianti,
-          avvisoQualita: [avvisoQualita, avvisoChiaro].filter(Boolean).join(" ") || undefined,
+          avvisoQualita: [avvisoQualita, avvisoChiaro, avvisoFronte].filter(Boolean).join(" ") || undefined,
         });
         d.applicato = true;
       },

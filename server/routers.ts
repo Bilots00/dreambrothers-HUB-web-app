@@ -63,6 +63,7 @@ import {
   listaBatch,
   getBatch,
   getImmagine,
+  decidiFronte,
   decidiDesign,
   decidiMolti,
   getFonte,
@@ -595,6 +596,11 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         await pubblicaDesign(input.data, input.id, input.tipo, input.forza, input.posizione);
         return getBatch(input.data);
       }),
+
+    /** Il fronte tipografico generato dall'agente: si stampa solo se approvato. */
+    decidiFronte: protectedProcedure
+      .input(z.object({ data: z.string().min(1), id: z.string().min(1), ok: z.boolean() }))
+      .mutation(async ({ input }) => decidiFronte(input.data, input.id, input.ok)),
 
     /**
      * Creative Director + Copywriter sul design approvato: piattaforma, angle e
