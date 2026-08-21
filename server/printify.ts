@@ -173,7 +173,49 @@ async function negozio(): Promise<Shop> {
   return shop;
 }
 
-type Variante = { id: number; title: string; options: Record<string, string> };
+type Variante = {
+  id: number;
+  title: string;
+  options: Record<string, string>;
+  /** le aree stampabili del capo, in px: servono a sapere quanto e' alta rispetto a quanto e' larga */
+  placeholders?: { position: string; width: number; height: number }[];
+};
+
+/** Il riquadro del disegno dentro il file di stampa, misurato sul PC (`_print.meta.json`). */
+export type ContenutoStampa = { top: number; bottom: number; left?: number; right?: number };
+
+/**
+ * Quanto in basso finisce il disegno sul capo, come frazione dell'area di stampa.
+ *
+ * Il valore fisso di prima (0.47) centrava il FILE. Ma un file puo' essere
+ * verticale con dentro un disegno quadrato e un buco trasparente in cima: e'
+ * il caso dei design tipografici, e il 21/08 "it's all waiting there for you"
+ * e' uscito con la frase sotto le ascelle, dove chi ti guarda non legge.
+ *
+ * Qui si ragiona sul DISEGNO: si tiene il suo bordo superiore a una distanza
+ * fissa dal colletto, com'e' abitudine stampare un capo, e si lascia che sia
+ * l'altezza del disegno a decidere dove cade il centro. Un artwork che riempie
+ * tutto il file torna esattamente dov'era prima (~0.47): sale solo cio' che
+ * prima scendeva per via dei propri margini vuoti.
+ */
+const MARGINE_COLLO = 0.1;
+export function altezzaSulCapo(
+  area: { width: number; height: number } | null,
+  file: { w: number; h: number } | null,
+  contenuto: ContenutoStampa | null,
+  scale: number,
+): number {
+  if (!file || !contenuto || !file.w || !file.h) return 0.47;
+  // Senza le misure dell'area si usa il rapporto tipico di una t-shirt adulto
+  // (12x16 pollici): sbagliare un po' il rapporto sposta il disegno di poco,
+  // non sapere dov'e' il disegno lo sposta di molto.
+  const rapportoArea = area?.width && area?.height ? area.width / area.height : 0.75;
+  const occupata = scale * (file.h / file.w) * rapportoArea;
+  const y = MARGINE_COLLO + occupata * (0.5 - contenuto.top);
+  // Mai sopra il bordo dell'area, e mai piu' in basso del centro: se il disegno
+  // e' cosi' grande da non starci, il centro e' il meglio che si possa fare.
+  return Math.min(0.5, Math.max(occupata / 2, Number(y.toFixed(4))));
+}
 
 /**
  * Blueprint e print provider per tipo di design.
@@ -382,6 +424,10 @@ export async function pubblicaProdotto(input: {
    * Black stampa il file normale. Senza, tutti i capi stampano lo stesso file.
    */
   chiaro?: { nomeFile: string; url: string } | null;
+  /** dove sta il disegno dentro il file di stampa: decide l'altezza sul capo */
+  contenuto?: ContenutoStampa | null;
+  /** dimensioni del file di stampa in px */
+  fileStampa?: { w: number; h: number } | null;
 }): Promise<ProdottoPubblicato> {
   const shop = await negozio();
   // L'orientamento si legge dall'artwork vero, non si assume.
@@ -417,6 +463,20 @@ export async function pubblicaProdotto(input: {
     });
   }
 
+  // L'area di stampa del capo, per sapere quanto e' alta rispetto a quanto e'
+  // larga: senza, il disegno si posiziona alla cieca.
+  const areaCapo =
+    varianti[0]?.placeholders?.find(p => p.position === posizione) ||
+    varianti[0]?.placeholders?.[0] ||
+    null;
+  const SCALA_APPAREL = input.tipo === "apparel" ? 0.9 : 1;
+  const altezzaCapo = altezzaSulCapo(
+    areaCapo,
+    input.fileStampa || null,
+    input.contenuto || null,
+    SCALA_APPAREL,
+  );
+
   const areaDiStampa = (imgId: string, variantIds: number[], scuro: boolean) => ({
     variant_ids: variantIds,
     placeholders: [
@@ -436,8 +496,8 @@ export async function pubblicaProdotto(input: {
             // 0.5/0.5 e' il centro dell'area di stampa. Sull'apparel si alza
             // un filo: una grafica centrata geometricamente, indossata, sembra bassa.
             x: 0.5,
-            y: input.tipo === "apparel" ? 0.47 : 0.5,
-            scale: input.tipo === "apparel" ? 0.9 : 1,
+            y: input.tipo === "apparel" ? altezzaCapo : 0.5,
+            scale: SCALA_APPAREL,
             angle: 0,
           },
         ],
@@ -572,6 +632,10 @@ export async function aggiornaArtworkEsistente(input: {
   chiaro?: { nomeFile: string; url: string } | null;
   fronte?: { nomeFile: string; url: string } | null;
   posizione?: "front" | "back";
+  /** dove sta il disegno dentro il file di stampa: decide l'altezza sul capo */
+  contenuto?: ContenutoStampa | null;
+  /** dimensioni del file di stampa in px */
+  fileStampa?: { w: number; h: number } | null;
   titolo?: string;
   descrizione?: string;
 }): Promise<{ variantiScure: number; variantiChiare: number }> {
@@ -615,13 +679,23 @@ export async function aggiornaArtworkEsistente(input: {
     });
   }
 
+  // Stessa regola della creazione: si posiziona il disegno, non il file.
+  const altezzaCapo = altezzaSulCapo(
+    cat.variants[0]?.placeholders?.find(p => p.position === posizione) ||
+      cat.variants[0]?.placeholders?.[0] ||
+      null,
+    input.fileStampa || null,
+    input.contenuto || null,
+    0.9,
+  );
+
   const area = (imgId: string, ids: number[]) => ({
     variant_ids: ids,
     placeholders: [
       ...(upFronte
         ? [{ position: "front", images: [{ id: upFronte.id, x: 0.5, y: 0.38, scale: 0.42, angle: 0 }] }]
         : []),
-      { position: posizione, images: [{ id: imgId, x: 0.5, y: 0.47, scale: 0.9, angle: 0 }] },
+      { position: posizione, images: [{ id: imgId, x: 0.5, y: altezzaCapo, scale: 0.9, angle: 0 }] },
     ],
   });
 

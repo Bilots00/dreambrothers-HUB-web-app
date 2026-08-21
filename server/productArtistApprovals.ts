@@ -37,6 +37,15 @@ export const DECISIONI_DESIGN: DecisioneDesign[] = ["in_attesa", "approvato", "r
  */
 export type FileStampa = { tag: string; nome: string; url: string | null; size: number };
 
+/** Cosa il PC ha misurato sul file di stampa (`<nome>_print.meta.json`). */
+type MetaStampa = {
+  residuoChiaro?: number;
+  capiChiariOk?: boolean;
+  fileW?: number;
+  fileH?: number;
+  contenuto?: { top: number; bottom: number; left?: number; right?: number } | null;
+};
+
 export type Pubblicazione = {
   /** `pronto_download` e' lo stato finale della wall art: file consegnati, niente da pubblicare */
   stato: "in_corso" | "pubblicato" | "pronto_download" | "errore";
@@ -618,6 +627,9 @@ export async function pubblicaDesign(
     // I colori con cui si creeranno davvero le varianti: partono dalla scheda,
     // ma il guard-rail sotto puo' toglierne.
     let coloriEffettivi = scheda.colori;
+    // La misura che il PC scrive accanto al file di stampa: serve sia a togliere
+    // i capi chiari, sia a sapere dove cade il disegno sul capo.
+    let metaStampa: MetaStampa | null = null;
     if (tipo === "apparel") {
       const nomeChiaro = design.file.replace(/\.png$/i, "_print_chiaro.png");
       const files = await listaFileBatch(data).catch(() => []);
@@ -646,14 +658,14 @@ export async function pubblicaDesign(
          stampa: se e' troppo, qui i capi chiari si tolgono da soli.
          Senza misura (design vecchi) non si cambia niente: si pubblica come
          prima e non si inventa un verdetto. */
-      const meta = await getJson<{ residuoChiaro?: number; capiChiariOk?: boolean }>(
+      metaStampa = await getJson<MetaStampa>(
         data,
         filePrint.replace(/\.png$/i, ".meta.json"),
       );
-      if (meta && meta.capiChiariOk === false && capiChiariEffettivi) {
+      if (metaStampa && metaStampa.capiChiariOk === false && capiChiariEffettivi) {
         const scuri = (coloriEffettivi || []).filter(c => coloreScuro(c));
         coloriEffettivi = scuri.length ? scuri : ["Black"];
-        const quota = Math.round((meta.residuoChiaro ?? 0) * 100);
+        const quota = Math.round((metaStampa.residuoChiaro ?? 0) * 100);
         avvisoChiaro =
           `Capi chiari esclusi: dopo la variante chiara resta chiaro il ${quota}% dell'inchiostro, ` +
           `su bianco o sabbia sparirebbe. Pubblicato solo su ${coloriEffettivi.join(", ")}.`;
@@ -674,6 +686,12 @@ export async function pubblicaDesign(
       tipo,
       colori: tipo === "apparel" ? coloriEffettivi : undefined,
       posizione: tipo === "apparel" ? posizione : undefined,
+      contenuto: metaStampa?.contenuto || null,
+      fileStampa: metaStampa?.fileW && metaStampa?.fileH
+        ? { w: metaStampa.fileW, h: metaStampa.fileH }
+        : dim
+          ? { w: dim.w, h: dim.h }
+          : null,
       tags: [design.avatar, tipo, "DreamBrothers"].filter(Boolean),
     });
 
@@ -873,14 +891,20 @@ export async function aggiornaArtwork(data: string, id: string): Promise<{ varia
   const print = link(nome("_print.png"));
   if (!print) throw new Error("File _print.png non trovato o URL pubblico non disponibile.");
   const scheda = design.stampa;
+  const meta = await getJson<MetaStampa>(data, nome("_print.meta.json"));
 
   return aggiornaArtworkEsistente({
     productId,
     nomeFile: print.nomeFile,
     url: print.url,
     chiaro: link(nome("_print_chiaro.png")),
-    fronte: link(nome("_fronte.png")),
-    posizione: scheda?.posizione || "back",
+    // Il fronte tipografico vale anche qui solo se e' stato approvato.
+    fronte: design.fronteApprovato === true ? link(nome("_fronte.png")) : null,
+    // La scelta di Andrea prima della scheda, come nella pubblicazione: se no,
+    // un riallineamento riporterebbe il design dalla parte sbagliata del capo.
+    posizione: design.pubblicazioni?.apparel?.posizione || scheda?.posizione || "back",
+    contenuto: meta?.contenuto || null,
+    fileStampa: meta?.fileW && meta?.fileH ? { w: meta.fileW, h: meta.fileH } : null,
     titolo: titoloProdotto({ ...design, tipo: "apparel" }),
     descrizione: descrizioneProdotto(design),
   });

@@ -494,11 +494,12 @@ type Pubblicazione = {
 };
 
 /** Cosa è successo al prodotto dopo il sì: sta salendo, è online, o è fallito. */
-function StatoProdotto({ p, veste, onRiprova, onRifai, inCorso }: {
+function StatoProdotto({ p, veste, onRiprova, onRifai, onRiallinea, inCorso }: {
   p: Pubblicazione;
   veste: Veste;
   onRiprova: () => void;
   onRifai: (posizione?: "front" | "back") => void;
+  onRiallinea?: () => void;
   inCorso: boolean;
 }) {
   const Icona = veste === "apparel" ? Shirt : Frame;
@@ -580,6 +581,15 @@ function StatoProdotto({ p, veste, onRiprova, onRifai, inCorso }: {
                className="underline underline-offset-2 hover:opacity-80 flex items-center gap-1">
               Printify <ExternalLink className="w-3 h-3" />
             </a>
+          )}
+          {/* Riscrive l'artwork sul prodotto che c'e' gia': da preferire a
+              "rifai" quando cambia solo il file o il modo di posizionarlo,
+              perche' non butta via la listing e la sua storia. */}
+          {veste === "apparel" && onRiallinea && (
+            <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
+                    disabled={inCorso} onClick={onRiallinea} title="Riscrive l'artwork sul prodotto esistente">
+              riallinea
+            </button>
           )}
           {/* Serve dopo un fix all'artwork: crea un prodotto NUOVO, il vecchio
               va cancellato a mano su Printify. */}
@@ -794,6 +804,11 @@ export default function ProductArtistApprovals() {
     onError: (e) => toast.error(e.message),
   });
 
+  const riallinea = trpc.productArtist.aggiornaArtwork.useMutation({
+    onSuccess: () => { toast.success("Artwork riallineato sul prodotto esistente"); ricarica(); },
+    onError: e => toast.error(e.message),
+  });
+
   const decidiFronte = trpc.productArtist.decidiFronte.useMutation({
     onSuccess: () => { toast.success("Fronte aggiornato"); ricarica(); },
     onError: e => toast.error(e.message),
@@ -1002,7 +1017,12 @@ export default function ProductArtistApprovals() {
                     key={v}
                     veste={v}
                     p={pub}
-                    inCorso={ripubblica.isPending}
+                    inCorso={ripubblica.isPending || riallinea.isPending}
+                    onRiallinea={
+                      pub.stato === "pubblicato"
+                        ? () => riallinea.mutate({ data: batch.data!.data, id: d.id })
+                        : undefined
+                    }
                     onRiprova={() => ripubblica.mutate({ data: batch.data!.data, id: d.id, tipo: v })}
                     onRifai={(posizione) => {
                       if (v === "apparel") {

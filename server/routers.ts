@@ -64,6 +64,7 @@ import {
   getBatch,
   getImmagine,
   decidiFronte,
+  aggiornaArtwork,
   decidiDesign,
   decidiMolti,
   getFonte,
@@ -661,6 +662,15 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         await pubblicaDesign(input.data, input.id, input.tipo, input.forza, input.posizione);
         return getBatch(input.data);
       }),
+
+    /**
+     * Riallinea l'artwork sul prodotto Printify gia' pubblicato: stessi file,
+     * print area riscritte. Serve quando cambia il file di stampa o il modo di
+     * posizionarlo, senza buttare via la listing e la sua storia.
+     */
+    aggiornaArtwork: protectedProcedure
+      .input(z.object({ data: z.string().min(1), id: z.string().min(1) }))
+      .mutation(async ({ input }) => aggiornaArtwork(input.data, input.id)),
 
     /** Il fronte tipografico generato dall'agente: si stampa solo se approvato. */
     decidiFronte: protectedProcedure
