@@ -120,6 +120,29 @@ export function registerSocialRoutes(app: Express) {
     }
   });
 
+  // Social Media Manager notturno -> i post veri da cui parte la notte.
+  //
+  // Non inventa da zero: prende i post che hanno già funzionato dai canali
+  // Instagram della Watchlist (o da un solo profilo, se Andrea ne ha indicato
+  // uno dal riquadro in Bozze). L'agente ne studia struttura, ritmo e attacco.
+  app.get("/api/social/reference-posts", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { postDiRiferimento, getFonteSocial } = await import("../socialReferences");
+      const fonte = await getFonteSocial().catch(() => null);
+      const handleParam = typeof req.query.handle === "string" ? req.query.handle : undefined;
+      // Il parametro esplicito vince; altrimenti si segue la fonte impostata.
+      const handle = handleParam || (fonte?.modo === "profilo" ? fonte.handle : undefined);
+      const limit = Math.min(Number(req.query.limit) || 12, 30);
+      const posts = await postDiRiferimento(OWNER_USER_ID, { handle, limit });
+      res.json({ success: true, modo: fonte?.modo ?? "auto", handle: handle ?? null, posts });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[social/reference-posts] error:", msg);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   // Agent / n8n -> runtime config: autopilot toggle + reference folder + system prompt + agent online
   app.get("/api/social/config", async (_req: Request, res: Response) => {
     if (!checkSecret(_req, res)) return;

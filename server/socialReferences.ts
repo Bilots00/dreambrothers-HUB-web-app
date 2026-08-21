@@ -19,13 +19,37 @@ const GH_API = "https://api.github.com";
 export const TIPI_REFERENCE = ["ispirazione", "prodotto"] as const;
 export type TipoReference = (typeof TIPI_REFERENCE)[number];
 
-export type ModoFonteSocial = "caricate" | "auto";
+/**
+ * Da dove parte la notte. Nessuna delle tre modalità inventa da zero: si parte
+ * sempre da post che sono già esistiti e hanno già funzionato — regola di Andrea,
+ * 2026-08-21: "non devo reinventarmi la ruota".
+ *
+ *   caricate → gli screenshot che carica lui
+ *   profilo  → i post di UN profilo Instagram che indica per handle o URL
+ *   auto     → i post migliori dei canali che segue già nella Watchlist
+ */
+export type ModoFonteSocial = "caricate" | "profilo" | "auto";
 
 export type FonteSocial = {
   modo: ModoFonteSocial;
+  /** usato se modo = "profilo": l'handle normalizzato, senza @ */
+  handle?: string;
   note?: string;
   aggiornatoIl: string;
 };
+
+/** Da un URL Instagram o da un @handle al solo handle, normalizzato. */
+export function normalizzaHandle(raw: string): string {
+  let s = String(raw).trim();
+  // Un URL: si tiene il primo segmento di path, che è il profilo.
+  const m = s.match(/instagram\.com\/([^/?#]+)/i);
+  if (m) s = m[1];
+  s = s.replace(/^@/, "").replace(/\/+$/, "").trim().toLowerCase();
+  if (!/^[a-z0-9._]{1,60}$/.test(s)) {
+    throw new Error(`Handle Instagram non valido: "${raw}". Incolla il link del profilo o @nome.`);
+  }
+  return s;
+}
 
 const PATH_FONTE = "references/_fonte-prossima-notte.json";
 
@@ -141,19 +165,94 @@ export async function getFonteSocial(): Promise<FonteSocial> {
 
 export async function setFonteSocial(input: {
   modo: ModoFonteSocial;
+  handle?: string;
   note?: string;
 }): Promise<FonteSocial> {
+  if (input.modo === "profilo" && !input.handle?.trim()) {
+    throw new Error("Con modo 'profilo' serve il link o l'@handle del profilo Instagram.");
+  }
   const fonte: FonteSocial = {
     modo: input.modo,
+    handle: input.modo === "profilo" ? normalizzaHandle(input.handle!) : undefined,
     note: input.note?.trim() || undefined,
     aggiornatoIl: new Date().toISOString(),
   };
   await scriviFile(
     PATH_FONTE,
     Buffer.from(JSON.stringify(fonte, null, 2), "utf8"),
-    `fonte reference social: ${input.modo}`,
+    `fonte reference social: ${input.modo}${fonte.handle ? ` (@${fonte.handle})` : ""}`,
   );
   return fonte;
+}
+
+/* ------------------------------------------------------------------ */
+/* I post di riferimento veri, per l'agente                            */
+/* ------------------------------------------------------------------ */
+
+export type PostRiferimento = {
+  handle: string;
+  url: string;
+  thumbnailUrl: string | null;
+  caption: string | null;
+  views: number;
+  likes: number;
+  comments: number;
+  outlierScore: number | null;
+  pubblicatoIl: string | null;
+};
+
+/**
+ * I post da cui l'agente parte stanotte, presi dalla Watchlist.
+ *
+ * Non è un secondo meccanismo: la Watchlist raccoglie già i post dei canali che
+ * Andrea segue, con caption, metriche e outlier score. L'agente ne prende i
+ * migliori e ne studia struttura, ritmo e attacco — mai le parole.
+ *
+ * `handle` filtra su un profilo solo (modo "profilo"); senza, si pesca da tutti
+ * i canali Instagram della Watchlist (modo "auto").
+ */
+export async function postDiRiferimento(
+  userId: number,
+  opts: { handle?: string; limit?: number; lookbackDays?: number } = {},
+): Promise<PostRiferimento[]> {
+  const { getWatchlistChannels, getWatchlistVideos } = await import("./db");
+  const canali = await getWatchlistChannels(userId);
+  const instagram = canali.filter((c) => c.platform === "instagram");
+  const scelti = opts.handle
+    ? instagram.filter((c) => c.handle.toLowerCase() === opts.handle!.toLowerCase())
+    : instagram;
+
+  if (opts.handle && scelti.length === 0) {
+    throw new Error(
+      `@${opts.handle} non è ancora nella Watchlist: aggiungilo da lì (o dal riquadro qui sopra) e attendi il primo refresh.`,
+    );
+  }
+  if (scelti.length === 0) return [];
+
+  const ammessi = new Set(scelti.map((c) => c.id));
+  const video = await getWatchlistVideos(userId, {
+    platform: "instagram",
+    lookbackDays: opts.lookbackDays ?? 90,
+    sort: "outlier",
+    limit: (opts.limit ?? 12) * 3,
+  });
+
+  return video
+    .filter((v) => ammessi.has(v.channelId))
+    // Un post senza caption non insegna niente sulla struttura del testo.
+    .filter((v) => (v.title ?? "").trim().length > 0)
+    .slice(0, opts.limit ?? 12)
+    .map((v) => ({
+      handle: v.channelHandle ?? "",
+      url: v.url,
+      thumbnailUrl: v.thumbnailUrl ?? null,
+      caption: v.title ?? null,
+      views: Number(v.views ?? 0),
+      likes: Number(v.likes ?? 0),
+      comments: Number(v.comments ?? 0),
+      outlierScore: v.outlierScore == null ? null : Number(v.outlierScore),
+      pubblicatoIl: v.publishedAt ? new Date(v.publishedAt).toISOString() : null,
+    }));
 }
 
 /* ------------------------------------------------------------------ */

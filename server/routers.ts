@@ -21,7 +21,7 @@ import {
   createClaudeSession, getClaudeSessionById, getClaudeSessions, getClaudeSessionMessages,
   insertClaudeMessage, updateClaudeSession, deleteClaudeSession,
   insertClaudeAttachment, getClaudeAttachmentsForSession, attachClaudeAttachmentsToMessage,
-  getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById,
+  getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById, findWatchlistChannel,
   getWatchlistVideoById, setWatchlistVideoLiked,
   getResearchItems, getResearchItemById, updateResearchItem, getResearchCountries,
 } from "./db";
@@ -81,6 +81,8 @@ import {
   caricaReferenceSocial,
   eliminaReferenceSocial,
   immagineReferenceSocial,
+  postDiRiferimento,
+  normalizzaHandle,
 } from "./socialReferences";
 
 function todayRome(): string {
@@ -283,8 +285,28 @@ export const appRouter = router({
     fonte: protectedProcedure.query(async () => getFonteSocial()),
 
     setFonte: protectedProcedure
-      .input(z.object({ modo: z.enum(["caricate", "auto"]), note: z.string().optional() }))
-      .mutation(async ({ input }) => setFonteSocial(input)),
+      .input(z.object({
+        modo: z.enum(["caricate", "profilo", "auto"]),
+        handle: z.string().optional(),
+        note: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        // Indicare un profilo implica volerlo seguire: se non è ancora nella
+        // Watchlist si aggiunge, altrimenti la notte non troverebbe nessun post.
+        if (input.modo === "profilo" && input.handle?.trim()) {
+          const handle = normalizzaHandle(input.handle);
+          const esistente = await findWatchlistChannel(ctx.user.id, "instagram", handle);
+          if (!esistente) await addWatchlistChannel(ctx.user.id, handle, "instagram");
+        }
+        return setFonteSocial(input);
+      }),
+
+    /** Anteprima dei post da cui partirà la notte: si vede prima, non a cose fatte. */
+    postDiRiferimento: protectedProcedure
+      .input(z.object({ handle: z.string().optional(), limit: z.number().min(1).max(30).optional() }).optional())
+      .query(async ({ ctx, input }) =>
+        postDiRiferimento(ctx.user.id, { handle: input?.handle, limit: input?.limit ?? 12 }),
+      ),
 
     reference: protectedProcedure
       .input(z.object({ giorno: z.string().optional() }).optional())

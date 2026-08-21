@@ -18,7 +18,8 @@ const CARD = { background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2
 
 const MODI_SOCIAL = [
   { id: "caricate", label: "Carico io", desc: "Parti dagli screenshot che carico qui sotto" },
-  { id: "auto", label: "Automatico", desc: "Nessuna reference: lavora sul lessico e sui learning del Brain" },
+  { id: "profilo", label: "Da un profilo", desc: "Prendi i post migliori da questo profilo Instagram" },
+  { id: "auto", label: "Automatico", desc: "Pesca dai canali che seguo nella Watchlist" },
 ] as const;
 
 const TIPI_SOCIAL = [
@@ -31,13 +32,22 @@ function MaterialeNotteSocial() {
   const fonte = trpc.social.fonte.useQuery();
   const reference = trpc.social.reference.useQuery();
 
-  const [modo, setModo] = useState<"caricate" | "auto">("caricate");
+  const [modo, setModo] = useState<"caricate" | "profilo" | "auto">("caricate");
+  const [handle, setHandle] = useState("");
   const [tipo, setTipo] = useState<"ispirazione" | "prodotto">("ispirazione");
   const [caricando, setCaricando] = useState(0);
 
   useEffect(() => {
-    if (fonte.data) setModo(fonte.data.modo);
+    if (!fonte.data) return;
+    setModo(fonte.data.modo);
+    setHandle(fonte.data.handle ?? "");
   }, [fonte.data]);
+
+  // L'anteprima dei post da cui partirà la notte: si controlla prima, non dopo.
+  const anteprima = trpc.social.postDiRiferimento.useQuery(
+    { handle: modo === "profilo" ? fonte.data?.handle : undefined, limit: 6 },
+    { enabled: modo !== "caricate", retry: false },
+  );
 
   const salva = trpc.social.setFonte.useMutation({
     onSuccess: () => { toast.success("Impostazione salvata per stanotte"); utils.social.fonte.invalidate(); },
@@ -103,7 +113,7 @@ function MaterialeNotteSocial() {
           return (
             <button
               key={m.id}
-              onClick={() => { setModo(m.id); salva.mutate({ modo: m.id }); }}
+              onClick={() => { setModo(m.id); if (m.id !== "profilo") salva.mutate({ modo: m.id }); }}
               disabled={salva.isPending}
               className="text-left rounded-lg px-3 py-2 transition-colors"
               style={{
@@ -117,6 +127,65 @@ function MaterialeNotteSocial() {
           );
         })}
       </div>
+
+      {modo === "profilo" && (
+        <div className="flex gap-2 flex-wrap items-center">
+          <input
+            value={handle}
+            onChange={(e) => setHandle(e.target.value)}
+            placeholder="https://instagram.com/poeta_della_serra  oppure  @poeta_della_serra"
+            className="flex-1 min-w-[260px] bg-transparent text-sm rounded-lg px-3 py-2 outline-none"
+            style={{ border: "1px solid oklch(0.25 0.015 260)" }}
+          />
+          <Button size="sm" disabled={salva.isPending || !handle.trim()}
+                  onClick={() => salva.mutate({ modo: "profilo", handle })}>
+            Salva profilo
+          </Button>
+          <p className="w-full text-[11px] opacity-50">
+            Il profilo viene aggiunto alla <b>Watchlist</b>, che ne raccoglie i post con metriche e outlier score. La notte l'agente parte dai migliori: ne studia struttura, ritmo e attacco, e riscrive con la nostra voce.
+          </p>
+        </div>
+      )}
+
+      {modo !== "caricate" && (
+        <div className="text-xs">
+          {anteprima.isLoading && <span className="opacity-50">carico i post di riferimento…</span>}
+          {anteprima.error && (
+            <span style={{ color: "oklch(0.7 0.18 25)" }}>{anteprima.error.message}</span>
+          )}
+          {anteprima.data && anteprima.data.length === 0 && (
+            <span style={{ color: "oklch(0.78 0.15 70)" }}>
+              Nessun post disponibile: la Watchlist non ha ancora raccolto niente da questi profili. Aggiornala da <b>Watchlist</b>, oppure carica tu gli screenshot.
+            </span>
+          )}
+          {anteprima.data && anteprima.data.length > 0 && (
+            <div>
+              <div className="opacity-55 mb-2">
+                Stanotte partirà da questi {anteprima.data.length} post:
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {anteprima.data.map((p) => (
+                  <a key={p.url} href={p.url} target="_blank" rel="noreferrer"
+                     className="flex items-center gap-2 px-2 py-1.5 rounded-lg max-w-[320px] transition-colors hover:bg-white/5"
+                     style={{ background: "oklch(0.11 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+                    {p.thumbnailUrl && (
+                      <img src={p.thumbnailUrl} alt="" className="w-8 h-8 rounded object-cover shrink-0" />
+                    )}
+                    <span className="min-w-0">
+                      <span className="block truncate opacity-80">{p.caption ?? "(senza testo)"}</span>
+                      <span className="block opacity-45 text-[10px]">
+                        @{p.handle}
+                        {p.outlierScore ? ` · ${p.outlierScore.toFixed(1)}x` : ""}
+                        {p.views ? ` · ${Intl.NumberFormat("it-IT", { notation: "compact" }).format(p.views)} views` : ""}
+                      </span>
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="pt-1" style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
         <div className="flex items-center gap-2 flex-wrap pt-3">
