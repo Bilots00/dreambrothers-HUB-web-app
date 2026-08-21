@@ -814,11 +814,15 @@ export function titoloProdotto(d: Design): string {
   const scritto = d.stampa?.titolo?.trim();
   if (scritto) return RIPULISCI_TRATTINI(scritto).slice(0, 140);
 
-  // Formula del brand: [soggetto] | [beneficio identitario] | [tipo].
-  const capo = d.tipo === "apparel" ? "Unisex T-Shirt" : "Art Print";
+  // Formula del brand (Andrea, 21/08): la frase del design piu' il tipo di capo,
+  // corto. Il titolo a tre segmenti con le keyword vive nel meta title, non qui.
+  // "Unisex" non si scrive mai in automatico: da quella parola l'agente SEO
+  // deduce il gender per Google Shopping, e qui non si sa se il design sia
+  // neutro davvero. Quando lo sa, lo scrive l'agente nella scheda.
+  const capo = d.tipo === "apparel" ? "Tee" : "Art Print";
   const { titolo, slogan } = paroleDesign(d);
-  const pezzi = [titolo || titoloCase(d.concept || "Dreamers"), slogan && titoloCase(slogan), capo];
-  return RIPULISCI_TRATTINI(pezzi.filter(Boolean).join(" | ")).slice(0, 140);
+  const frase = titolo || titoloCase(slogan || d.concept || "Dreamers");
+  return RIPULISCI_TRATTINI([frase, capo].filter(Boolean).join(" ")).slice(0, 60);
 }
 
 export function descrizioneProdotto(d: Design): string {
