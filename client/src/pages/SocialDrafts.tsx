@@ -1,8 +1,182 @@
-import { useState, type ElementType } from "react";
-import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter } from "lucide-react";
+import { useState, useEffect, type ElementType } from "react";
+import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter, Sparkles, Upload, Loader2, X as XIcon } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
+
+const CARD = { background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" };
+
+/* ------------------------------------------------------------------ */
+/* Materiale per la notte del Social Media Manager (run 01:00)          */
+/*                                                                     */
+/* Stesso meccanismo di Approva Design: le reference si caricano da qui */
+/* e finiscono nella repo dell'agente, che il VPS legge al run. Qui pero'*/
+/* una reference e' uno SCREENSHOT DI UN POST che funziona: l'agente ne */
+/* prende struttura, ritmo e angolo, mai le parole.                     */
+/* ------------------------------------------------------------------ */
+
+const MODI_SOCIAL = [
+  { id: "caricate", label: "Carico io", desc: "Parti dagli screenshot che carico qui sotto" },
+  { id: "auto", label: "Automatico", desc: "Nessuna reference: lavora sul lessico e sui learning del Brain" },
+] as const;
+
+const TIPI_SOCIAL = [
+  { id: "ispirazione", label: "ispirazione", icona: "💡", desc: "post altrui che funzionano" },
+  { id: "prodotto", label: "prodotto", icona: "🛍", desc: "per i caroselli IKONICK" },
+] as const;
+
+function MaterialeNotteSocial() {
+  const utils = trpc.useUtils();
+  const fonte = trpc.social.fonte.useQuery();
+  const reference = trpc.social.reference.useQuery();
+
+  const [modo, setModo] = useState<"caricate" | "auto">("caricate");
+  const [tipo, setTipo] = useState<"ispirazione" | "prodotto">("ispirazione");
+  const [caricando, setCaricando] = useState(0);
+
+  useEffect(() => {
+    if (fonte.data) setModo(fonte.data.modo);
+  }, [fonte.data]);
+
+  const salva = trpc.social.setFonte.useMutation({
+    onSuccess: () => { toast.success("Impostazione salvata per stanotte"); utils.social.fonte.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const carica = trpc.social.caricaReference.useMutation({ onError: (e) => toast.error(e.message) });
+  const elimina = trpc.social.eliminaReference.useMutation({
+    onSuccess: () => { toast.success("Reference rimossa"); utils.social.reference.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const onFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setCaricando(files.length);
+    let ok = 0;
+    for (const file of Array.from(files)) {
+      try {
+        const base64 = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result).split(",")[1] ?? "");
+          r.onerror = () => rej(new Error(`non riesco a leggere ${file.name}`));
+          r.readAsDataURL(file);
+        });
+        await carica.mutateAsync({ tipo, nomeFile: file.name, base64 });
+        ok++;
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : `errore su ${file.name}`);
+      }
+      setCaricando((n) => n - 1);
+    }
+    if (ok) {
+      toast.success(`${ok} reference caricate`);
+      utils.social.reference.invalidate();
+      // Caricare implica volerle usare: si allinea il modo senza farglielo ricordare.
+      if (modo !== "caricate") salva.mutate({ modo: "caricate" });
+    }
+  };
+
+  const files = reference.data ?? [];
+  const perTipo = (t: string) => files.filter((f) => f.tipo === t);
+
+  return (
+    <div className="rounded-xl p-4 space-y-4" style={CARD}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Sparkles className="w-4 h-4 opacity-70" /> Materiale per la prossima notte
+          </h2>
+          <p className="text-xs opacity-55 mt-0.5">
+            Da cosa deve partire il Social Media Manager all'01:00. Scrive 3 Instagram, 2 Pinterest e 1 Facebook, e le trovi qui sotto come bozze.
+          </p>
+        </div>
+        {fonte.data?.aggiornatoIl && (
+          <span className="text-[11px] opacity-45">
+            impostato il {new Date(fonte.data.aggiornatoIl).toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+        {MODI_SOCIAL.map((m) => {
+          const attivo = modo === m.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => { setModo(m.id); salva.mutate({ modo: m.id }); }}
+              disabled={salva.isPending}
+              className="text-left rounded-lg px-3 py-2 transition-colors"
+              style={{
+                background: attivo ? "oklch(0.25 0.06 250)" : "oklch(0.11 0.015 260)",
+                border: `1px solid ${attivo ? "oklch(0.5 0.14 250)" : "oklch(0.2 0.015 260)"}`,
+              }}
+            >
+              <div className="text-sm font-medium">{m.label}</div>
+              <div className="text-[11px] opacity-55 leading-snug mt-0.5">{m.desc}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="pt-1" style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
+        <div className="flex items-center gap-2 flex-wrap pt-3">
+          <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid oklch(0.25 0.015 260)" }}>
+            {TIPI_SOCIAL.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTipo(t.id)}
+                title={t.desc}
+                className="px-3 py-1.5 text-xs transition-colors"
+                style={{ background: tipo === t.id ? "oklch(0.25 0.06 250)" : "transparent" }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="cursor-pointer">
+            <input type="file" accept="image/*" multiple className="hidden"
+                   onChange={(e) => { onFiles(e.target.files); e.currentTarget.value = ""; }} />
+            <span className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors hover:bg-white/5"
+                  style={{ border: "1px solid oklch(0.25 0.015 260)" }}>
+              {caricando > 0 ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              {caricando > 0 ? `carico ${caricando}…` : "Carica reference"}
+            </span>
+          </label>
+
+          <span className="text-[11px] opacity-45">
+            {files.length
+              ? `${perTipo("ispirazione").length} ispirazione · ${perTipo("prodotto").length} prodotto`
+              : "nessuna reference caricata per la prossima notte"}
+          </span>
+        </div>
+
+        <p className="text-[11px] opacity-50 mt-2">
+          In <b>ispirazione</b> vanno gli screenshot di post che hanno funzionato: l'agente ne prende struttura, ritmo e attacco, e riscrive con la nostra voce — mai le parole altrui.
+          In <b>prodotto</b> le immagini per i caroselli in stile IKONICK, che escono ogni 50-100 post.
+        </p>
+
+        {files.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {files.map((f) => (
+              <span key={f.path}
+                    className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-md"
+                    style={{ background: "oklch(0.11 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+                <span className="opacity-45">{f.tipo === "ispirazione" ? "💡" : "🛍"}</span>
+                <span className="max-w-[190px] truncate">{f.nome}</span>
+                <button onClick={() => elimina.mutate({ path: f.path })}
+                        disabled={elimina.isPending}
+                        className="opacity-45 hover:opacity-100" title="Rimuovi">
+                  <XIcon className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const PLATFORMS: Record<string, { label: string; icon: ElementType; color: string }> = {
   instagram: { label: "Instagram", icon: Instagram, color: "oklch(0.65 0.2 340)" },
@@ -37,6 +211,8 @@ export default function SocialDrafts() {
         </div>
         <div className="ml-auto flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style={{ background: "oklch(0.65 0.2 265 / 0.12)", border: "1px solid oklch(0.65 0.2 265 / 0.3)", color: "oklch(0.75 0.15 265)" }}><Bot className="w-3.5 h-3.5" /> {list.length} bozze</div>
       </div>
+
+      <MaterialeNotteSocial />
 
       {list.length === 0 && (
         <div className="rounded-2xl p-10 text-center text-sm text-muted-foreground" style={{ background: "oklch(0.13 0.015 260)", border: "1px dashed oklch(0.22 0.015 260)" }}>

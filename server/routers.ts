@@ -74,6 +74,14 @@ import {
   creaCreativeDesign,
   annullaCreative,
 } from "./productArtistApprovals";
+import {
+  getFonteSocial,
+  setFonteSocial,
+  listaReferenceSocial,
+  caricaReferenceSocial,
+  eliminaReferenceSocial,
+  immagineReferenceSocial,
+} from "./socialReferences";
 
 function todayRome(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -268,6 +276,41 @@ export const appRouter = router({
         systemPrompt: s.social_system_prompt || "",
       };
     }),
+
+    // ─── Materiale per la notte del Social Media Manager (run 01:00) ─────────
+    // Stesso meccanismo di Approva Design: si scrive nella repo dell'agente via
+    // API GitHub, e l'agente la trova al pull che apre il run.
+    fonte: protectedProcedure.query(async () => getFonteSocial()),
+
+    setFonte: protectedProcedure
+      .input(z.object({ modo: z.enum(["caricate", "auto"]), note: z.string().optional() }))
+      .mutation(async ({ input }) => setFonteSocial(input)),
+
+    reference: protectedProcedure
+      .input(z.object({ giorno: z.string().optional() }).optional())
+      .query(async ({ input }) => listaReferenceSocial(input?.giorno)),
+
+    caricaReference: protectedProcedure
+      .input(
+        z.object({
+          tipo: z.enum(["ispirazione", "prodotto"]),
+          nomeFile: z.string().min(1).max(200),
+          base64: z.string().min(1),
+          giorno: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => caricaReferenceSocial(input)),
+
+    eliminaReference: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        await eliminaReferenceSocial(input.path);
+        return { ok: true } as const;
+      }),
+
+    immagineReference: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .query(async ({ input }) => immagineReferenceSocial(input.path)),
   }),
 
   // ─── Claude Sessions: le sessioni Claude, continuabili da ovunque ────────────
