@@ -21,7 +21,7 @@ import {
   createClaudeSession, getClaudeSessionById, getClaudeSessions, getClaudeSessionMessages,
   insertClaudeMessage, updateClaudeSession, deleteClaudeSession,
   insertClaudeAttachment, getClaudeAttachmentsForSession, attachClaudeAttachmentsToMessage,
-  getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById,
+  getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById, findWatchlistChannel,
   getWatchlistVideoById, setWatchlistVideoLiked,
   getResearchItems, getResearchItemById, updateResearchItem, getResearchCountries,
 } from "./db";
@@ -75,6 +75,16 @@ import {
   creaCreativeDesign,
   annullaCreative,
 } from "./productArtistApprovals";
+import {
+  getFonteSocial,
+  setFonteSocial,
+  listaReferenceSocial,
+  caricaReferenceSocial,
+  eliminaReferenceSocial,
+  immagineReferenceSocial,
+  postDiRiferimento,
+  normalizzaHandle,
+} from "./socialReferences";
 
 function todayRome(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -269,6 +279,61 @@ export const appRouter = router({
         systemPrompt: s.social_system_prompt || "",
       };
     }),
+
+    // ─── Materiale per la notte del Social Media Manager (run 01:00) ─────────
+    // Stesso meccanismo di Approva Design: si scrive nella repo dell'agente via
+    // API GitHub, e l'agente la trova al pull che apre il run.
+    fonte: protectedProcedure.query(async () => getFonteSocial()),
+
+    setFonte: protectedProcedure
+      .input(z.object({
+        modo: z.enum(["caricate", "profilo", "auto"]),
+        handle: z.string().optional(),
+        note: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        // Indicare un profilo implica volerlo seguire: se non è ancora nella
+        // Watchlist si aggiunge, altrimenti la notte non troverebbe nessun post.
+        if (input.modo === "profilo" && input.handle?.trim()) {
+          const handle = normalizzaHandle(input.handle);
+          const esistente = await findWatchlistChannel(ctx.user.id, "instagram", handle);
+          if (!esistente) await addWatchlistChannel(ctx.user.id, handle, "instagram");
+        }
+        return setFonteSocial(input);
+      }),
+
+    /** Anteprima dei post da cui partirà la notte: si vede prima, non a cose fatte. */
+    postDiRiferimento: protectedProcedure
+      .input(z.object({ handle: z.string().optional(), limit: z.number().min(1).max(30).optional() }).optional())
+      .query(async ({ ctx, input }) =>
+        postDiRiferimento(ctx.user.id, { handle: input?.handle, limit: input?.limit ?? 12 }),
+      ),
+
+    reference: protectedProcedure
+      .input(z.object({ giorno: z.string().optional() }).optional())
+      .query(async ({ input }) => listaReferenceSocial(input?.giorno)),
+
+    caricaReference: protectedProcedure
+      .input(
+        z.object({
+          tipo: z.enum(["ispirazione", "prodotto"]),
+          nomeFile: z.string().min(1).max(200),
+          base64: z.string().min(1),
+          giorno: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => caricaReferenceSocial(input)),
+
+    eliminaReference: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        await eliminaReferenceSocial(input.path);
+        return { ok: true } as const;
+      }),
+
+    immagineReference: protectedProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .query(async ({ input }) => immagineReferenceSocial(input.path)),
   }),
 
   // ─── Claude Sessions: le sessioni Claude, continuabili da ovunque ────────────
