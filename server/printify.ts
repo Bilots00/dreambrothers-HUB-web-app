@@ -689,20 +689,42 @@ export async function aggiornaArtworkEsistente(input: {
     0.9,
   );
 
-  const area = (imgId: string, ids: number[]) => ({
+  // L'etichetta al collo va RISCRITTA anche qui. Le print_areas di Printify si
+  // sostituiscono in blocco, non si fondono: una PUT senza il collo cancella
+  // l'etichetta di marca dal capo (successo il 21/08 sul primo "riallinea", il
+  // logo DreamBrothers e' sparito da un prodotto che ce l'aveva). Il colore
+  // dell'etichetta segue il capo, come alla creazione.
+  const area = (imgId: string, ids: number[], scuro: boolean) => ({
     variant_ids: ids,
     placeholders: [
       ...(upFronte
         ? [{ position: "front", images: [{ id: upFronte.id, x: 0.5, y: 0.38, scale: 0.42, angle: 0 }] }]
         : []),
       { position: posizione, images: [{ id: imgId, x: 0.5, y: altezzaCapo, scale: 0.9, angle: 0 }] },
+      ...(ETICHETTA_ATTIVA
+        ? [{
+            position: "neck",
+            images: [
+              { id: scuro ? ETICHETTA_CHIARA : ETICHETTA_SCURA, x: 0.5, y: 0.5, scale: 0.7, angle: 0 },
+            ],
+          }]
+        : []),
     ],
   });
 
   const printAreas =
-    upChiaro && scure.length
-      ? [area(up.id, scure.map(v => v.id)), area(upChiaro.id, chiare.map(v => v.id))]
-      : [area(upChiaro && !scure.length ? upChiaro.id : up.id, tutte.map(v => v.id))];
+    scure.length && chiare.length
+      ? [
+          area(up.id, scure.map(v => v.id), true),
+          area(upChiaro?.id || up.id, chiare.map(v => v.id), false),
+        ]
+      : [
+          area(
+            upChiaro && !scure.length ? upChiaro.id : up.id,
+            tutte.map(v => v.id),
+            scure.length > 0,
+          ),
+        ];
 
   await api(`/shops/${shop.id}/products/${input.productId}.json`, {
     method: "PUT",
