@@ -36,10 +36,17 @@ const PREZZO_FRONTE_RETRO = Number(process.env.PRINTIFY_PREZZO_APPAREL_FRONTE_RE
 
 /** Printify fattura in USD, il negozio incassa in EUR: senza cambio il margine e' fantasia. */
 const USD_EUR = Number(process.env.PRINTIFY_USD_EUR || 0.86);
-/** Spedizione assorbita, in centesimi di USD (OPT OnDemand → Italia, primo capo). */
-const SPEDIZIONE_USD = Number(process.env.PRINTIFY_SPEDIZIONE_USD || 449);
-/** Sotto questo margine lordo il listino fisso non regge e il prezzo sale da solo. */
-const MARGINE_MINIMO = Number(process.env.PRINTIFY_MARGINE_MINIMO || 0.4);
+/** Spedizione assorbita, in centesimi di USD. Si usa il caso PEGGIORE di
+ *  Printify Choice (Italia/Europa, 10.00; negli USA sono 3.99): il pavimento di
+ *  sicurezza deve reggere l'ordine che costa di piu', non quello medio. */
+const SPEDIZIONE_USD = Number(process.env.PRINTIFY_SPEDIZIONE_USD || 1000);
+/** Sotto questo margine lordo il listino fisso non regge e il prezzo sale da solo.
+ *  0.35 e non 0.40: col caso peggiore di spedizione, un 40% secco faceva scattare
+ *  il pavimento sulla sola 2XL (30.90 invece di 29.90) e rimetteva in pagina il
+ *  prezzo-per-taglia che il listino unico serve proprio a togliere. A 0.35 il
+ *  listino regge su tutte le taglie del fornitore buono, e continua a scattare
+ *  su un fornitore davvero fuori mercato. */
+const MARGINE_MINIMO = Number(process.env.PRINTIFY_MARGINE_MINIMO || 0.35);
 
 export type TipoDesign = "apparel" | "wallart";
 
@@ -65,6 +72,36 @@ function taglia(v: Variante): string {
  * Qualsiasi cosa l'agente proponga fuori da questa lista viene scartata.
  */
 export const COLORI_CAPO_AMMESSI = ["Black", "White", "Sand", "Sport Grey"];
+
+/**
+ * ETICHETTA AL COLLO — il logo DreamBrothers stampato dentro il capo, al posto
+ * del cartellino del produttore (decisione di Andrea, 21/08/2026: "voglio dare
+ * l'impressione di essere un vero brand, non uno storettino di print on demand").
+ *
+ * Costa 0.76 USD su Printify Choice: e' la voce con il rapporto
+ * percezione/prezzo piu' alto di tutto il capo. Chi la indossa vede il nostro
+ * nome ogni volta che se la mette, e chi la regala non consegna una maglietta
+ * anonima.
+ *
+ * Due file perche' un logo bianco su un capo bianco non esiste: il nero stampa
+ * la versione chiara, White/Sand/Sport Grey quella scura. Stessa logica della
+ * variante chiara del design (regola del 20/08). Gli id sono immagini gia'
+ * caricate su Printify: si sovrascrivono da env se il logo cambia.
+ */
+const ETICHETTA_CHIARA = process.env.PRINTIFY_ETICHETTA_CHIARA || "6a883717f167ec53f1b5de41";
+const ETICHETTA_SCURA = process.env.PRINTIFY_ETICHETTA_SCURA || "6a883718f16da09edc74c1b9";
+/** Si puo' spegnere senza toccare il codice, se un fornitore la stampa male. */
+const ETICHETTA_ATTIVA = process.env.PRINTIFY_ETICHETTA_COLLO !== "off";
+
+/**
+ * Su quali capi va il logo CHIARO. Della palette ammessa e' solo il Black, ma i
+ * prodotti vecchi hanno anche Navy e Charcoal: la lista evita che un logo scuro
+ * finisca invisibile dentro un collo blu notte.
+ */
+const CAPI_SCURI = ["black", "navy", "charcoal", "dark heather", "forest green", "maroon"];
+function capoScuro(v: Variante): boolean {
+  return CAPI_SCURI.includes((v.options?.color || "").toLowerCase());
+}
 
 export type ProdottoPubblicato = {
   productId: string;
@@ -130,15 +167,27 @@ type Variante = { id: number; title: string; options: Record<string, string> };
 /**
  * Blueprint e print provider per tipo di design.
  *
- * L'apparel usa la Gildan 5000 (blueprint 6) da OPT OnDemand (provider 30).
+ * L'apparel usa la Gildan 5000 (blueprint 6) da Printify Choice (provider 99).
  *
- * Il default era Printful (410) ed e' costato caro: misurato il 21/08/2026 sullo
- * stesso capo, stessa taglia, stessa Italia, Printful chiede 14.15 USD di capo e
- * 9.38 di seconda stampa, contro 8.90 e 7.08 di OPT OnDemand — e sopra la XL
- * rincara ogni taglia, mentre OPT tiene lo stesso prezzo fino alla 2XL. Con la
- * doppia stampa erano 23.53 USD contro 15.98: il 47% in piu' per la stessa
- * maglietta. Alternativa a pari qualita' se OPT dovesse deludere: Textildruck
- * Europa (26), 9.72 USD di capo e 4.79 di spedizione in Italia.
+ * Il default era Printful (410) e costava troppo: 14.15 USD di capo e 9.38 di
+ * seconda stampa, contro 9.50 e 6.08 di Printify Choice (misurato sull'API il
+ * 21/08/2026). Con la doppia stampa, 23.53 USD contro 15.58.
+ *
+ * La scelta del fornitore la decide **dove stanno i clienti, non dove sta
+ * Andrea**. I fornitori europei costano meno in Europa ma sono un disastro
+ * oltreoceano, e viceversa. Costo sbarcato di un capo fronte-solo, USD:
+ *
+ *              Italia   Stati Uniti
+ *   99 Choice   19.50      13.49    ← unico decente in tutti e due
+ *   30 OPT      13.39      34.39    ← imbattibile in EU, perdita secca in US
+ *   410 Printful 18.94     18.44    ← piatto ovunque, ma il capo costa il 49% in piu'
+ *
+ * Gli ordini VERI dello store sono USA e Olanda (verificato sugli ordini reali,
+ * escludendo gli auto-ordini di test), quindi un fornitore solo-EU manderebbe in
+ * perdita proprio gli ordini che arrivano davvero. Printify Choice instrada da
+ * solo allo stabilimento piu' vicino al cliente: e' l'unico che non ha un caso
+ * catastrofico. Se un giorno il traffico diventasse europeo, il fornitore giusto
+ * diventerebbe OPT OnDemand (30) e si cambia con `PRINTIFY_PROVIDER_APPAREL`.
  *
  * Per la wall art non c'e' un default sicuro da indovinare: o arriva dalle env,
  * o si cerca a catalogo, cosi' un id sbagliato non finisce a creare prodotti sul
@@ -157,7 +206,7 @@ async function modello(
   );
 
   let blueprint = envBlueprint || (tipo === "apparel" ? 6 : 0);
-  let provider = envProvider || (tipo === "apparel" ? 30 : 0);
+  let provider = envProvider || (tipo === "apparel" ? 99 : 0);
 
   if (!blueprint) {
     // Wall art senza configurazione: si cerca a catalogo un poster/canvas.
@@ -275,9 +324,9 @@ function prezzoDaCosto(costo: number, tipo: TipoDesign): number {
 /**
  * Prezzo al pubblico di un capo: listino fisso, non ricarico.
  *
- * Il listino e' lo stesso per tutte le taglie ammesse — su OPT OnDemand il capo
- * costa uguale dalla S alla 2XL, quindi non c'e' niente da far pagare in piu' e
- * una scheda prodotto con sei prezzi diversi vende meno.
+ * Il listino e' lo stesso per tutte le taglie ammesse: la differenza di costo
+ * fra una S e una 2XL e' 1.95 USD, e una scheda prodotto con sei prezzi diversi
+ * vende meno di quanto quei due dollari valgano.
  *
  * Il pavimento serve solo come rete: se un giorno il fornitore rincara (o si
  * pubblica su uno caro), invece di vendere sotto il `MARGINE_MINIMO` il prezzo
@@ -357,7 +406,7 @@ export async function pubblicaProdotto(input: {
     });
   }
 
-  const areaDiStampa = (imgId: string, variantIds: number[]) => ({
+  const areaDiStampa = (imgId: string, variantIds: number[], scuro: boolean) => ({
     variant_ids: variantIds,
     placeholders: [
       // Il fronte e' lo stesso per capi scuri e chiari: la tipografia di
@@ -382,21 +431,31 @@ export async function pubblicaProdotto(input: {
           },
         ],
       },
+      // L'etichetta di marca dentro il collo, al posto di quella Gildan. Piccola
+      // (scale 0.7) e centrata: l'area di stampa del collo e' gia' stretta, un
+      // logo a piena larghezza finirebbe sulle cuciture.
+      ...(input.tipo === "apparel" && ETICHETTA_ATTIVA
+        ? [{
+            position: "neck",
+            images: [
+              { id: scuro ? ETICHETTA_CHIARA : ETICHETTA_SCURA, x: 0.5, y: 0.5, scale: 0.7, angle: 0 },
+            ],
+          }]
+        : []),
     ],
   });
 
-  // Capi scuri e capi chiari stampano file diversi quando esiste la variante
-  // chiara: e' cosi' che il testo crema resta leggibile anche su White/Sand
-  // (regola del 20/08). Della palette ammessa solo il Black e' scuro.
-  const scure = varianti.filter(v => (v.options?.color || "").toLowerCase() === "black");
-  const chiare = varianti.filter(v => (v.options?.color || "").toLowerCase() !== "black");
-  const printAreas =
-    upChiaro && chiare.length
-      ? [
-          ...(scure.length ? [areaDiStampa(up.id, scure.map(v => v.id))] : []),
-          areaDiStampa(upChiaro.id, chiare.map(v => v.id)),
-        ]
-      : [areaDiStampa(up.id, varianti.map(v => v.id))];
+  // Capi scuri e capi chiari vanno comunque separati, anche senza variante
+  // chiara del design: l'etichetta al collo cambia colore con il capo, quindi
+  // servono due print area distinte in ogni caso.
+  const scure = varianti.filter(capoScuro);
+  const chiare = varianti.filter(v => !capoScuro(v));
+  const printAreas = [
+    ...(scure.length ? [areaDiStampa(up.id, scure.map(v => v.id), true)] : []),
+    // Il file chiaro (testi scuriti) si usa solo se esiste; altrimenti i capi
+    // chiari stampano lo stesso design dei neri, come prima.
+    ...(chiare.length ? [areaDiStampa(upChiaro?.id || up.id, chiare.map(v => v.id), false)] : []),
+  ];
 
   const creato = await api<ProductResp>(`/shops/${shop.id}/products.json`, {
     method: "POST",
@@ -420,10 +479,16 @@ export async function pubblicaProdotto(input: {
   let prezzoDa: number | null = null;
   const conCosto = (creato.variants || []).filter(v => v.is_enabled && v.cost > 0);
   if (conCosto.length) {
+    // Sull'apparel il prezzo e' UNO per tutta la scheda, calcolato sulla variante
+    // che costa di piu': se il pavimento deve scattare, deve scattare per tutte,
+    // altrimenti la 2XL finisce a un prezzo diverso e la pagina torna a mostrare
+    // sei prezzi. Sulla wall art invece ogni formato ha il suo (un 100x140 e un
+    // 30x40 non sono lo stesso prodotto).
+    const costoMax = Math.max(...conCosto.map(v => v.cost));
+    const prezzoUnico = prezzoApparel(costoMax, doppiaStampa);
     const nuovi = conCosto.map(v => ({
       id: v.id,
-      price:
-        input.tipo === "apparel" ? prezzoApparel(v.cost, doppiaStampa) : prezzoDaCosto(v.cost, input.tipo),
+      price: input.tipo === "apparel" ? prezzoUnico : prezzoDaCosto(v.cost, input.tipo),
       is_enabled: true,
     }));
     prezzoDa = Math.min(...nuovi.map(v => v.price));
