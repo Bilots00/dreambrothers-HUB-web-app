@@ -13,6 +13,8 @@
  * sul tavolo sui piccoli (30x40).
  */
 
+import { assicuraSpedizioneGratuita } from "./spedizioneGratuita";
+
 const API = "https://api.printify.com/v1";
 
 /** Ricarico sul costo di stampa. 3.4x tiene il margine sopra il 70% del Brain —
@@ -511,6 +513,24 @@ export async function pubblicaProdotto(input: {
       shipping_template: true,
     },
   });
+
+  // Lo store promette spedizione gratuita in tutto il mondo, ma Printify porta
+  // con se' il proprio profilo di consegna a pagamento: senza questo passo il
+  // capo esce a 29.90 + 4.10 di spedizione e la promessa salta. Il costo vero e'
+  // gia' dentro il listino, quindi qui si azzera. Non blocca la pubblicazione se
+  // fallisce: il prodotto e' gia' online e la spedizione si sistema dopo.
+  if (input.tipo === "apparel") {
+    // L'id Shopify esiste solo DOPO la publish, e Printify lo scrive in `external`.
+    const conEsterno = await api<ProductResp & { external?: { id?: string } }>(
+      `/shops/${shop.id}/products/${creato.id}.json`,
+    );
+    const idShopify = conEsterno.external?.id;
+    if (idShopify) {
+      await assicuraSpedizioneGratuita(`gid://shopify/Product/${idShopify}`, m => console.log(`[printify] ${m}`));
+    } else {
+      console.log("[printify] Spedizione non verificata: Shopify non ha ancora restituito l'id del prodotto.");
+    }
+  }
 
   const mock = (creato.images || []).find(i => i.is_default) || (creato.images || [])[0];
 
