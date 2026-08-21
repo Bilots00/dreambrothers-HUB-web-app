@@ -13,7 +13,7 @@
  * produrre; se l'agente è fermo le decisioni restano comunque registrate.
  */
 
-import { pubblicaProdotto, aggiornaArtworkEsistente, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI } from "./printify";
+import { pubblicaProdotto, aggiornaArtworkEsistente, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI, salvaRicettaStampa } from "./printify";
 import { linkArtwork } from "./artworkLink";
 import {
   validaPacchetto,
@@ -575,6 +575,20 @@ export async function pubblicaDesign(
       posizione: tipo === "apparel" ? posizione : undefined,
       tags: [design.avatar, tipo, "DreamBrothers"].filter(Boolean),
     });
+
+    // Come e' fatto il capo, per poterlo far stampare altrove quando conviene.
+    // Se fallisce non si blocca la pubblicazione: l'ordine restera' su Printify.
+    if (tipo === "apparel") {
+      const esito = await salvaRicettaStampa(pubblicato.productId, {
+        data,
+        scuro: fileUsato,
+        chiaro: chiaro?.nomeFile || null,
+        fronte: fronte?.nomeFile || null,
+        posizione,
+        etichetta: true,
+      }).catch(e => ({ scritta: false, motivo: e instanceof Error ? e.message : String(e) }));
+      if (!esito.scritta) console.warn(`[ricetta] non salvata per ${id}: ${esito.motivo}`);
+    }
 
     await aggiornaDesign(
       data,

@@ -14,6 +14,7 @@ import { registerResearchRoutes } from "./researchRoutes";
 import { registerMarketRoutes } from "./marketRoutes";
 import { registerCreativeRoutes } from "./creativeRoutes";
 import { registerAdsLibraryRoutes } from "./adsLibraryRoutes";
+import { registerFulfillmentRoutes } from "./fulfillmentRoutes";
 import { registerDailySchedules } from "./scheduler";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -521,7 +522,13 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
+  app.use(express.json({
+    limit: "50mb",
+    // La firma dei webhook Shopify si calcola sui byte ORIGINALI: se si
+    // ri-serializza l'oggetto parsato basta uno spazio di differenza e l'HMAC
+    // non torna. Qui si tengono da parte (vedi _core/fulfillmentRoutes.ts).
+    verify: (req, _res, buf) => { (req as any).rawBody = buf; },
+  }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
@@ -534,6 +541,7 @@ async function startServer() {
   registerMarketRoutes(app);
   registerCreativeRoutes(app);
   registerAdsLibraryRoutes(app);
+  registerFulfillmentRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

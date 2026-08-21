@@ -674,3 +674,54 @@ export function dimensioniPng(base64: string): { w: number; h: number } | null {
 
 /** Soglia sotto la quale la stampa non regge (DTG vuole ~4500x5400). */
 export const MIN_LATO_LUNGO = 2400;
+
+/* ------------------------------------------------------------------ */
+/* La ricetta di stampa                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Scrive su Shopify come e' fatto questo capo, cosi' che un altro fornitore
+ * possa rifarlo identico quando conviene (vedi `fulfillmentRouter.ts`).
+ *
+ * Si salvano i NOMI dei file, non i loro indirizzi: i link all'artwork sono
+ * firmati e scadono dopo un'ora, quindi al momento dell'ordine vanno
+ * rigenerati da capo. Senza questo metafield l'ordine non e' spostabile e
+ * resta su Printify — che e' un ripiego accettabile, non un errore.
+ *
+ * Va chiamata DOPO la publish: prima Shopify non ha ancora il prodotto e
+ * Printify non conosce il suo id esterno.
+ */
+export async function salvaRicettaStampa(
+  productIdPrintify: string,
+  ricetta: { data: string; scuro: string; chiaro?: string | null; fronte?: string | null; posizione: "front" | "back"; etichetta?: boolean },
+): Promise<{ scritta: boolean; motivo?: string }> {
+  const shop = await negozio();
+  const prodotto = await api<{ external?: { id?: string } }>(`/shops/${shop.id}/products/${productIdPrintify}.json`);
+  const idShopify = prodotto.external?.id;
+  if (!idShopify) return { scritta: false, motivo: "Printify non ha ancora l'id Shopify del prodotto" };
+
+  const dominio = process.env.SHOPIFY_SHOP;
+  const token = process.env.SHOPIFY_ADMIN_TOKEN;
+  if (!dominio || !token) return { scritta: false, motivo: "mancano SHOPIFY_SHOP / SHOPIFY_ADMIN_TOKEN" };
+
+  const res = await fetch(`https://${dominio}/admin/api/${process.env.SHOPIFY_API_VERSION || "2026-04"}/graphql.json`, {
+    method: "POST",
+    headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: `mutation($m:[MetafieldsSetInput!]!){ metafieldsSet(metafields:$m){ userErrors{ message } } }`,
+      variables: {
+        m: [{
+          ownerId: `gid://shopify/Product/${idShopify}`,
+          namespace: "custom", key: "ricetta_stampa", type: "json",
+          value: JSON.stringify(ricetta),
+        }],
+      },
+    }),
+  });
+  const j = await res.json();
+  const errori = j?.data?.metafieldsSet?.userErrors || [];
+  if (j?.errors || errori.length) {
+    return { scritta: false, motivo: JSON.stringify(j?.errors || errori).slice(0, 200) };
+  }
+  return { scritta: true };
+}
