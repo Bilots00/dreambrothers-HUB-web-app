@@ -168,8 +168,12 @@ function MaterialeNotteSocial() {
                   <a key={p.url} href={p.url} target="_blank" rel="noreferrer"
                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg max-w-[320px] transition-colors hover:bg-white/5"
                      style={{ background: "oklch(0.11 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+                    {/* Instagram blocca l'hotlink delle miniature: se non carica
+                        si nasconde, invece di lasciare l'icona spezzata. */}
                     {p.thumbnailUrl && (
-                      <img src={p.thumbnailUrl} alt="" className="w-8 h-8 rounded object-cover shrink-0" />
+                      <img src={p.thumbnailUrl} alt="" referrerPolicy="no-referrer"
+                           className="w-8 h-8 rounded object-cover shrink-0"
+                           onError={(e) => { e.currentTarget.style.display = "none"; }} />
                     )}
                     <span className="min-w-0">
                       <span className="block truncate opacity-80">{p.caption ?? "(senza testo)"}</span>
