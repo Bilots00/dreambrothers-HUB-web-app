@@ -35,6 +35,11 @@ const MARKUP = Number(process.env.PRINTIFY_MARKUP || 3.4);
  */
 const PREZZO_FRONTE = Number(process.env.PRINTIFY_PREZZO_APPAREL_FRONTE || 2990);
 const PREZZO_FRONTE_RETRO = Number(process.env.PRINTIFY_PREZZO_APPAREL_FRONTE_RETRO || 3790);
+/** Il capo da donna (Gildan 5000L) costa di piu' del corrispettivo unisex e ha
+ *  un listino suo, deciso da Andrea il 21/08/2026: 34.90 con una stampa sola,
+ *  39.90 quando il capo e' stampato davanti e dietro. */
+const PREZZO_DONNA_FRONTE = Number(process.env.PRINTIFY_PREZZO_DONNA_FRONTE || 3490);
+const PREZZO_DONNA_FRONTE_RETRO = Number(process.env.PRINTIFY_PREZZO_DONNA_FRONTE_RETRO || 3990);
 
 /** Printify fattura in USD, il negozio incassa in EUR: senza cambio il margine e' fantasia. */
 const USD_EUR = Number(process.env.PRINTIFY_USD_EUR || 0.86);
@@ -250,16 +255,53 @@ async function modello(
   tipo: TipoDesign,
   colori?: string[],
   orientamento?: Orientamento,
+  /** capo da donna: Gildan 5000L al posto della 5000 unisex */
+  donna = false,
 ): Promise<{ blueprint: number; provider: number; varianti: Variante[] }> {
   const envBlueprint = Number(
-    tipo === "apparel" ? process.env.PRINTIFY_BLUEPRINT_APPAREL : process.env.PRINTIFY_BLUEPRINT_WALLART,
+    tipo === "apparel"
+      ? donna
+        ? process.env.PRINTIFY_BLUEPRINT_APPAREL_DONNA
+        : process.env.PRINTIFY_BLUEPRINT_APPAREL
+      : process.env.PRINTIFY_BLUEPRINT_WALLART,
   );
   const envProvider = Number(
     tipo === "apparel" ? process.env.PRINTIFY_PROVIDER_APPAREL : process.env.PRINTIFY_PROVIDER_WALLART,
   );
 
-  let blueprint = envBlueprint || (tipo === "apparel" ? 6 : 0);
+  let blueprint = envBlueprint || (tipo === "apparel" && !donna ? 6 : 0);
   let provider = envProvider || (tipo === "apparel" ? 99 : 0);
+
+  /* ── Il capo da donna si CERCA a catalogo ──────────────────────────────────
+     L'id della 5000L non si scrive a memoria: un numero sbagliato qui non da'
+     errore, crea un prodotto su un capo diverso e se ne accorge solo chi apre
+     lo store. Si cerca per nome e, se non c'e', ci si ferma dicendolo. */
+  if (tipo === "apparel" && donna && !blueprint) {
+    const catalogo = await api<{ id: number; title: string; brand?: string; model?: string }[]>(
+      "/catalog/blueprints.json",
+    );
+    const nome = (b: { title?: string; model?: string }) => `${b.title || ""} ${b.model || ""}`;
+    const trovato =
+      catalogo.find(b => /5000L/i.test(nome(b))) ||
+      catalogo.find(b => /gildan/i.test(`${b.brand || ""} ${nome(b)}`) && /ladies|women/i.test(nome(b)));
+    if (!trovato) {
+      throw new Error(
+        "Capo da donna non trovato a catalogo (cercata la Gildan 5000L). " +
+          "Imposta PRINTIFY_BLUEPRINT_APPAREL_DONNA su Railway con l'id giusto.",
+      );
+    }
+    blueprint = trovato.id;
+  }
+
+  // Il fornitore dell'unisex potrebbe non stampare il capo da donna: in quel
+  // caso si prende il primo che lo fa, invece di fallire su un id che qui non
+  // c'entra niente.
+  if (tipo === "apparel" && donna && provider) {
+    const providers = await api<{ id: number; title: string }[]>(
+      `/catalog/blueprints/${blueprint}/print_providers.json`,
+    ).catch(() => [] as { id: number; title: string }[]);
+    if (providers.length && !providers.some(p => p.id === provider)) provider = providers[0].id;
+  }
 
   if (!blueprint) {
     // Wall art senza configurazione: si cerca a catalogo un poster/canvas.
@@ -387,8 +429,14 @@ function prezzoDaCosto(costo: number, tipo: TipoDesign): number {
  * USD, il listino e' in centesimi di EUR: senza il cambio si confronterebbero
  * due valute diverse.
  */
-export function prezzoApparel(costo: number, doppiaStampa: boolean): number {
-  const listino = doppiaStampa ? PREZZO_FRONTE_RETRO : PREZZO_FRONTE;
+export function prezzoApparel(costo: number, doppiaStampa: boolean, donna = false): number {
+  const listino = donna
+    ? doppiaStampa
+      ? PREZZO_DONNA_FRONTE_RETRO
+      : PREZZO_DONNA_FRONTE
+    : doppiaStampa
+      ? PREZZO_FRONTE_RETRO
+      : PREZZO_FRONTE;
   const costoEur = (costo + SPEDIZIONE_USD) * USD_EUR;
   const pavimento = Math.ceil(costoEur / (1 - MARGINE_MINIMO) / 100) * 100 - 10;
   return Math.max(listino, pavimento);
@@ -428,12 +476,19 @@ export async function pubblicaProdotto(input: {
   contenuto?: ContenutoStampa | null;
   /** dimensioni del file di stampa in px */
   fileStampa?: { w: number; h: number } | null;
+  /** design femminile: si stampa sul capo da donna (Gildan 5000L), col suo listino */
+  donna?: boolean;
 }): Promise<ProdottoPubblicato> {
   const shop = await negozio();
   // L'orientamento si legge dall'artwork vero, non si assume.
   const dim = dimensioniPng(input.base64);
   const orientamento = dim ? orientamentoDa(dim.w, dim.h) : undefined;
-  const { blueprint, provider, varianti } = await modello(input.tipo, input.colori, orientamento);
+  const { blueprint, provider, varianti } = await modello(
+    input.tipo,
+    input.colori,
+    orientamento,
+    input.tipo === "apparel" && !!input.donna,
+  );
   const posizione = input.posizione || "front";
 
   // Per URL non c'e' limite di dimensione; il base64 resta come rete di
@@ -556,7 +611,7 @@ export async function pubblicaProdotto(input: {
     // sei prezzi. Sulla wall art invece ogni formato ha il suo (un 100x140 e un
     // 30x40 non sono lo stesso prodotto).
     const costoMax = Math.max(...conCosto.map(v => v.cost));
-    const prezzoUnico = prezzoApparel(costoMax, doppiaStampa);
+    const prezzoUnico = prezzoApparel(costoMax, doppiaStampa, !!input.donna);
     const nuovi = conCosto.map(v => ({
       id: v.id,
       price: input.tipo === "apparel" ? prezzoUnico : prezzoDaCosto(v.cost, input.tipo),

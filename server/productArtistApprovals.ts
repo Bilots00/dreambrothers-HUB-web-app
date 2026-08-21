@@ -86,6 +86,16 @@ export type SchedaStampa = {
   posizione: "front" | "back";
   /** i colori del capo, nomi come li chiama Printify: "Black", "White", … */
   colori: string[];
+  /**
+   * A chi parla il DESIGN, non che taglio ha il capo.
+   *
+   * Decide su quale maglietta si stampa: `women` va sulla Gildan 5000L, che è
+   * più corta e ha le maniche proporzionate, invece della 5000 unisex (regola
+   * di Andrea del 21/08/2026). Cambia anche il listino, perché quel capo costa
+   * di più. Senza questo campo si guarda il titolo, che per convenzione dice
+   * "Women's Tee" quando il design non è neutro.
+   */
+  target?: "women" | "men" | "neutro" | null;
   /** cosa mettere sul fronte quando la grafica principale va dietro */
   fronteComplementare?: string | null;
   /** le PAROLE ESATTE del fronte (regola fronte/retro: l'ancora identitaria) */
@@ -686,6 +696,7 @@ export async function pubblicaDesign(
       tipo,
       colori: tipo === "apparel" ? coloriEffettivi : undefined,
       posizione: tipo === "apparel" ? posizione : undefined,
+      donna: tipo === "apparel" && designDaDonna(design),
       contenuto: metaStampa?.contenuto || null,
       fileStampa: metaStampa?.fileW && metaStampa?.fileH
         ? { w: metaStampa.fileW, h: metaStampa.fileH }
@@ -810,6 +821,21 @@ const RIPULISCI_TRATTINI = (s: string) => s.replace(/\s*[—–]\s*/g, ", ");
  * qui si costruisce solo il ripiego, con le parole del design invece del
  * concept di regia (che dava "BORN — T-Shirt DreamBrothers").
  */
+/**
+ * Il design è da donna?
+ *
+ * La scheda dell'agente comanda; per i design decisi prima che il campo
+ * esistesse si legge il titolo, che per regola dichiara il target solo quando è
+ * vero ("Women's Tee"). Nel dubbio si resta sull'unisex: pubblicare un capo
+ * neutro sulla 5000L sarebbe un errore silenzioso che paga il cliente con una
+ * taglia sbagliata.
+ */
+export function designDaDonna(d: Design): boolean {
+  const target = d.stampa?.target;
+  if (target) return target === "women";
+  return /(women|woman|girls?|ladies)/i.test(`${d.stampa?.titolo || ""} ${d.testoDaComporre || ""}`);
+}
+
 export function titoloProdotto(d: Design): string {
   const scritto = d.stampa?.titolo?.trim();
   if (scritto) return RIPULISCI_TRATTINI(scritto).slice(0, 140);
