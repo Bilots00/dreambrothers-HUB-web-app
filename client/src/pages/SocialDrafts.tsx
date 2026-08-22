@@ -1,9 +1,105 @@
-import { useState, useEffect, type ElementType } from "react";
-import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter, Sparkles, Upload, Loader2, X as XIcon } from "lucide-react";
+import { useState, useEffect, useMemo, type ElementType } from "react";
+import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter, Sparkles, Upload, Loader2, X as XIcon, Calendar1, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { trpc } from "@/lib/trpc";
+
+/* ------------------------------------------------------------------ */
+/* Selettore notte, come in Approva Design: le bozze si guardano per   */
+/* notte di produzione, non tutte insieme in un rotolo infinito. I     */
+/* giorni senza bozze non sono cliccabili.                             */
+/* ------------------------------------------------------------------ */
+
+const ISO = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const daISO = (s: string) => {
+  const [y, m, g] = s.split("-").map(Number);
+  return new Date(y, m - 1, g);
+};
+
+const etichettaData = (s?: string) => {
+  if (!s) return "—";
+  const oggi = ISO(new Date());
+  const ieri = ISO(new Date(Date.now() - 86_400_000));
+  if (s === oggi) return "Stanotte";
+  if (s === ieri) return "Ieri";
+  return daISO(s).toLocaleDateString("it-IT", { weekday: "short", day: "2-digit", month: "long", year: "numeric" });
+};
+
+function SelettoreNotte({
+  disponibili, valore, onChange,
+}: { disponibili: string[]; valore?: string; onChange: (d: string) => void }) {
+  const [aperto, setAperto] = useState(false);
+  const [mese, setMese] = useState<Date>(valore ? daISO(valore) : new Date());
+
+  const set = useMemo(() => new Set(disponibili), [disponibili]);
+  const conBozze = useMemo(() => disponibili.map(daISO), [disponibili]);
+  const scegli = (iso: string) => { onChange(iso); setAperto(false); };
+
+  const scorciatoie = [
+    { label: "Ultima notte", iso: disponibili[0] },
+    { label: "Stanotte", iso: set.has(ISO(new Date())) ? ISO(new Date()) : undefined },
+    { label: "Ieri", iso: set.has(ISO(new Date(Date.now() - 86_400_000))) ? ISO(new Date(Date.now() - 86_400_000)) : undefined },
+    { label: "Tutte", iso: "tutte" },
+  ].filter((s) => s.iso);
+
+  return (
+    <Popover open={aperto} onOpenChange={setAperto}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-2 font-normal">
+          <Calendar1 className="w-4 h-4 opacity-70" />
+          <span>{valore === "tutte" ? "Tutte le notti" : etichettaData(valore)}</span>
+          {valore && valore !== "tutte" && <span className="opacity-45 text-xs">{valore}</span>}
+          <ChevronDown className="w-3.5 h-3.5 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+
+      <PopoverContent align="start" className="w-auto p-0" style={CARD}>
+        <div className="flex">
+          <div className="p-2 flex flex-col gap-0.5 min-w-[150px]"
+               style={{ borderRight: "1px solid oklch(0.2 0.015 260)" }}>
+            {scorciatoie.map((s) => (
+              <button key={s.label} onClick={() => scegli(s.iso!)}
+                      className="text-left text-sm px-3 py-1.5 rounded-md hover:bg-white/5 transition-colors"
+                      style={valore === s.iso ? { background: "oklch(0.22 0.02 260)" } : undefined}>
+                {s.label}
+              </button>
+            ))}
+            <div className="mt-1 pt-2 px-3 text-[11px] opacity-45"
+                 style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
+              {disponibili.length} notti disponibili
+            </div>
+          </div>
+          <Calendar
+            mode="single"
+            month={mese}
+            onMonthChange={setMese}
+            selected={valore && valore !== "tutte" ? daISO(valore) : undefined}
+            onSelect={(d) => d && set.has(ISO(d)) && scegli(ISO(d))}
+            disabled={(d) => !set.has(ISO(d))}
+            modifiers={{ conBozze }}
+            modifiersStyles={{ conBozze: { fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 } }}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** L'immagine generata dall'agente: si chiede solo per la bozza che la mostra. */
+function ImmagineBozza({ id }: { id: number }) {
+  const q = trpc.social.draftAssets.useQuery({ id }, { staleTime: 5 * 60_000 });
+  const src = q.data?.[0];
+  if (!src) return null;
+  return (
+    <img src={src} alt="" className="w-full rounded-lg mb-3"
+         style={{ maxHeight: 260, objectFit: "cover", border: "1px solid oklch(0.2 0.015 260)" }} />
+  );
+}
 
 const CARD = { background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" };
 
@@ -270,7 +366,22 @@ export default function SocialDrafts() {
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState<{ title: string; caption: string; hashtags: string }>({ title: "", caption: "", hashtags: "" });
 
-  const list: Draft[] = drafts.data ?? [];
+  const tutte: Draft[] = drafts.data ?? [];
+
+  // Le notti in cui l'agente ha davvero prodotto qualcosa, dalla piu' recente.
+  const notti = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of tutte) if (d.createdAt) s.add(ISO(new Date(d.createdAt as unknown as string)));
+    return Array.from(s).sort((a, b) => b.localeCompare(a));
+  }, [tutte]);
+
+  const [notte, setNotte] = useState<string | undefined>(undefined);
+  // Di default si apre sull'ultima notte prodotta, non su tutto l'archivio.
+  useEffect(() => { if (!notte && notti.length) setNotte(notti[0]); }, [notti, notte]);
+
+  const list: Draft[] = notte && notte !== "tutte"
+    ? tutte.filter((d) => d.createdAt && ISO(new Date(d.createdAt as unknown as string)) === notte)
+    : tutte;
   const startEdit = (d: Draft) => { setEditId(d.id); setForm({ title: d.title ?? "", caption: d.caption ?? "", hashtags: d.hashtags ?? "" }); };
   const saveEdit = () => { if (editId == null) return; update.mutate({ id: editId, ...form }); setEditId(null); };
 
@@ -284,6 +395,15 @@ export default function SocialDrafts() {
         </div>
         <div className="ml-auto flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style={{ background: "oklch(0.65 0.2 265 / 0.12)", border: "1px solid oklch(0.65 0.2 265 / 0.3)", color: "oklch(0.75 0.15 265)" }}><Bot className="w-3.5 h-3.5" /> {list.length} bozze</div>
       </div>
+
+      {notti.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <SelettoreNotte disponibili={notti} valore={notte} onChange={setNotte} />
+          <span className="text-xs opacity-45">
+            {list.length} bozze in questa notte · {tutte.length} in archivio
+          </span>
+        </div>
+      )}
 
       <MaterialeNotteSocial />
 
@@ -305,6 +425,8 @@ export default function SocialDrafts() {
                 <span className="text-xs px-2 py-0.5 rounded-full ml-auto" style={{ background: "oklch(0.2 0.02 260)", color: "oklch(0.7 0.02 260)" }}>{d.format}</span>
                 <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "oklch(0.65 0.2 265 / 0.15)", color: "oklch(0.75 0.15 265)" }}>{STATUS_LABEL[d.status] ?? d.status}</span>
               </div>
+
+              {!editing && <ImmagineBozza id={d.id} />}
 
               {editing ? (
                 <div className="space-y-2">

@@ -17,7 +17,7 @@ import {
   getTrackingConfigByAccount, upsertTrackingConfig,
   getAllUserSettings, upsertUserSetting,
   getCsConversationsForUser, getCsMessagesForConversation, recordCsReply, updateCsConversation, getCsConversationById,
-  getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, updateSocialDraft, deleteSocialDraft,
+  getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, getSocialDraftAssets, updateSocialDraft, deleteSocialDraft,
   createClaudeSession, getClaudeSessionById, getClaudeSessions, getClaudeSessionMessages,
   insertClaudeMessage, updateClaudeSession, deleteClaudeSession,
   insertClaudeAttachment, getClaudeAttachmentsForSession, attachClaudeAttachmentsToMessage,
@@ -249,6 +249,19 @@ export const appRouter = router({
     draftsList: protectedProcedure.query(async ({ ctx }) => {
       return getSocialDraftsForUser(ctx.user.id);
     }),
+    /** Le immagini di UNA bozza: mai tutte insieme, o la lista non risponde piu'. */
+    draftAssets: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const grezzo = await getSocialDraftAssets(input.id);
+        if (!grezzo) return [] as string[];
+        try {
+          const v = JSON.parse(grezzo);
+          return Array.isArray(v) ? (v as string[]) : [String(v)];
+        } catch {
+          return [grezzo];
+        }
+      }),
     draftUpdate: protectedProcedure
       .input(z.object({
         id: z.number(),

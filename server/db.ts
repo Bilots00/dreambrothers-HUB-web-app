@@ -478,10 +478,46 @@ export async function insertSocialDraft(data: typeof socialDrafts.$inferInsert):
   return Number((r as unknown as { insertId: number }[])[0].insertId);
 }
 
+/**
+ * La lista NON porta con sé `assets`.
+ *
+ * Il 2026-08-22 l'agente social ha scritto le immagini generate come data URI
+ * dentro quella colonna: ~1,4 MB l'una, e la select con `SELECT *` ha smesso di
+ * rispondere (errore 500 sull'intera lista, quindi pagina Bozze vuota — anche
+ * per le bozze vecchie che non c'entravano niente). Le immagini si leggono una
+ * alla volta con getSocialDraftAssets, mai in blocco.
+ */
 export async function getSocialDraftsForUser(userId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(socialDrafts).where(eq(socialDrafts.userId, userId)).orderBy(desc(socialDrafts.createdAt)).limit(200);
+  return db.select({
+    id: socialDrafts.id,
+    userId: socialDrafts.userId,
+    platform: socialDrafts.platform,
+    format: socialDrafts.format,
+    title: socialDrafts.title,
+    caption: socialDrafts.caption,
+    hashtags: socialDrafts.hashtags,
+    status: socialDrafts.status,
+    scheduledAt: socialDrafts.scheduledAt,
+    createdBy: socialDrafts.createdBy,
+    sourceUrl: socialDrafts.sourceUrl,
+    notes: socialDrafts.notes,
+    createdAt: socialDrafts.createdAt,
+    updatedAt: socialDrafts.updatedAt,
+  }).from(socialDrafts).where(eq(socialDrafts.userId, userId)).orderBy(desc(socialDrafts.createdAt)).limit(200);
+}
+
+/** Gli asset di UNA bozza: si chiede solo quando serve mostrarli. */
+export async function getSocialDraftAssets(id: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ assets: socialDrafts.assets })
+    .from(socialDrafts).where(eq(socialDrafts.id, id)).limit(1);
+  const v = rows[0]?.assets;
+  if (v == null) return null;
+  // La colonna e' json: puo' arrivare come stringa o come valore gia' decodificato.
+  return typeof v === "string" ? v : JSON.stringify(v);
 }
 
 export async function updateSocialDraft(id: number, patch: Partial<typeof socialDrafts.$inferInsert>): Promise<void> {
