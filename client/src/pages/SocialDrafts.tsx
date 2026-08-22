@@ -396,6 +396,9 @@ export default function SocialDrafts() {
         <div className="ml-auto flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style={{ background: "oklch(0.65 0.2 265 / 0.12)", border: "1px solid oklch(0.65 0.2 265 / 0.3)", color: "oklch(0.75 0.15 265)" }}><Bot className="w-3.5 h-3.5" /> {list.length} bozze</div>
       </div>
 
+
+      <MaterialeNotteSocial />
+
       {notti.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
           <SelettoreNotte disponibili={notti} valore={notte} onChange={setNotte} />
@@ -404,8 +407,6 @@ export default function SocialDrafts() {
           </span>
         </div>
       )}
-
-      <MaterialeNotteSocial />
 
       {list.length === 0 && (
         <div className="rounded-2xl p-10 text-center text-sm text-muted-foreground" style={{ background: "oklch(0.13 0.015 260)", border: "1px dashed oklch(0.22 0.015 260)" }}>
