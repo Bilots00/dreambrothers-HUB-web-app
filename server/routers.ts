@@ -100,6 +100,17 @@ import {
   runAllEtsyShops, getEtsyShopDetail, analyzeEtsyShopLive,
 } from "./etsyService";
 
+/**
+ * Normalizza l'orario dell'automazione notturna a "HH:MM" (24h).
+ * Un valore assente o malformato non deve poter spegnere l'agente di fatto:
+ * si ripiega sull'01:00, l'orario con cui la notte ha sempre girato.
+ */
+export function ORARIO_NOTTE(raw?: string | null): string {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec((raw ?? "").trim());
+  if (!m) return "01:00";
+  return `${m[1].padStart(2, "0")}:${m[2]}`;
+}
+
 function fmtClock(d: Date | string): string {
   return new Date(d).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Rome" });
 }
@@ -291,6 +302,11 @@ export const appRouter = router({
         autopilot: s.social_autopilot === "true",
         referenceFolder: s.social_reference_folder || "E:\\IDriveLocal\\ALL FILES -Cloud-Drive_andrea.bilotta00@gmail.com\\E-commerce\\MARKETING - PNL, Copy & Vendita\\Instagram DAILY post (Organic)",
         systemPrompt: s.social_system_prompt || "",
+        // Interruttore e orario della notte del Social Media Manager. Il valore
+        // di default e' "acceso all'01:00", cioe' come girava prima che questi
+        // due comandi esistessero: chi non li ha mai toccati non cambia nulla.
+        nightlyEnabled: s.social_nightly_enabled !== "false",
+        nightlyRunAt: ORARIO_NOTTE(s.social_nightly_run_at),
       };
     }),
 

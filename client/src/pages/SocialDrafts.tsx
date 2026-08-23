@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, type ElementType } from "react";
-import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter, Sparkles, Upload, Loader2, X as XIcon, Calendar1, ChevronDown } from "lucide-react";
+import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter, Sparkles, Upload, Loader2, X as XIcon, Calendar1, ChevronDown, Moon, PowerOff } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 
 /* ------------------------------------------------------------------ */
@@ -356,6 +357,87 @@ const PLATFORMS: Record<string, { label: string; icon: ElementType; color: strin
 };
 const STATUS_LABEL: Record<string, string> = { draft: "Bozza", scheduled: "Pianificato", published: "Pubblicato", rejected: "Rifiutato" };
 
+/* ------------------------------------------------------------------ */
+/* Automazione notturna: interruttore + orario.                        */
+/*                                                                     */
+/* Nasce da una notte persa (23/08/2026): il job serale delle 23:00 si */
+/* era mangiato la finestra Claude da 5 ore, e all'01:00 il Social     */
+/* Media Manager ha trovato il serbatoio vuoto — tre tentativi, zero   */
+/* bozze. Spostare l'ora voleva dire aprire il crontab del VPS via     */
+/* ssh. Da qui questi due comandi: si sposta la notte, o la si spegne, */
+/* senza toccare il server.                                            */
+/* ------------------------------------------------------------------ */
+
+function AutomazioneNotturna() {
+  const config = trpc.social.config.useQuery();
+  const [orario, setOrario] = useState("01:00");
+
+  // L'input segue il server finche' Andrea non ci mette le mani: dopo il primo
+  // salvataggio il refetch riporta il valore vero e i due restano allineati.
+  useEffect(() => { if (config.data?.nightlyRunAt) setOrario(config.data.nightlyRunAt); }, [config.data?.nightlyRunAt]);
+
+  const salva = trpc.settings.set.useMutation({
+    onSuccess: () => config.refetch(),
+    onError: (e) => toast.error(e.message),
+  });
+
+  const attiva = config.data?.nightlyEnabled ?? true;
+  const inCorso = salva.isPending || config.isLoading;
+
+  const cambiaInterruttore = (v: boolean) => {
+    salva.mutate({ key: "social_nightly_enabled", value: v ? "true" : "false" });
+    toast.success(v ? `Automazione accesa — riparte alle ${orario}` : "Automazione spenta: stanotte nessuna bozza");
+  };
+
+  const cambiaOrario = (v: string) => {
+    setOrario(v);
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(v)) return;   // input a meta' digitazione: si aspetta
+    salva.mutate({ key: "social_nightly_run_at", value: v });
+    toast.success(`Da stanotte l'agente parte alle ${v}`);
+  };
+
+  return (
+    <div className="rounded-xl p-4 space-y-3" style={CARD}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            {attiva ? <Moon className="w-4 h-4 opacity-70" /> : <PowerOff className="w-4 h-4 opacity-70" />}
+            Automazione notturna
+          </h2>
+          <p className="text-xs opacity-55 mt-0.5">
+            {attiva
+              ? "Il Social Media Manager gira ogni notte e lascia qui le bozze. Sposta l'ora o spegnilo quando vuoi."
+              : "Spenta. Stanotte non verra' scritta nessuna bozza, finche' non la riaccendi."}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs opacity-60">{attiva ? "Accesa" : "Spenta"}</span>
+          <Switch checked={attiva} disabled={inCorso} onCheckedChange={cambiaInterruttore} />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap pt-1"
+           style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
+        <label htmlFor="orario-notte" className="text-xs opacity-60 flex items-center gap-1.5 pt-3">
+          <Clock className="w-3.5 h-3.5" /> Ora di partenza
+        </label>
+        <input
+          id="orario-notte"
+          type="time"
+          value={orario}
+          disabled={!attiva || inCorso}
+          onChange={(e) => cambiaOrario(e.target.value)}
+          className="mt-3 rounded-lg px-3 py-1.5 text-sm tabular-nums outline-none disabled:opacity-40"
+          style={{ background: "oklch(0.18 0.015 260)", border: "1px solid oklch(0.24 0.015 260)", colorScheme: "dark" }}
+        />
+        <span className="text-[11px] opacity-45 mt-3">
+          {attiva ? `prossima notte alle ${orario}` : "nessuna partenza programmata"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function SocialDrafts() {
   const utils = trpc.useUtils();
   const drafts = trpc.social.draftsList.useQuery(undefined, { refetchInterval: 8000 });
@@ -396,6 +478,8 @@ export default function SocialDrafts() {
         <div className="ml-auto flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style={{ background: "oklch(0.65 0.2 265 / 0.12)", border: "1px solid oklch(0.65 0.2 265 / 0.3)", color: "oklch(0.75 0.15 265)" }}><Bot className="w-3.5 h-3.5" /> {list.length} bozze</div>
       </div>
 
+
+      <AutomazioneNotturna />
 
       <MaterialeNotteSocial />
 

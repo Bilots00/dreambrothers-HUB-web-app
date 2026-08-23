@@ -7,6 +7,7 @@ import {
   getAllUserSettings,
   upsertUserSetting,
 } from "../db";
+import { ORARIO_NOTTE } from "../routers";
 
 // Social content endpoints — twin of careRoutes.ts, same "local-Claude-primary" model:
 //   the web app writes the owner's chat messages (via tRPC), the LOCAL Claude social
@@ -155,6 +156,10 @@ export function registerSocialRoutes(app: Express) {
         referenceFolder: s.social_reference_folder || DEFAULT_REFERENCE_FOLDER,
         systemPrompt: s.social_system_prompt || "",
         localAgentOnline: lastSeen > 0 && Date.now() - lastSeen < LOCAL_AGENT_ONLINE_MS,
+        // Le due manopole che il cron del VPS interroga prima di lavorare:
+        // se nightlyEnabled e' false non parte, e parte solo all'ora indicata.
+        nightlyEnabled: s.social_nightly_enabled !== "false",
+        nightlyRunAt: ORARIO_NOTTE(s.social_nightly_run_at),
       });
     } catch (err) {
       console.warn("[social/config] error:", err);
