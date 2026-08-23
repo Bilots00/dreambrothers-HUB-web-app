@@ -573,7 +573,7 @@ export const appRouter = router({
       const lastSeen = Number(s.video_agent_last_seen ?? 0);
       return {
         autopilot: s.video_autopilot === "true",
-        engine: s.video_engine || "tinker",
+        engine: s.video_engine || "gemini",
         platform: s.video_platform || "tiktok",
         dailyCount: Number(s.video_daily_count ?? 3) || 3,
         aspect: s.video_aspect || "9:16",
@@ -591,7 +591,7 @@ export const appRouter = router({
     setConfig: protectedProcedure
       .input(z.object({
         autopilot: z.boolean().optional(),
-        engine: z.enum(["tinker", "ffmpeg", "resolve", "capcut"]).optional(),
+        engine: z.enum(["gemini", "tinker", "resolve", "capcut"]).optional(),
         platform: z.string().optional(),
         dailyCount: z.number().min(1).max(10).optional(),
         aspect: z.string().optional(),

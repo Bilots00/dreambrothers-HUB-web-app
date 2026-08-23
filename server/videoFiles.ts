@@ -1,8 +1,7 @@
 /**
  * I file video dell'agente Video Editor.
  *
- * Il montaggio gira sul PC di Andrea (Tinker vive dentro BlueStacks, che su un
- * VPS Linux non esiste) e committa gli MP4 nella repo dell'agente. La repo è
+ * L'agente monta i video sul VPS e li committa nella repo dell'agente. La repo è
  * privata, quindi `raw.githubusercontent` non è raggiungibile dal browser: la
  * web app fa da ponte, con lo stesso schema già collaudato per gli artwork di
  * Printify — link **firmato e a scadenza**.
@@ -38,14 +37,14 @@ function repoSlug(): { owner: string; repo: string } {
 }
 
 function token(): string {
-  // Si ricade sui token degli altri agenti: sono tutti sullo stesso account, e
-  // chiedere ad Andrea un quarto token per la stessa cosa è lavoro inutile.
+  // NESSUN token nuovo. Le repo degli agenti stanno tutte sullo stesso account
+  // GitHub, quindi il token del Product Artist apre anche questa: aggiungerne
+  // un altro sarebbe una variabile in più da tenere viva senza guadagnarci niente.
   const t =
-    process.env.VIDEO_EDITOR_GITHUB_TOKEN ||
     process.env.PRODUCT_ARTIST_GITHUB_TOKEN ||
     process.env.SEO_AGENT_GITHUB_TOKEN ||
     process.env.GITHUB_TOKEN;
-  if (!t) throw new Error("Manca VIDEO_EDITOR_GITHUB_TOKEN nelle variabili Railway.");
+  if (!t) throw new Error("Manca PRODUCT_ARTIST_GITHUB_TOKEN nelle variabili Railway (lo stesso che serve agli artwork).");
   return t;
 }
 

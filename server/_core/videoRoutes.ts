@@ -32,7 +32,7 @@ const DEFAULT_ANGLES = [
   "3 motivi per cui",
   "POV cliente",
 ];
-const DEFAULT_ENGINE = "tinker";
+const DEFAULT_ENGINE = "gemini";
 const DEFAULT_DAILY_COUNT = 3;
 const DEFAULT_ASPECT = "9:16";
 const DEFAULT_DURATION = 15;

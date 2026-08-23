@@ -17,11 +17,11 @@ import { Moon, Save, Wand2, AlertTriangle } from "lucide-react";
 // un solo credito del motore video. Tutto il resto qui è il brief permanente —
 // cosa montare, con che angoli, su quali prodotti e reference.
 
-type Motore = "tinker" | "ffmpeg" | "resolve" | "capcut";
+type Motore = "gemini" | "tinker" | "resolve" | "capcut";
 
 const MOTORI: { key: Motore; label: string; nota: string }[] = [
-  { key: "tinker", label: "Tinker + montaggio (gratis)", nota: "Il Creative Director genera clip e B-roll in Tinker su Android, il Video Editor le monta e ci mette i sottotitoli." },
-  { key: "ffmpeg", label: "ffmpeg (asset esistenti)", nota: "Slideshow/motion da immagini prodotto. Non ancora implementato." },
+  { key: "gemini", label: "Gemini/Veo sul VPS (gratis) — consigliato", nota: "Le clip le genera il VPS con l'abbonamento Gemini Pro che hai già. Gira col PC spento. Stesso motore video di Tinker." },
+  { key: "tinker", label: "Tinker su BlueStacks (gratis)", nota: "Clip generate nell'app Shopify su Android. Richiede il PC acceso con BlueStacks aperto." },
   { key: "resolve", label: "DaVinci Resolve (PC)", nota: "Qualità pro, ma richiede PC acceso + Resolve Studio." },
   { key: "capcut", label: "CapCut (PC)", nota: "Motore organico/shorts. Richiede PC acceso + CapCut aperto." },
 ];
@@ -41,7 +41,7 @@ export default function VideoAutomation() {
     engine: Motore; dailyCount: number; aspect: string; durationSec: number;
     angles: string; products: string; referenceUrls: string; brandNotes: string;
   }>({
-    engine: "tinker",
+    engine: "gemini",
     dailyCount: 3,
     aspect: "9:16",
     durationSec: 15,
