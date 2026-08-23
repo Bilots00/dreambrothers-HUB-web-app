@@ -3,6 +3,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { linkVideo } from "./videoFiles";
 import {
   getMetaAccountsByUserId, upsertMetaAccount, updateMetaAccountStatus,
   getCampaignsByUserId, getCampaignById, createCampaign, updateCampaign,
@@ -523,7 +524,24 @@ export const appRouter = router({
   // accende la notte.
   video: router({
     draftsList: protectedProcedure.query(async ({ ctx }) => {
-      return getVideoDraftsForUser(ctx.user.id);
+      const rows = await getVideoDraftsForUser(ctx.user.id);
+      // L'agente salva un percorso relativo alla sua repo ("2026-08-24/x.mp4"),
+      // non un URL: il link firmato lo costruiamo qui, alla lettura, perche' la
+      // firma scade e un URL congelato nel DB sarebbe morto il giorno dopo.
+      return rows.map((r) => {
+        const firma = (v: string | null) => {
+          if (!v) return v;
+          if (/^https?:\/\//.test(v)) return v;
+          const i = v.lastIndexOf("/");
+          if (i < 1) return v;
+          try {
+            return linkVideo(v.slice(0, i), v.slice(i + 1)) ?? v;
+          } catch {
+            return v;
+          }
+        };
+        return { ...r, videoUrl: firma(r.videoUrl), thumbUrl: firma(r.thumbUrl) };
+      });
     }),
     draftUpdate: protectedProcedure
       .input(z.object({

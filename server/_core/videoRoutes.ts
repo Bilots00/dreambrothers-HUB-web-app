@@ -5,6 +5,7 @@ import {
   getAllUserSettings,
   upsertUserSetting,
 } from "../db";
+import { getFileVideo, verificaLinkVideo } from "../videoFiles";
 
 // Video Editing — superficie server-to-server per l'agente notturno "Video Editor".
 //
@@ -63,6 +64,58 @@ function parseList(raw: unknown, fallback: string[]): string[] {
 }
 
 export function registerVideoRoutes(app: Express) {
+  /**
+   * Il file video, per il tag <video> della pagina Creative.
+   *
+   * Unica rotta pubblica del file, e lo è per forza: un <video src> non manda
+   * header custom. Al posto dell'autenticazione c'è una firma a scadenza —
+   * vale solo per il file che abbiamo deciso di esporre, e solo per sei ore.
+   */
+  app.get("/api/video/file/:data/:file", async (req: Request, res: Response) => {
+    try {
+      const { data, file } = req.params as Record<string, string>;
+      const { exp, sig } = req.query as Record<string, string>;
+      if (!verificaLinkVideo(data, file, exp, sig)) {
+        res.status(403).json({ error: "Link non valido o scaduto" });
+        return;
+      }
+      const f = await getFileVideo(data, file);
+      if (!f) {
+        res.status(404).json({ error: "Video non trovato" });
+        return;
+      }
+
+      res.setHeader("Content-Type", f.mime);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      // Senza Accept-Ranges il player non lascia trascinare la barra: carica
+      // tutto e basta. Con un video da 5 MB si nota subito.
+      res.setHeader("Accept-Ranges", "bytes");
+
+      const range = req.headers.range;
+      if (range) {
+        const m = /bytes=(\d*)-(\d*)/.exec(String(range));
+        const inizio = m && m[1] ? Number(m[1]) : 0;
+        const fine = m && m[2] ? Number(m[2]) : f.buffer.length - 1;
+        if (inizio >= f.buffer.length) {
+          res.status(416).setHeader("Content-Range", `bytes */${f.buffer.length}`).end();
+          return;
+        }
+        const pezzo = f.buffer.subarray(inizio, fine + 1);
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${inizio}-${fine}/${f.buffer.length}`);
+        res.setHeader("Content-Length", String(pezzo.length));
+        res.end(pezzo);
+        return;
+      }
+
+      res.setHeader("Content-Length", String(f.buffer.length));
+      res.end(f.buffer);
+    } catch (err) {
+      console.warn("[video/file]", err);
+      res.status(500).json({ error: "video failed" });
+    }
+  });
+
   // Agente -> l'interruttore e la configurazione della notte
   app.get("/api/video/config", async (req: Request, res: Response) => {
     if (!checkSecret(req, res)) return;
