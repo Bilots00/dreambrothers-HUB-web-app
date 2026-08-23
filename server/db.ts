@@ -1,6 +1,6 @@
 import { eq, desc, asc, and, or, isNull, gte, lte, sql, notInArray, inArray, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, claudeAttachments, InsertClaudeSession } from "../drizzle/schema";
+import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, videoDrafts, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, claudeAttachments, InsertClaudeSession } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -1441,4 +1441,30 @@ export async function getClaudeAttachmentsForMessages(messageIds: number[]) {
     kind: claudeAttachments.kind,
     transcript: claudeAttachments.transcript,
   }).from(claudeAttachments).where(inArray(claudeAttachments.messageId, messageIds));
+}
+
+// ─── Video Editing: bozze video dell'agente Video Editor ─────────────────────
+export async function insertVideoDraft(data: typeof videoDrafts.$inferInsert): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const r = await db.insert(videoDrafts).values(data);
+  return Number((r as unknown as { insertId: number }[])[0].insertId);
+}
+
+export async function getVideoDraftsForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(videoDrafts).where(eq(videoDrafts.userId, userId)).orderBy(desc(videoDrafts.createdAt)).limit(200);
+}
+
+export async function updateVideoDraft(id: number, patch: Partial<typeof videoDrafts.$inferInsert>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(videoDrafts).set(patch).where(eq(videoDrafts.id, id));
+}
+
+export async function deleteVideoDraft(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(videoDrafts).where(eq(videoDrafts.id, id));
 }

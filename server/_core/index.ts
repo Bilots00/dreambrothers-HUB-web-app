@@ -7,6 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { registerCareRoutes } from "./careRoutes";
 import { registerSocialRoutes } from "./socialRoutes";
+import { registerVideoRoutes } from "./videoRoutes";
 import { registerClaudeRoutes } from "./claudeRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
@@ -121,6 +122,40 @@ async function runMigrations() {
     console.log("[Migrate] Tabelle social_drafts + social_chat_messages pronte");
   } catch (err) {
     console.warn("[Migrate] tabelle social non create:", err);
+  }
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS video_drafts (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      platform VARCHAR(32) NOT NULL DEFAULT 'tiktok',
+      format VARCHAR(32) NOT NULL DEFAULT 'ugc',
+      angle VARCHAR(96),
+      title VARCHAR(255),
+      hook TEXT,
+      script TEXT,
+      caption TEXT,
+      hashtags TEXT,
+      videoUrl TEXT,
+      thumbUrl TEXT,
+      durationSec INT,
+      aspect VARCHAR(16) DEFAULT '9:16',
+      engine VARCHAR(32) DEFAULT 'tinker',
+      productHandle VARCHAR(255),
+      referenceUrl TEXT,
+      viralityScore INT,
+      shotlist JSON,
+      critique TEXT,
+      status ENUM('draft','approved','scheduled','published','rejected') NOT NULL DEFAULT 'draft',
+      createdBy VARCHAR(64) DEFAULT 'ai',
+      notes TEXT,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_video_drafts_user (userId),
+      INDEX idx_video_drafts_status (status)
+    )`);
+    console.log("[Migrate] Tabella video_drafts pronta");
+  } catch (err) {
+    console.warn("[Migrate] tabella video_drafts non creata:", err);
   }
   try {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS watchlist_channels (
@@ -534,6 +569,7 @@ async function startServer() {
   registerOAuthRoutes(app);
   registerCareRoutes(app);
   registerSocialRoutes(app);
+  registerVideoRoutes(app);
   registerClaudeRoutes(app);
   registerWatchlistRoutes(app);
   registerImageProxy(app);

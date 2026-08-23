@@ -801,3 +801,38 @@ export const claudeAttachments = mysqlTable("claude_attachments", {
 });
 
 export type ClaudeAttachment = typeof claudeAttachments.$inferSelect;
+
+// ─── Video Editing: creative video prodotte dall'agente Video Editor ──────────
+// Gemello di socialDrafts, ma il contenuto e' il VIDEO: l'agente notturno
+// consegna qui, Andrea revisiona in "Video Editing → Creative", niente va in
+// campagna senza review (regola 5 della costituzione).
+export const videoDrafts = mysqlTable("video_drafts", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  platform: varchar("platform", { length: 32 }).default("tiktok").notNull(),
+  // ugc | slideshow | talking-head | product-demo | hook-remix
+  format: varchar("format", { length: 32 }).default("ugc").notNull(),
+  angle: varchar("angle", { length: 96 }),
+  title: varchar("title", { length: 255 }),
+  hook: text("hook"),
+  script: text("script"),
+  caption: text("caption"),
+  hashtags: text("hashtags"),
+  videoUrl: text("videoUrl"),
+  thumbUrl: text("thumbUrl"),
+  durationSec: int("durationSec"),
+  aspect: varchar("aspect", { length: 16 }).default("9:16"),
+  engine: varchar("engine", { length: 32 }).default("tinker"),
+  productHandle: varchar("productHandle", { length: 255 }),
+  referenceUrl: text("referenceUrl"),
+  viralityScore: int("viralityScore"),
+  shotlist: json("shotlist"),
+  critique: text("critique"),
+  status: mysqlEnum("status", ["draft", "approved", "scheduled", "published", "rejected"]).default("draft").notNull(),
+  createdBy: varchar("createdBy", { length: 64 }).default("ai"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type VideoDraft = typeof videoDrafts.$inferSelect;

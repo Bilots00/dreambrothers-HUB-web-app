@@ -10,7 +10,7 @@ import {
   LogOut, Megaphone, Package, Package2, PanelLeft, Plug,
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar, CheckCircle2,
-  Newspaper, TrendingUp, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck,
+  Newspaper, TrendingUp, Clapperboard, Moon, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -27,6 +27,11 @@ const META_ADS_ITEMS = [
   { icon: Zap, label: "Tracking", path: "/tracking", description: "Pixel & CAPI" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts", description: "Anomalie & Recovery" },
   { icon: Plug, label: "Connetti Account", path: "/connect", description: "META Business" },
+];
+
+const VIDEO_ITEMS = [
+  { icon: Clapperboard, label: "Creative", path: "/video/creative", description: "Video montati da revisionare" },
+  { icon: Moon, label: "Automazione", path: "/video/automazione", description: "Interruttore & brief notturno" },
 ];
 
 const GELATO_ITEMS = [
@@ -74,7 +79,7 @@ const HIDDEN_ITEMS = [
 ];
 
 // Flat map for header lookup
-const ALL_ITEMS = [...META_ADS_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...SEO_ITEMS, ...CARE_ITEMS, ...CLAUDE_ITEMS, ...LIBRARY_ITEMS, ...HIDDEN_ITEMS];
+const ALL_ITEMS = [...META_ADS_ITEMS, ...VIDEO_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...SEO_ITEMS, ...CARE_ITEMS, ...CLAUDE_ITEMS, ...LIBRARY_ITEMS, ...HIDDEN_ITEMS];
 
 // ─── NavGroup component ───────────────────────────────────────────────────────
 function NavGroup({
@@ -170,6 +175,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const unreadCount = alerts?.length ?? 0;
   const { data: careConvos } = trpc.customerCare.list.useQuery(undefined, { enabled: !!user, refetchInterval: 30000 });
   const careUnread = (careConvos ?? []).filter((c) => c.unread).length;
+  const { data: videoDrafts } = trpc.video.draftsList.useQuery(undefined, { enabled: !!user, refetchInterval: 60000 });
+  const videoDaRevisionare = (videoDrafts ?? []).filter((d) => d.status === "draft").length;
 
   if (loading) return <DashboardLayoutSkeleton />;
 
@@ -258,6 +265,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             sidebarOpen={sidebarOpen}
             badges={{ "/alerts": unreadCount }}
             defaultOpen={true}
+          />
+
+          {/* VIDEO EDITING — sta tra META Ads e Print on Demand di proposito:
+              i creative video nascono per le campagne, non per il catalogo. */}
+          <NavGroup
+            label="Video Editing"
+            icon={Clapperboard}
+            color="oklch(0.7 0.19 30)"
+            items={VIDEO_ITEMS}
+            location={location}
+            navigate={navigate}
+            sidebarOpen={sidebarOpen}
+            badges={{ "/video/creative": videoDaRevisionare }}
+            defaultOpen={false}
           />
 
           {/* Print on Demand (Gelato + POD Partners) */}

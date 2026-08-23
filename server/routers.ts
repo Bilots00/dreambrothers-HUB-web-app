@@ -24,6 +24,9 @@ import {
   getWatchlistChannels, deleteWatchlistChannel, getWatchlistVideos, getWatchlistChannelStats, getWatchlistChannelById, findWatchlistChannel,
   getWatchlistVideoById, setWatchlistVideoLiked,
   getResearchItems, getResearchItemById, updateResearchItem, getResearchCountries,
+  getVideoDraftsForUser,
+  updateVideoDraft,
+  deleteVideoDraft,
 } from "./db";
 import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChannels } from "./watchlistService";
 import { getApifyBudget } from "./apifyBudget";
@@ -512,6 +515,94 @@ export const appRouter = router({
         lastSeen: lastSeen || null,
       };
     }),
+  }),
+
+  // ─── Video Editing: creative video dell'agente Video Editor ─────────────────
+  // Gemello del router social. La pagina "Creative" legge draftsList, la pagina
+  // "Automazione" legge/scrive config: e' li' che vive l'interruttore che
+  // accende la notte.
+  video: router({
+    draftsList: protectedProcedure.query(async ({ ctx }) => {
+      return getVideoDraftsForUser(ctx.user.id);
+    }),
+    draftUpdate: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        title: z.string().optional(),
+        hook: z.string().optional(),
+        caption: z.string().optional(),
+        hashtags: z.string().optional(),
+        notes: z.string().optional(),
+        status: z.enum(["draft", "approved", "scheduled", "published", "rejected"]).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const patch: Parameters<typeof updateVideoDraft>[1] = {};
+        if (input.title !== undefined) patch.title = input.title;
+        if (input.hook !== undefined) patch.hook = input.hook;
+        if (input.caption !== undefined) patch.caption = input.caption;
+        if (input.hashtags !== undefined) patch.hashtags = input.hashtags;
+        if (input.notes !== undefined) patch.notes = input.notes;
+        if (input.status !== undefined) patch.status = input.status;
+        await updateVideoDraft(input.id, patch);
+        return { success: true } as const;
+      }),
+    draftDelete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+      await deleteVideoDraft(input.id);
+      return { success: true } as const;
+    }),
+    config: protectedProcedure.query(async ({ ctx }) => {
+      const s = await getAllUserSettings(ctx.user.id);
+      const lastSeen = Number(s.video_agent_last_seen ?? 0);
+      return {
+        autopilot: s.video_autopilot === "true",
+        engine: s.video_engine || "tinker",
+        platform: s.video_platform || "tiktok",
+        dailyCount: Number(s.video_daily_count ?? 3) || 3,
+        aspect: s.video_aspect || "9:16",
+        durationSec: Number(s.video_duration_sec ?? 15) || 15,
+        angles: s.video_angles || ["problema→soluzione", "prima/dopo", "unboxing", "3 motivi per cui", "POV cliente"].join("\n"),
+        products: s.video_products || "",
+        referenceUrls: s.video_reference_urls || "",
+        brandNotes: s.video_brand_notes || "",
+        systemPrompt: s.video_system_prompt || "",
+        // "acceso ma muto" e' il guasto piu' probabile: si distingue qui.
+        agentOnline: lastSeen > 0 && Date.now() - lastSeen < 120_000,
+        lastSeen: lastSeen || null,
+      };
+    }),
+    setConfig: protectedProcedure
+      .input(z.object({
+        autopilot: z.boolean().optional(),
+        engine: z.enum(["tinker", "ffmpeg", "resolve", "capcut"]).optional(),
+        platform: z.string().optional(),
+        dailyCount: z.number().min(1).max(10).optional(),
+        aspect: z.string().optional(),
+        durationSec: z.number().min(5).max(60).optional(),
+        angles: z.string().optional(),
+        products: z.string().optional(),
+        referenceUrls: z.string().optional(),
+        brandNotes: z.string().optional(),
+        systemPrompt: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const map: Record<string, string | undefined> = {
+          video_autopilot: input.autopilot === undefined ? undefined : String(input.autopilot),
+          video_engine: input.engine,
+          video_platform: input.platform,
+          video_daily_count: input.dailyCount === undefined ? undefined : String(input.dailyCount),
+          video_aspect: input.aspect,
+          video_duration_sec: input.durationSec === undefined ? undefined : String(input.durationSec),
+          video_angles: input.angles,
+          video_products: input.products,
+          video_reference_urls: input.referenceUrls,
+          video_brand_notes: input.brandNotes,
+          video_system_prompt: input.systemPrompt,
+        };
+        for (const [k, v] of Object.entries(map)) {
+          if (v !== undefined) await upsertUserSetting(ctx.user.id, k, v);
+        }
+        return { success: true } as const;
+      }),
   }),
 
   // ─── Watchlist canali competitor (replica Sandcastles, dati gratuiti) ────────

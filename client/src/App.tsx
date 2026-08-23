@@ -21,6 +21,8 @@ import AgentLogs from "./pages/AgentLogs";
 import AlertsPage from "./pages/AlertsPage";
 import ConnectAccount from "./pages/ConnectAccount";
 import Home from "./pages/Home";
+import VideoCreative from "./pages/VideoCreative";
+import VideoAutomation from "./pages/VideoAutomation";
 import GelatoMaker from "./pages/GelatoMaker";
 import PodPartners from "./pages/PodPartners";
 import SocialMedia from "./pages/SocialMedia";
@@ -69,6 +71,11 @@ function AppRouter() {
       {/* SETTINGS */}
       <Route path="/settings">{withLayout(Settings)}</Route>
       <Route path="/settings/brand">{withLayout(Settings)}</Route>
+
+      {/* VIDEO EDITING */}
+      <Route path="/video/creative">{withLayout(VideoCreative)}</Route>
+      <Route path="/video/automazione">{withLayout(VideoAutomation)}</Route>
+      <Route path="/video">{() => { window.location.replace("/video/creative"); return null; }}</Route>
 
       {/* PRINT ON DEMAND (Gelato + POD Partners) */}
       <Route path="/gelato/market-fit">{withLayout(ProductMarketFit)}</Route>
