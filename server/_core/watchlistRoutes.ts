@@ -47,6 +47,7 @@ export function registerWatchlistRoutes(app: Express) {
           platform: c.platform,
           handle: c.handle,
           display_name: c.displayName,
+          platform_channel_id: c.platformChannelId,
           followers: c.followers,
           status: c.status,
           last_error: c.lastError,
@@ -150,7 +151,7 @@ export function registerWatchlistRoutes(app: Express) {
   app.post("/api/social/watchlist/ingest", async (req: Request, res: Response) => {
     if (!checkSecret(req, res)) return;
     try {
-      const { platform, handle, displayName, avatarUrl, followers, videos } = req.body ?? {};
+      const { platform, handle, displayName, avatarUrl, followers, platformChannelId, videos } = req.body ?? {};
       if (!VALID_PLATFORMS.includes(platform)) {
         res.status(400).json({ error: "platform must be youtube|instagram|tiktok" });
         return;
@@ -162,6 +163,7 @@ export function registerWatchlistRoutes(app: Express) {
       const result = await ingestWatchlistData(OWNER_USER_ID, {
         platform, handle: String(handle), displayName, avatarUrl,
         followers: followers != null ? Number(followers) : undefined,
+        platformChannelId: platformChannelId != null ? String(platformChannelId) : undefined,
         videos: Array.isArray(videos) ? videos : [],
       });
       res.json({ success: true, ...result });

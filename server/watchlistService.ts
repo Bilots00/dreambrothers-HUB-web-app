@@ -227,6 +227,7 @@ export async function ingestWatchlistData(
     displayName?: string;
     avatarUrl?: string;
     followers?: number;
+    platformChannelId?: string;
     videos?: Array<Partial<FetchedVideo> & { platformVideoId?: string; url?: string; publishedAt?: string | Date }>;
   }
 ): Promise<{ channelId: number; videosStored: number }> {
@@ -256,6 +257,7 @@ export async function ingestWatchlistData(
     displayName: payload.displayName,
     avatarUrl: payload.avatarUrl,
     followers: payload.followers != null ? Number(payload.followers) : undefined,
+    platformChannelId: payload.platformChannelId,
     videos,
   });
   return { channelId, videosStored };
