@@ -366,39 +366,51 @@ export async function decidiFronte(data: string, id: string, ok: boolean): Promi
   return getBatch(data);
 }
 
-/** Gli stili tipografici che `engine/fronte.py` sa davvero renderizzare. */
-export const STILI_FRONTE = ["gothic", "script", "marker", "hand", "stencil", "caveat"] as const;
-export type StileFronte = (typeof STILI_FRONTE)[number];
-
 /**
- * Rifà il fronte con la frase (e/o lo stile) che decide Andrea.
+ * Rifà il fronte: Andrea dà le PAROLE e/o una IMMAGINE di reference, il resto
+ * lo decide il Product Artist.
  *
- * Nasce il 2026-08-27: prima le uniche scelte erano "usa questo fronte" o
- * "no, solo retro" — e la seconda non ha senso, perché una maglietta col
- * disegno dietro e NULLA davanti non è un prodotto. La terza via mancava:
- * tenere il capo e cambiare cosa c'è scritto davanti.
+ * Nasce il 2026-08-27. Prima le scelte erano "usa questo fronte" o "no, solo
+ * retro" — e la seconda non ha senso: una maglietta col disegno dietro e nulla
+ * davanti non è un prodotto. Mancava la via vera: il capo va bene, il fronte no.
  *
- * Il fronte non è un'immagine generata dal modello: è tipografia renderizzata
- * da `engine/fronte.py` con i font in repo. Quindi "un'altra reference" qui
- * significa un'altra FRASE e/o un altro stile di lettering.
+ * Le leve sono due, ed entrambe sono da founder, non da tecnico:
+ *   - la FRASE che vuoi sul petto;
+ *   - una REFERENCE, se il fronte deve essere un design e non una scritta.
+ * Font, colori, composizione NON si chiedono ad Andrea: "è lui l'artista, non
+ * io". Il fronte finisce in coda e il Product Artist sul VPS decide da sé se
+ * risolverlo in tipografia o generando un'immagine dalla reference.
  *
- * Il meccanismo: si riscrive la scheda di stampa e si CANCELLA il vecchio
- * `_fronte.png`. Il watchdog sul PC (ogni 5 minuti) rigenera solo i fronti
- * mancanti, quindi il file nuovo nasce da sé senza lanciare comandi a mano.
+ * Il vecchio `_fronte.png` viene cancellato: senza, la catena a valle lo
+ * salterebbe come "già fatto" e la scritta vecchia resterebbe per sempre.
  */
 export async function rigeneraFronte(input: {
   data: string;
   id: string;
-  testo: string;
+  testo?: string | null;
   riga2?: string | null;
-  stile?: StileFronte | null;
+  immagine?: { base64: string; nome: string } | null;
 }): Promise<Batch | null> {
-  const testo = input.testo.trim().slice(0, 80);
-  if (!testo) throw new Error("La frase del fronte non può essere vuota.");
+  const testo = (input.testo || "").trim().slice(0, 80) || null;
   const riga2 = (input.riga2 || "").trim().slice(0, 120) || null;
-  const stile = input.stile && STILI_FRONTE.includes(input.stile) ? input.stile : null;
+  if (!testo && !input.immagine) {
+    throw new Error("Serve almeno una frase o una reference per rifare il fronte.");
+  }
+
+  // La reference vive accanto alle altre, in una cartella sua: così l'agente la
+  // ritrova col path e resta tracciata come tutto il resto del materiale.
+  let refPath: string | null = null;
+  if (input.immagine?.base64) {
+    const bytes = Buffer.from(input.immagine.base64, "base64");
+    if (bytes.length > 12 * 1024 * 1024) throw new Error("immagine troppo grande (max 12 MB)");
+    const est = (input.immagine.nome.match(/\.(png|jpe?g|webp)$/i)?.[1] || "png").toLowerCase();
+    const pulito = input.id.replace(/[^a-z0-9_-]/gi, "-").slice(0, 50);
+    refPath = `references/fronte/${input.data}_${pulito}.${est}`;
+    await scriviFile(refPath, bytes, `reference per il fronte: ${input.id}`);
+  }
 
   let daCancellare: string | null = null;
+  let fileDesign = "";
 
   await aggiornaDesign(
     input.data,
@@ -409,21 +421,72 @@ export async function rigeneraFronte(input: {
       // colori) e TypeScript la rifiuterebbe. Senza scheda di stampa il fronte
       // non esiste nemmeno come concetto, quindi si dice perché e ci si ferma.
       if (!d.stampa) throw new Error("Questo design non ha una scheda di stampa: il fronte non si può rifare.");
-      d.stampa.fronteTesto = testo;
-      d.stampa.fronteRiga2 = riga2;
-      if (stile) d.stampa.fronteStile = stile;
-      // Torna indeciso: la frase è nuova, il sì di prima valeva per l'altra.
+      if (testo) {
+        d.stampa.fronteTesto = testo;
+        d.stampa.fronteRiga2 = riga2;
+      }
+      // Torna indeciso: il fronte è un altro, il sì di prima valeva per quello vecchio.
       d.fronteApprovato = undefined;
+      fileDesign = d.file;
       daCancellare = `output/${input.data}/${d.file.replace(/\.png$/i, "_fronte.png")}`;
     },
-    `fronte da rifare: "${testo}"${stile ? ` (${stile})` : ""} — ${input.id}`,
+    `fronte da rifare${testo ? `: "${testo}"` : " da reference"} — ${input.id}`,
   );
 
-  // Senza questa cancellazione upscale-batch salterebbe il fronte ("esiste
-  // già") e Andrea vedrebbe per sempre la vecchia scritta.
+  await accodaFronte({
+    data: input.data,
+    id: input.id,
+    file: fileDesign,
+    testo,
+    riga2,
+    reference: refPath,
+    chiestoIl: new Date().toISOString(),
+  });
+
   if (daCancellare) await eliminaFileOutput(daCancellare).catch(() => {});
 
   return getBatch(input.data);
+}
+
+type RichiestaFronte = {
+  data: string;
+  id: string;
+  file: string;
+  testo: string | null;
+  riga2: string | null;
+  reference: string | null;
+  chiestoIl: string;
+};
+
+/**
+ * Mette la richiesta in `state/fronti-da-rifare.json`, la casella di posta che
+ * il Product Artist sul VPS svuota ogni pochi minuti. Stesso schema già usato
+ * per `_fonte-prossima-notte.json`: la web app scrive, il VPS legge.
+ */
+async function accodaFronte(richiesta: RichiestaFronte): Promise<void> {
+  const { owner, repo } = repoSlug();
+  const path = "state/fronti-da-rifare.json";
+  const attuale = await ghJson<{ sha: string; content: string }>(
+    `/repos/${owner}/${repo}/contents/${path}`,
+  ).catch(() => null);
+
+  let coda: RichiestaFronte[] = [];
+  if (attuale?.content) {
+    try { coda = JSON.parse(Buffer.from(attuale.content, "base64").toString("utf8")); } catch { coda = []; }
+  }
+  // Una richiesta per design: se Andrea si corregge due volte vale l'ultima.
+  coda = coda.filter(r => !(r.data === richiesta.data && r.id === richiesta.id));
+  coda.push(richiesta);
+
+  await ghJson(`/repos/${owner}/${repo}/contents/${path}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      message: `web app: fronte da rifare — ${richiesta.id}`,
+      content: Buffer.from(JSON.stringify(coda, null, 2), "utf8").toString("base64"),
+      ...(attuale?.sha ? { sha: attuale.sha } : {}),
+      committer: { name: "DreamBrothers HUB", email: "hub@dreambrothers.local" },
+    }),
+  });
 }
 
 /** Cancella un file dentro output/, se c'è. Usato per forzare una rigenerazione. */

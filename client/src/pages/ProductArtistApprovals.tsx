@@ -408,29 +408,39 @@ function Anteprima({ data, file, alt }: { data: string; file: string; alt: strin
  * finisce sul petto del capo, dove si vede più del retro. Il 21/08 è uscito un
  * "RIGHT ON TIME" che col design non c'entrava niente.
  */
-const STILI_FRONTE = ["gothic", "script", "marker", "hand", "stencil", "caveat"] as const;
-type StileFronte = (typeof STILI_FRONTE)[number];
-
-function FronteDaApprovare({ data, file, testo, riga2, stile, approvato, onDecidi, onRigenera, inCorso }: {
+function FronteDaApprovare({ data, file, testo, riga2, approvato, onDecidi, onRigenera, inCorso }: {
   data: string;
   file: string;
   testo?: string | null;
   riga2?: string | null;
-  stile?: string | null;
   approvato?: boolean;
   onDecidi: (ok: boolean) => void;
-  onRigenera: (v: { testo: string; riga2: string | null; stile: StileFronte }) => void;
+  onRigenera: (v: {
+    testo: string | null;
+    riga2: string | null;
+    immagine?: { base64: string; nome: string } | null;
+  }) => void;
   inCorso: boolean;
 }) {
-  // La frase la decide Andrea: il campo parte da quella generata, così
-  // correggere una parola non costa riscrivere tutto.
+  // Due leve, nessuna scelta da tecnico: le PAROLE e una IMMAGINE di reference.
+  // Font, colori e composizione li decide il Product Artist — è lui l'artista
+  // (Andrea, 27/08: "non posso fare scelte da professionista, è lui l'artista").
   const [modifica, setModifica] = useState(false);
   const [testo1, setTesto1] = useState(testo || "");
   const [testo2, setTesto2] = useState(riga2 || "");
-  const [stileScelto, setStileScelto] = useState<StileFronte>(
-    (STILI_FRONTE as readonly string[]).includes(stile || "") ? (stile as StileFronte) : "gothic",
-  );
+  const [ref, setRef] = useState<{ base64: string; nome: string; anteprima: string } | null>(null);
   const nome = file.replace(/\.png$/i, "_fronte.png");
+
+  const onFileFronte = (f: File | null) => {
+    if (!f) { setRef(null); return; }
+    if (f.size > 12 * 1024 * 1024) { toast.error("Immagine troppo grande (max 12 MB)"); return; }
+    const r = new FileReader();
+    r.onload = () => {
+      const dataUrl = String(r.result);
+      setRef({ base64: dataUrl.split(",")[1] || "", nome: f.name, anteprima: dataUrl });
+    };
+    r.readAsDataURL(f);
+  };
   const q = trpc.productArtist.immagine.useQuery(
     { data, file: nome },
     { staleTime: 60 * 60_000, refetchOnWindowFocus: false, retry: false },
@@ -496,30 +506,48 @@ function FronteDaApprovare({ data, file, testo, riga2, stile, approvato, onDecid
             className="w-full rounded-md px-2 py-1.5 text-[11px] outline-none"
             style={{ background: "oklch(0.11 0.015 260)", color: "oklch(0.92 0.02 260)" }}
           />
-          <div className="flex items-center gap-2">
-            <select
-              value={stileScelto}
-              onChange={e => setStileScelto(e.target.value as StileFronte)}
-              className="rounded-md px-2 py-1 text-[11px] outline-none"
-              style={{ background: "oklch(0.11 0.015 260)", color: "oklch(0.92 0.02 260)" }}
-            >
-              {STILI_FRONTE.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <button
-              className="rounded-md px-2.5 py-1 font-medium disabled:opacity-40"
-              style={{ background: "oklch(0.6 0.15 250 / 0.35)", color: "oklch(0.92 0.05 250)" }}
-              disabled={inCorso || !testo1.trim()}
-              onClick={() => {
-                onRigenera({ testo: testo1.trim(), riga2: testo2.trim() || null, stile: stileScelto });
-                setModifica(false);
-              }}
-            >
-              rigenera il fronte
-            </button>
-          </div>
+          {/* La reference: il fronte diventa un design generato da questa
+              immagine invece che una scritta. */}
+          {ref ? (
+            <div className="flex items-center gap-2">
+              <img src={ref.anteprima} alt="reference del fronte"
+                   className="h-10 w-10 rounded object-cover shrink-0" />
+              <span className="truncate opacity-80">{ref.nome}</span>
+              <button className="underline underline-offset-2 opacity-70 hover:opacity-100 shrink-0"
+                      onClick={() => setRef(null)}>
+                togli
+              </button>
+            </div>
+          ) : (
+            <label className="flex items-center gap-1.5 cursor-pointer opacity-80 hover:opacity-100">
+              <Upload className="w-3 h-3 shrink-0" />
+              <span className="underline underline-offset-2">allega una reference per il fronte</span>
+              <input type="file" accept="image/*" className="hidden"
+                     onChange={e => onFileFronte(e.target.files?.[0] || null)} />
+            </label>
+          )}
+
+          <button
+            className="rounded-md px-2.5 py-1 font-medium disabled:opacity-40"
+            style={{ background: "oklch(0.6 0.15 250 / 0.35)", color: "oklch(0.92 0.05 250)" }}
+            disabled={inCorso || (!testo1.trim() && !ref)}
+            onClick={() => {
+              onRigenera({
+                testo: testo1.trim() || null,
+                riga2: testo2.trim() || null,
+                immagine: ref ? { base64: ref.base64, nome: ref.nome } : null,
+              });
+              setModifica(false);
+              setRef(null);
+            }}
+          >
+            rifai il fronte
+          </button>
+
           <div className="opacity-70 leading-snug">
-            Il fronte è tipografia, non un'immagine generata: scegli le parole e
-            il lettering. Il file nuovo compare da solo entro pochi minuti.
+            Scrivi la frase, allega una reference, o tutte e due. Al resto — font,
+            colori, composizione — pensa il Product Artist. Il fronte nuovo
+            compare da solo entro pochi minuti.
           </div>
         </div>
       )}
@@ -1070,7 +1098,6 @@ export default function ProductArtistApprovals() {
                   file={d.file}
                   testo={d.stampa?.fronteTesto}
                   riga2={d.stampa?.fronteRiga2}
-                  stile={d.stampa?.fronteStile}
                   approvato={d.fronteApprovato}
                   inCorso={decidiFronte.isPending || rigeneraFronte.isPending}
                   onDecidi={ok => decidiFronte.mutate({ data: batch.data!.data, id: d.id, ok })}

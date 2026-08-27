@@ -69,7 +69,6 @@ import {
   getImmagine,
   decidiFronte,
   rigeneraFronte,
-  STILI_FRONTE,
   aggiornaArtwork,
   decidiDesign,
   decidiMolti,
@@ -826,9 +825,12 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
       .input(z.object({
         data: z.string().min(1),
         id: z.string().min(1),
-        testo: z.string().min(1).max(80),
+        testo: z.string().max(80).nullish(),
         riga2: z.string().max(120).nullish(),
-        stile: z.enum(STILI_FRONTE).nullish(),
+        immagine: z.object({
+          base64: z.string().min(1),
+          nome: z.string().min(1).max(200),
+        }).nullish(),
       }))
       .mutation(async ({ input }) => rigeneraFronte(input)),
 
