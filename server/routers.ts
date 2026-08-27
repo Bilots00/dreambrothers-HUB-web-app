@@ -76,6 +76,7 @@ import {
   setFonte,
   listaReference,
   caricaReference,
+  caricaDesign,
   eliminaReference,
   pubblicaDesign,
   creaCreativeDesign,
@@ -898,6 +899,20 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         }),
       )
       .mutation(async ({ input }) => caricaReference(input)),
+
+    /** Un design fatto a mano entra in bacheca come quelli della notte. */
+    caricaDesign: protectedProcedure
+      .input(
+        z.object({
+          base64: z.string().min(1),
+          nomeFile: z.string().min(1).max(200),
+          tipo: z.enum(["apparel", "wallart"]),
+          data: z.string().optional(),
+          concept: z.string().max(80).nullish(),
+          testo: z.string().max(300).nullish(),
+        }),
+      )
+      .mutation(async ({ input }) => caricaDesign(input)),
 
     eliminaReference: protectedProcedure
       .input(z.object({ path: z.string().min(1) }))

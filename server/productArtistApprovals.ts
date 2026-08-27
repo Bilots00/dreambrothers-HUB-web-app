@@ -1367,6 +1367,78 @@ export async function caricaReference(input: {
   return { path, nome, tipo: input.tipo, giorno: g, size: bytes.length, sha: "" };
 }
 
+/**
+ * Carica un design fatto a mano e lo mette in bacheca come tutti gli altri.
+ *
+ * Nasce il 2026-08-27: quando un design lo produci tu — da Telegram con
+ * l'agente, da Gemini a mano, da Photoshop — finiva fuori dal flusso, e per
+ * pubblicarlo bisognava passare dalla repo. Da qui invece entra nella stessa
+ * catena dei design notturni: approvazione, file di stampa, Printify o Gelato.
+ *
+ * Il design entra GIA' approvato: se lo carichi tu, la decisione l'hai gia'
+ * presa — sarebbe assurdo doverti chiedere il sì su una cosa che hai scelto.
+ */
+export async function caricaDesign(input: {
+  base64: string;
+  nomeFile: string;
+  tipo: "apparel" | "wallart";
+  data?: string;
+  concept?: string | null;
+  testo?: string | null;
+}): Promise<Batch | null> {
+  const bytes = Buffer.from(input.base64, "base64");
+  if (bytes.length > 25 * 1024 * 1024) throw new Error("immagine troppo grande (max 25 MB)");
+  if (bytes.length < 1024) throw new Error("file vuoto o non valido");
+  // Printify e Gelato stampano da PNG: un JPEG caricato qui salterebbe piu'
+  // avanti, nella catena di stampa, dove l'errore sarebbe incomprensibile.
+  const isPng = bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (!isPng) throw new Error("serve un PNG: gli altri formati non arrivano interi in stampa");
+
+  const data = input.data || oggiRoma();
+
+  // Il nome diventa un path e un id: si ripulisce, e si tiene unico dentro la
+  // giornata cosi' due caricamenti di fila non si sovrascrivono a vicenda.
+  const grezzo = input.nomeFile.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 50) || "design";
+  const batchEsistente = await getBatch(data).catch(() => null);
+  const presi = new Set((batchEsistente?.design || []).map(d => d.id));
+  let id = `caricato-${grezzo}`;
+  for (let n = 2; presi.has(id); n++) id = `caricato-${grezzo}-${n}`;
+
+  await scriviFile(`output/${data}/${id}.png`, bytes, `design caricato a mano: ${id}`);
+
+  const nuovo: Design = {
+    id,
+    file: `${id}.png`,
+    concept: (input.concept || grezzo).slice(0, 80),
+    avatar: "caricato da Andrea",
+    prodotto: input.tipo === "apparel" ? "tee" : "wall art",
+    fornitore: input.tipo === "apparel" ? "Printify" : "Gelato",
+    testoDaComporre: (input.testo || "").slice(0, 300),
+    tipo: input.tipo,
+    // Caricato a mano = gia' scelto: non ha senso chiedergli di approvarlo.
+    decisione: "approvato",
+    decisoIl: new Date().toISOString(),
+    note: "Design caricato a mano dalla web app.",
+    applicato: false,
+  };
+
+  // Il batch del giorno puo' non esistere ancora (nessun run notturno): in quel
+  // caso lo si crea, cosi' il design caricato non resta senza casa.
+  if (batchEsistente) {
+    batchEsistente.design = [...batchEsistente.design, nuovo];
+    batchEsistente.totale = batchEsistente.design.length;
+    batchEsistente.inAttesa = batchEsistente.design.filter(d => d.decisione === "in_attesa").length;
+    await scriviBatch(batchEsistente, `design caricato a mano: ${id}`);
+  } else {
+    await scriviBatch(
+      { data, generatoIl: new Date().toISOString(), totale: 1, inAttesa: 0, design: [nuovo] },
+      `design caricato a mano: ${id}`,
+    );
+  }
+
+  return getBatch(data);
+}
+
 export async function eliminaReference(path: string): Promise<void> {
   if (!path.startsWith("references/") || path.includes("..")) throw new Error("percorso non valido");
   const { owner, repo } = repoSlug();

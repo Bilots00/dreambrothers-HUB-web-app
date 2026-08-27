@@ -134,6 +134,80 @@ const MODI = [
   { id: "auto", label: "Automatico", desc: "Pesca dai negozi che seguo in Product Market FIT" },
 ] as const;
 
+/**
+ * Carica un design fatto a mano.
+ *
+ * Nasce il 2026-08-27: i design che Andrea produce da sé — con l'agente su
+ * Telegram, con Gemini a mano, in Photoshop — restavano fuori dal flusso e per
+ * pubblicarli bisognava passare dalla repo. Da qui entrano nella stessa catena
+ * dei design notturni: file di stampa, Printify o Gelato, creatività.
+ *
+ * Entrano già approvati: se lo carichi tu, la scelta l'hai già fatta.
+ */
+function CaricaDesign({ data, onFatto }: { data?: string; onFatto: () => void }) {
+  const [tipo, setTipo] = useState<"apparel" | "wallart">("apparel");
+  const [caricando, setCaricando] = useState(0);
+
+  const carica = trpc.productArtist.caricaDesign.useMutation({
+    onError: e => toast.error(e.message),
+  });
+
+  const onFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setCaricando(files.length);
+    let ok = 0;
+    for (const file of Array.from(files)) {
+      try {
+        const base64 = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result).split(",")[1] || "");
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+        await carica.mutateAsync({ base64, nomeFile: file.name, tipo, data });
+        ok++;
+      } catch { /* il toast dell'errore l'ha già mostrato onError */ }
+    }
+    setCaricando(0);
+    if (ok) {
+      toast.success(ok === 1 ? "Design caricato e approvato" : `${ok} design caricati e approvati`);
+      onFatto();
+    }
+  };
+
+  return (
+    <div className="ml-auto flex items-center gap-2">
+      <div className="flex rounded-md overflow-hidden text-[11px]"
+           style={{ border: "1px solid oklch(0.25 0.02 260)" }}>
+        {(["apparel", "wallart"] as const).map(t => (
+          <button key={t} onClick={() => setTipo(t)}
+            className="px-2 py-1 flex items-center gap-1 transition-colors"
+            style={tipo === t
+              ? { background: "oklch(0.6 0.15 250 / 0.3)", color: "oklch(0.9 0.05 250)" }
+              : { opacity: 0.6 }}>
+            {t === "apparel" ? <Shirt className="w-3 h-3" /> : <Frame className="w-3 h-3" />}
+            {t === "apparel" ? "capo" : "quadro"}
+          </button>
+        ))}
+      </div>
+      <label>
+        <Button size="sm" variant="outline" className="gap-1.5 cursor-pointer" asChild disabled={caricando > 0}>
+          <span>
+            {caricando > 0
+              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> carico {caricando}…</>
+              : <><Upload className="w-3.5 h-3.5" /> carica un design</>}
+          </span>
+        </Button>
+        {/* PNG soltanto: è quello che la catena di stampa sa portare intero
+            fino a Printify e Gelato. `capture` assente di proposito: da
+            telefono deve poter scegliere dalla galleria, non solo scattare. */}
+        <input type="file" accept="image/png" multiple className="hidden"
+               onChange={e => { onFiles(e.target.files); e.currentTarget.value = ""; }} />
+      </label>
+    </div>
+  );
+}
+
 function MaterialeProssimaNotte() {
   const utils = trpc.useUtils();
   const fonte = trpc.productArtist.fonte.useQuery();
@@ -1043,6 +1117,11 @@ export default function ProductArtistApprovals() {
           {conteggi.rifiutati > 0 && <> · <span style={{ color: DEC_META.rifiutato.fg }}>{conteggi.rifiutati} scartati</span></>}
         </span>
 
+        <CaricaDesign
+          data={dataSel}
+          onFatto={() => { utils.productArtist.batch.invalidate(); utils.productArtist.batches.invalidate(); }}
+        />
+
         {nascostiN > 0 && (
           <button
             onClick={() => setMostraScartati(v => !v)}
@@ -1053,7 +1132,7 @@ export default function ProductArtistApprovals() {
         )}
 
         {inAttesa.length > 0 && dataSel && (
-          <div className="ml-auto flex gap-2">
+          <div className="flex gap-2 w-full justify-end">
             <Button
               size="sm" variant="outline" disabled={inCorso}
               onClick={() => decidiMolti.mutate({ data: dataSel, ids: inAttesa.map(d => d.id), decisione: "approvato" })}
