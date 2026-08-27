@@ -508,6 +508,33 @@ export async function getSocialDraftsForUser(userId: number) {
   }).from(socialDrafts).where(eq(socialDrafts.userId, userId)).orderBy(desc(socialDrafts.createdAt)).limit(200);
 }
 
+/**
+ * UNA bozza, senza gli asset (stessa regola della lista: le immagini pesano).
+ * Serve al bot Telegram, che dopo una modifica deve rimostrare la bozza senza
+ * ricordarsi cosa aveva mandato.
+ */
+export async function getSocialDraftById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({
+    id: socialDrafts.id,
+    userId: socialDrafts.userId,
+    platform: socialDrafts.platform,
+    format: socialDrafts.format,
+    title: socialDrafts.title,
+    caption: socialDrafts.caption,
+    hashtags: socialDrafts.hashtags,
+    status: socialDrafts.status,
+    scheduledAt: socialDrafts.scheduledAt,
+    createdBy: socialDrafts.createdBy,
+    sourceUrl: socialDrafts.sourceUrl,
+    notes: socialDrafts.notes,
+    createdAt: socialDrafts.createdAt,
+    updatedAt: socialDrafts.updatedAt,
+  }).from(socialDrafts).where(eq(socialDrafts.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
 /** Gli asset di UNA bozza: si chiede solo quando serve mostrarli. */
 export async function getSocialDraftAssets(id: number): Promise<string | null> {
   const db = await getDb();

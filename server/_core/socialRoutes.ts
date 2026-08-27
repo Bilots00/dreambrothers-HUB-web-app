@@ -228,7 +228,7 @@ export function registerSocialRoutes(app: Express) {
         caricate,
         // Le reference gia' impegnate (in prova o approvate): l'agente le salta
         // quando pesca dalla cartella del PC, cosi' non ripropone le stesse.
-        occupate: [...occupate],
+        occupate: Array.from(occupate),
         cartellaVps: manifest?.cartellaVps ?? null,
       });
     } catch (err) {
@@ -325,6 +325,74 @@ export function registerSocialRoutes(app: Express) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn("[social/cartella-manifest] error:", msg);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+
+  // ─── Le bozze si comandano anche da Telegram ────────────────────────────────
+  //
+  // I bottoni sotto la bozza che arriva in chat (Approva / Scarta / modifica)
+  // chiamano qui. E' la stessa strada della web app, non una scorciatoia: passa
+  // per updateSocialDraft e fa scattare lo stesso verdetto sulla reference, cosi'
+  // approvare da Telegram o da Bozze e' esattamente la stessa cosa.
+  app.post("/api/social/draft-azione", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { updateSocialDraft } = await import("../db");
+      const { esitoBozzaSuReference } = await import("../socialReferences");
+      const { draftId, azione, caption, title, hashtags, scheduledAt } = req.body ?? {};
+      const id = Number(draftId);
+      if (!id) {
+        res.status(400).json({ error: "draftId is required" });
+        return;
+      }
+
+      const patch: Record<string, unknown> = {};
+      if (caption !== undefined) patch.caption = String(caption);
+      if (title !== undefined) patch.title = String(title);
+      if (hashtags !== undefined) patch.hashtags = String(hashtags);
+
+      if (azione === "approva") {
+        patch.status = "scheduled";
+        patch.scheduledAt = scheduledAt ? new Date(String(scheduledAt)) : new Date();
+      } else if (azione === "scarta") {
+        patch.status = "rejected";
+      } else if (azione && azione !== "modifica") {
+        res.status(400).json({ error: `azione sconosciuta: ${azione}` });
+        return;
+      }
+
+      await updateSocialDraft(id, patch as Parameters<typeof updateSocialDraft>[1]);
+
+      // Il verdetto sulla bozza vale anche per la reference che l'ha generata:
+      // approvata = consumata per sempre, scartata = torna libera per un'altra notte.
+      if (azione === "approva") await esitoBozzaSuReference(id, "approvata").catch(() => {});
+      if (azione === "scarta") await esitoBozzaSuReference(id, "scartata").catch(() => {});
+
+      res.json({ success: true, draftId: id, azione: azione ?? "modifica" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[social/draft-azione] error:", msg);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Una bozza sola, per nome e cognome: serve al bot per rimostrarla dopo una
+  // modifica senza doversi ricordare cosa aveva mandato.
+  app.get("/api/social/draft/:id", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { getSocialDraftById } = await import("../db");
+      const d = await getSocialDraftById(Number(req.params.id));
+      if (!d) {
+        res.status(404).json({ error: "bozza non trovata" });
+        return;
+      }
+      res.json({ success: true, draft: d });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[social/draft/:id] error:", msg);
       res.status(500).json({ error: msg });
     }
   });
