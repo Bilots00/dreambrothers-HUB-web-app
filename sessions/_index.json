@@ -1,5 +1,11 @@
 [
   {
+    "slug": "lancio-campagne-google-e-tiktok",
+    "title": "Lancio Campagne Google e TikTok",
+    "sessionId": 12,
+    "exportedAt": "2026-08-27T04:12:00Z"
+  },
+  {
     "slug": "agente-social-e-watchlist-instagram",
     "title": "Agente Social e Watchlist Instagram",
     "sessionId": 14,
@@ -10,12 +16,6 @@
     "title": "Video Editor Agent e Android sul VPS",
     "sessionId": 13,
     "exportedAt": "2026-08-24T10:15:00Z"
-  },
-  {
-    "slug": "lancio-campagne-google-e-tiktok",
-    "title": "Lancio Campagne Google e TikTok",
-    "sessionId": 12,
-    "exportedAt": "2026-08-22T10:35:00Z"
   },
   {
     "slug": "product-artist-pipeline-fix",
