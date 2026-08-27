@@ -229,7 +229,34 @@ export async function postDiRiferimento(
   }
   if (scelti.length === 0) return [];
 
-  const ammessi = new Set(scelti.map((c) => c.id));
+  /**
+   * Il profilo scelto è in Watchlist ma non ha ancora nessun post raccolto?
+   * Non si torna a mani vuote: si pesca da tutti i canali Instagram.
+   *
+   * Successo il 2026-08-27: la fonte era "profilo → ikonick", ikonick è un
+   * account business per cui l'endpoint di Instagram è rotto (bug loro, dà 400
+   * anche da un browser normale), quindi zero post — e la notte si è fermata a
+   * zero bozze mentre in Watchlist c'erano decine di post di altri canali.
+   * Meglio partire da un post buono di un altro canale che da niente.
+   */
+  const conPost = async (canali: typeof scelti) => {
+    const ammessi = new Set(canali.map((c) => c.id));
+    const video = await getWatchlistVideos(userId, {
+      platform: "instagram",
+      lookbackDays: opts.lookbackDays ?? 90,
+      sort: "outlier",
+      limit: (opts.limit ?? 12) * 3,
+    });
+    return video.filter((v) => ammessi.has(v.channelId)).filter((v) => (v.title ?? "").trim().length > 0);
+  };
+
+  let usati = scelti;
+  if (opts.handle && (await conPost(scelti)).length === 0 && instagram.length > scelti.length) {
+    usati = instagram;
+  }
+  const scelti2 = usati;
+
+  const ammessi = new Set(scelti2.map((c) => c.id));
   const video = await getWatchlistVideos(userId, {
     platform: "instagram",
     lookbackDays: opts.lookbackDays ?? 90,
