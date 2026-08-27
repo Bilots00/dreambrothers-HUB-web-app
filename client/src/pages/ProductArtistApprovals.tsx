@@ -408,14 +408,28 @@ function Anteprima({ data, file, alt }: { data: string; file: string; alt: strin
  * finisce sul petto del capo, dove si vede più del retro. Il 21/08 è uscito un
  * "RIGHT ON TIME" che col design non c'entrava niente.
  */
-function FronteDaApprovare({ data, file, testo, approvato, onDecidi, inCorso }: {
+const STILI_FRONTE = ["gothic", "script", "marker", "hand", "stencil", "caveat"] as const;
+type StileFronte = (typeof STILI_FRONTE)[number];
+
+function FronteDaApprovare({ data, file, testo, riga2, stile, approvato, onDecidi, onRigenera, inCorso }: {
   data: string;
   file: string;
   testo?: string | null;
+  riga2?: string | null;
+  stile?: string | null;
   approvato?: boolean;
   onDecidi: (ok: boolean) => void;
+  onRigenera: (v: { testo: string; riga2: string | null; stile: StileFronte }) => void;
   inCorso: boolean;
 }) {
+  // La frase la decide Andrea: il campo parte da quella generata, così
+  // correggere una parola non costa riscrivere tutto.
+  const [modifica, setModifica] = useState(false);
+  const [testo1, setTesto1] = useState(testo || "");
+  const [testo2, setTesto2] = useState(riga2 || "");
+  const [stileScelto, setStileScelto] = useState<StileFronte>(
+    (STILI_FRONTE as readonly string[]).includes(stile || "") ? (stile as StileFronte) : "gothic",
+  );
   const nome = file.replace(/\.png$/i, "_fronte.png");
   const q = trpc.productArtist.immagine.useQuery(
     { data, file: nome },
@@ -446,29 +460,73 @@ function FronteDaApprovare({ data, file, testo, approvato, onDecidi, inCorso }: 
             togli
           </button>
         </div>
-      ) : approvato === false ? (
-        <div className="flex items-center justify-between gap-2">
-          <span className="opacity-70">scartato: il capo esce col solo retro</span>
-          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
-                  disabled={inCorso} onClick={() => onDecidi(true)}>
-            ripensaci
-          </button>
-        </div>
       ) : (
+        /* Niente più "no, solo retro": una maglietta col disegno dietro e nulla
+           davanti non è un prodotto (Andrea, 27/08). Le strade sono due: questo
+           fronte va bene, oppure se ne scrive un altro. */
         <div className="flex items-center gap-3">
           <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40"
                   disabled={inCorso} onClick={() => onDecidi(true)}>
             usa questo fronte
           </button>
-          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40 opacity-70"
-                  disabled={inCorso} onClick={() => onDecidi(false)}>
-            no, solo retro
+          <button className="underline underline-offset-2 hover:opacity-80 disabled:opacity-40 opacity-80"
+                  disabled={inCorso} onClick={() => setModifica(m => !m)}>
+            {modifica ? "annulla" : "scrivine un altro"}
           </button>
         </div>
       )}
-      {!deciso && (
+
+      {modifica && (
+        <div className="space-y-1.5 rounded-md p-2"
+             style={{ background: "oklch(0.14 0.02 260 / 0.6)" }}>
+          <textarea
+            value={testo1}
+            onChange={e => setTesto1(e.target.value)}
+            rows={2}
+            maxLength={80}
+            placeholder="la frase davanti, es. I MOVE IN SILENCE"
+            className="w-full rounded-md px-2 py-1.5 text-[11px] outline-none"
+            style={{ background: "oklch(0.11 0.015 260)", color: "oklch(0.92 0.02 260)" }}
+          />
+          <input
+            value={testo2}
+            onChange={e => setTesto2(e.target.value)}
+            maxLength={120}
+            placeholder="seconda riga (facoltativa)"
+            className="w-full rounded-md px-2 py-1.5 text-[11px] outline-none"
+            style={{ background: "oklch(0.11 0.015 260)", color: "oklch(0.92 0.02 260)" }}
+          />
+          <div className="flex items-center gap-2">
+            <select
+              value={stileScelto}
+              onChange={e => setStileScelto(e.target.value as StileFronte)}
+              className="rounded-md px-2 py-1 text-[11px] outline-none"
+              style={{ background: "oklch(0.11 0.015 260)", color: "oklch(0.92 0.02 260)" }}
+            >
+              {STILI_FRONTE.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <button
+              className="rounded-md px-2.5 py-1 font-medium disabled:opacity-40"
+              style={{ background: "oklch(0.6 0.15 250 / 0.35)", color: "oklch(0.92 0.05 250)" }}
+              disabled={inCorso || !testo1.trim()}
+              onClick={() => {
+                onRigenera({ testo: testo1.trim(), riga2: testo2.trim() || null, stile: stileScelto });
+                setModifica(false);
+              }}
+            >
+              rigenera il fronte
+            </button>
+          </div>
+          <div className="opacity-70 leading-snug">
+            Il fronte è tipografia, non un'immagine generata: scegli le parole e
+            il lettering. Il file nuovo compare da solo entro pochi minuti.
+          </div>
+        </div>
+      )}
+
+      {!deciso && !modifica && (
         <div className="opacity-70 leading-snug">
-          Finché non decidi, il capo si pubblica con il solo retro.
+          Il capo aspetta il tuo sì sul fronte prima di andare in stampa.
         </div>
       )}
     </div>
@@ -814,6 +872,14 @@ export default function ProductArtistApprovals() {
     onError: e => toast.error(e.message),
   });
 
+  const rigeneraFronte = trpc.productArtist.rigeneraFronte.useMutation({
+    onSuccess: () => {
+      toast.success("Fronte da rifare: il file nuovo arriva entro pochi minuti");
+      ricarica();
+    },
+    onError: e => toast.error(e.message),
+  });
+
   const ripubblica = trpc.productArtist.ripubblica.useMutation({
     onSuccess: () => { toast.success("Riprovo la pubblicazione"); ricarica(); },
     onError: e => toast.error(e.message),
@@ -1003,9 +1069,12 @@ export default function ProductArtistApprovals() {
                   data={batch.data!.data}
                   file={d.file}
                   testo={d.stampa?.fronteTesto}
+                  riga2={d.stampa?.fronteRiga2}
+                  stile={d.stampa?.fronteStile}
                   approvato={d.fronteApprovato}
-                  inCorso={decidiFronte.isPending}
+                  inCorso={decidiFronte.isPending || rigeneraFronte.isPending}
                   onDecidi={ok => decidiFronte.mutate({ data: batch.data!.data, id: d.id, ok })}
+                  onRigenera={v => rigeneraFronte.mutate({ data: batch.data!.data, id: d.id, ...v })}
                 />
               )}
 

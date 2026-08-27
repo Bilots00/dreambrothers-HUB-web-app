@@ -366,6 +366,82 @@ export async function decidiFronte(data: string, id: string, ok: boolean): Promi
   return getBatch(data);
 }
 
+/** Gli stili tipografici che `engine/fronte.py` sa davvero renderizzare. */
+export const STILI_FRONTE = ["gothic", "script", "marker", "hand", "stencil", "caveat"] as const;
+export type StileFronte = (typeof STILI_FRONTE)[number];
+
+/**
+ * Rifà il fronte con la frase (e/o lo stile) che decide Andrea.
+ *
+ * Nasce il 2026-08-27: prima le uniche scelte erano "usa questo fronte" o
+ * "no, solo retro" — e la seconda non ha senso, perché una maglietta col
+ * disegno dietro e NULLA davanti non è un prodotto. La terza via mancava:
+ * tenere il capo e cambiare cosa c'è scritto davanti.
+ *
+ * Il fronte non è un'immagine generata dal modello: è tipografia renderizzata
+ * da `engine/fronte.py` con i font in repo. Quindi "un'altra reference" qui
+ * significa un'altra FRASE e/o un altro stile di lettering.
+ *
+ * Il meccanismo: si riscrive la scheda di stampa e si CANCELLA il vecchio
+ * `_fronte.png`. Il watchdog sul PC (ogni 5 minuti) rigenera solo i fronti
+ * mancanti, quindi il file nuovo nasce da sé senza lanciare comandi a mano.
+ */
+export async function rigeneraFronte(input: {
+  data: string;
+  id: string;
+  testo: string;
+  riga2?: string | null;
+  stile?: StileFronte | null;
+}): Promise<Batch | null> {
+  const testo = input.testo.trim().slice(0, 80);
+  if (!testo) throw new Error("La frase del fronte non può essere vuota.");
+  const riga2 = (input.riga2 || "").trim().slice(0, 120) || null;
+  const stile = input.stile && STILI_FRONTE.includes(input.stile) ? input.stile : null;
+
+  let daCancellare: string | null = null;
+
+  await aggiornaDesign(
+    input.data,
+    input.id,
+    d => {
+      // Si modificano i campi sul posto invece di ricostruire la scheda: uno
+      // spread la riempirebbe di `undefined` sui campi obbligatori (posizione,
+      // colori) e TypeScript la rifiuterebbe. Senza scheda di stampa il fronte
+      // non esiste nemmeno come concetto, quindi si dice perché e ci si ferma.
+      if (!d.stampa) throw new Error("Questo design non ha una scheda di stampa: il fronte non si può rifare.");
+      d.stampa.fronteTesto = testo;
+      d.stampa.fronteRiga2 = riga2;
+      if (stile) d.stampa.fronteStile = stile;
+      // Torna indeciso: la frase è nuova, il sì di prima valeva per l'altra.
+      d.fronteApprovato = undefined;
+      daCancellare = `output/${input.data}/${d.file.replace(/\.png$/i, "_fronte.png")}`;
+    },
+    `fronte da rifare: "${testo}"${stile ? ` (${stile})` : ""} — ${input.id}`,
+  );
+
+  // Senza questa cancellazione upscale-batch salterebbe il fronte ("esiste
+  // già") e Andrea vedrebbe per sempre la vecchia scritta.
+  if (daCancellare) await eliminaFileOutput(daCancellare).catch(() => {});
+
+  return getBatch(input.data);
+}
+
+/** Cancella un file dentro output/, se c'è. Usato per forzare una rigenerazione. */
+async function eliminaFileOutput(path: string): Promise<void> {
+  if (!path.startsWith("output/") || path.includes("..")) throw new Error("percorso non valido");
+  const { owner, repo } = repoSlug();
+  const meta = await ghJson<{ sha: string }>(`/repos/${owner}/${repo}/contents/${path}`).catch(() => null);
+  if (!meta?.sha) return; // non c'era: niente da cancellare
+  await ghJson(`/repos/${owner}/${repo}/contents/${path}`, {
+    method: "DELETE",
+    body: JSON.stringify({
+      message: `web app: fronte da rigenerare, rimosso ${path.split("/").pop()}`,
+      sha: meta.sha,
+      committer: { name: "DreamBrothers HUB", email: "hub@dreambrothers.local" },
+    }),
+  });
+}
+
 export async function decidiDesign(input: {
   data: string;
   id: string;

@@ -68,6 +68,8 @@ import {
   getBatch,
   getImmagine,
   decidiFronte,
+  rigeneraFronte,
+  STILI_FRONTE,
   aggiornaArtwork,
   decidiDesign,
   decidiMolti,
@@ -814,6 +816,21 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
     decidiFronte: protectedProcedure
       .input(z.object({ data: z.string().min(1), id: z.string().min(1), ok: z.boolean() }))
       .mutation(async ({ input }) => decidiFronte(input.data, input.id, input.ok)),
+
+    /**
+     * Il fronte non va bene ma il capo sì: si riscrive la frase (e lo stile del
+     * lettering) e il vecchio file viene cancellato, così il watchdog sul PC lo
+     * rigenera da solo entro pochi minuti.
+     */
+    rigeneraFronte: protectedProcedure
+      .input(z.object({
+        data: z.string().min(1),
+        id: z.string().min(1),
+        testo: z.string().min(1).max(80),
+        riga2: z.string().max(120).nullish(),
+        stile: z.enum(STILI_FRONTE).nullish(),
+      }))
+      .mutation(async ({ input }) => rigeneraFronte(input)),
 
     /**
      * Creative Director + Copywriter sul design approvato: piattaforma, angle e
