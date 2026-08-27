@@ -209,14 +209,15 @@ export function registerSocialRoutes(app: Express) {
   app.get("/api/social/piano-notte", async (req: Request, res: Response) => {
     if (!checkSecret(req, res)) return;
     try {
-      const { pianoNotte, listaLinkReference, listaReferenceSocial } = await import(
-        "../socialReferences"
-      );
+      const { pianoNotte, listaLinkReference, listaReferenceSocial, chiaviOccupate, manifestCartella } =
+        await import("../socialReferences");
       const giorno = typeof req.query.giorno === "string" ? req.query.giorno : undefined;
       const piano = await pianoNotte(OWNER_USER_ID, { giorno });
-      const [link, caricate] = await Promise.all([
+      const [link, caricate, occupate, manifest] = await Promise.all([
         listaLinkReference(piano.giorno).catch(() => []),
         listaReferenceSocial(piano.giorno).catch(() => []),
+        chiaviOccupate().catch(() => new Set<string>()),
+        manifestCartella().catch(() => null),
       ]);
       res.json({
         success: true,
@@ -225,6 +226,10 @@ export function registerSocialRoutes(app: Express) {
         // repo dopo il git pull, ma riceverlo qui gli evita di doverla scandire.
         link: link.filter((l) => l.stato === "in-attesa"),
         caricate,
+        // Le reference gia' impegnate (in prova o approvate): l'agente le salta
+        // quando pesca dalla cartella del PC, cosi' non ripropone le stesse.
+        occupate: [...occupate],
+        cartellaVps: manifest?.cartellaVps ?? null,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
