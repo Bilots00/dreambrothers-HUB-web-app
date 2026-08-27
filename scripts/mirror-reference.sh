@@ -110,7 +110,9 @@ for nome in sorted(sul_vps):
         continue
     p = os.path.join(src, nome)
     size = os.path.getsize(p) if os.path.isfile(p) else 0
-    base = os.path.splitext(nome)[0]
+    # Il " (1)" dei file scaricati due volte fa parte del nome ma non del post:
+    # va tolto, o quella slide si stacca dal suo carosello.
+    base = re.sub(r"\s*\(\d+\)$", "", os.path.splitext(nome)[0])
     # handle_timestamp_media_user -> le slide di uno stesso carosello
     m = re.match(r"^(.+?_\d{9,})_\d+_\d+$", base)
     esiti.append({"nome": nome, "size": size, "gruppo": m.group(1) if m else None})
