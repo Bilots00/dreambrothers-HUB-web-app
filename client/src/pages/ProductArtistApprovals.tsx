@@ -580,9 +580,11 @@ type Pubblicazione = {
 };
 
 /** Cosa è successo al prodotto dopo il sì: sta salendo, è online, o è fallito. */
-function StatoProdotto({ p, veste, onRiprova, onRifai, onRiallinea, inCorso }: {
+function StatoProdotto({ p, veste, data, file, onRiprova, onRifai, onRiallinea, inCorso }: {
   p: Pubblicazione;
   veste: Veste;
+  data: string;
+  file: string;
   onRiprova: () => void;
   onRifai: (posizione?: "front" | "back") => void;
   onRiallinea?: () => void;
@@ -706,6 +708,50 @@ function StatoProdotto({ p, veste, onRiprova, onRifai, onRiallinea, inCorso }: {
           <span className="leading-snug">{p.avvisoQualita}</span>
         </div>
       )}
+      {veste === "apparel" && <FileDiStampaUsato data={data} file={file} />}
+    </div>
+  );
+}
+
+/**
+ * Il file di stampa DAVVERO usato sul capo, dentro la card del design.
+ *
+ * Nasce il 2026-08-27: dopo una pubblicazione Andrea si e' trovato in bacheca
+ * piu' copie dello stesso artwork (sottoprodotti della catena, ora filtrati) e
+ * non sapeva piu' QUALE file fosse finito sulla maglietta — compresa una copia
+ * scontornata male che sembrava quella buona. Questa anteprima chiude il
+ * dubbio alla fonte: quello che vedi qui, su sfondo a scacchi che mostra la
+ * trasparenza vera, e' il PNG che Printify ha ricevuto.
+ */
+function FileDiStampaUsato({ data, file }: { data: string; file: string }) {
+  const nome = file.replace(/\.png$/i, "_print.png");
+  const q = trpc.productArtist.immagine.useQuery(
+    { data, file: nome },
+    { staleTime: 60 * 60_000, refetchOnWindowFocus: false, retry: false },
+  );
+  const [aperto, setAperto] = useState(false);
+  if (!q.data) return null;
+  const src = `data:${q.data.mime};base64,${q.data.base64}`;
+  return (
+    <div className="pt-1 space-y-1">
+      <div className="opacity-70">File di stampa usato sul capo (la scacchiera e' trasparenza):</div>
+      <img
+        src={src}
+        alt={`file di stampa di ${file}`}
+        onClick={() => setAperto(true)}
+        className="w-full rounded-md cursor-zoom-in"
+        style={{
+          // La scacchiera dice la verita' sullo scontorno: un buco nelle
+          // lettere qui si vede subito, su un fondo pieno no.
+          backgroundImage:
+            "linear-gradient(45deg, oklch(0.35 0 0) 25%, transparent 25%, transparent 75%, oklch(0.35 0 0) 75%), " +
+            "linear-gradient(45deg, oklch(0.35 0 0) 25%, transparent 25%, transparent 75%, oklch(0.35 0 0) 75%)",
+          backgroundColor: "oklch(0.5 0 0)",
+          backgroundSize: "16px 16px",
+          backgroundPosition: "0 0, 8px 8px",
+        }}
+      />
+      {aperto && <Lightbox src={src} alt={`file di stampa di ${file}`} onClose={() => setAperto(false)} />}
     </div>
   );
 }
@@ -1110,6 +1156,8 @@ export default function ProductArtistApprovals() {
                 if (!pub) return null;
                 return (
                   <StatoProdotto
+                    data={dataSel!}
+                    file={d.file}
                     key={v}
                     veste={v}
                     p={pub}

@@ -753,19 +753,32 @@ export async function pubblicaDesign(
     // generata da engine/fronte.py (regola fronte/retro: l'ancora identitaria
     // davanti, la manifestazione dietro). Se il file non c'e' ancora si
     // pubblica comunque, solo retro.
+    // Regola di Andrea del 2026-08-27, dopo un capo pubblicato col petto VUOTO:
+    // "nessuna maglietta ha un design sul retro e zero design sul fronte".
+    // Prima questo blocco pubblicava lo stesso, con un avviso che non fermava
+    // niente. Ora la pubblicazione si FERMA finche' il fronte non e' pronto e
+    // approvato: mezzo prodotto non e' un prodotto.
     let fronte: { nomeFile: string; url: string } | null = null;
     let avvisoFronte: string | undefined;
     if (tipo === "apparel" && posizione === "back") {
       const nomeFronte = design.file.replace(/\.png$/i, "_fronte.png");
       const cFronte = await getImmagine(data, nomeFronte).catch(() => null);
       const urlFronte = cFronte ? linkArtwork(data, nomeFronte) : null;
-      if (urlFronte && design.fronteApprovato === true) {
-        fronte = { nomeFile: nomeFronte, url: urlFronte };
-      } else if (urlFronte) {
-        avvisoFronte =
-          "Fronte tipografico generato ma non ancora approvato: il capo esce col solo retro. " +
-          "Guardalo nella scheda del design e approvalo, poi premi rifai.";
+      if (!urlFronte) {
+        throw new Error(
+          "La grafica va sul retro ma il fronte non esiste ancora: il Product Artist " +
+            "lo sta preparando (pochi minuti). Nessun capo esce col petto vuoto — " +
+            "quando il fronte compare nella scheda, approvalo e ripubblica.",
+        );
       }
+      if (design.fronteApprovato !== true) {
+        throw new Error(
+          "Il fronte e' generato ma non l'hai ancora approvato: guardalo nella scheda " +
+            "del design e dai l'ok (o rifallo con parole/reference tue), poi ripubblica. " +
+            "Nessun capo esce col petto vuoto.",
+        );
+      }
+      fronte = { nomeFile: nomeFronte, url: urlFronte };
     }
 
     // Variante per i capi chiari (testi chiari scuriti): la produce
@@ -907,7 +920,11 @@ export async function pubblicaDesign(
 function schedaDiDefault(_base64: string): SchedaStampa {
   return {
     posizione: "front",
-    colori: ["Black", "White"],
+    // Solo capi scuri: il bianco ci finiva per default e il 27/08 e' uscita una
+    // maglietta bianca con le stelline bianche del design invisibili. I capi
+    // chiari li sceglie l'artista nella scheda quando il design li regge — sono
+    // un'aggiunta ragionata, mai un default.
+    colori: ["Black", "Navy"],
     note: "Default prudente: l'agente non ha ancora deciso posizione e colori.",
     decisaIl: new Date().toISOString(),
     decisaDa: "default",
