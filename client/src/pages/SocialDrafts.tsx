@@ -116,8 +116,19 @@ const CARD = { background: "oklch(0.14 0.015 260)", border: "1px solid oklch(0.2
 const MODI_SOCIAL = [
   { id: "caricate", label: "Carico io", desc: "Parti dagli screenshot che carico qui sotto" },
   { id: "profilo", label: "Da un profilo", desc: "Prendi i post migliori da questo profilo Instagram" },
-  { id: "auto", label: "Automatico", desc: "Pesca dai canali che seguo nella Watchlist" },
+  { id: "link", label: "Da un link/URL", desc: "Parti da questi post preciso, caroselli compresi" },
+  { id: "auto", label: "Automatico", desc: "A cascata: caricate → link → cartella PC → Watchlist" },
 ] as const;
+
+/* I quattro livelli della cascata, nell'ordine deciso il 2026-08-27. La
+   Watchlist e' l'ULTIMO ripiego: e' l'unica fonte che non passa dalle mani di
+   Andrea, quindi vale solo quando le altre tre sono a secco. */
+const NOMI_LIVELLO: Record<string, { label: string; icona: string }> = {
+  caricate: { label: "Caricate a mano", icona: "1" },
+  link: { label: "Post da URL", icona: "2" },
+  cartella: { label: "Cartella del PC", icona: "3" },
+  watchlist: { label: "Watchlist", icona: "4" },
+};
 
 const TIPI_SOCIAL = [
   { id: "ispirazione", label: "ispirazione", icona: "💡", desc: "post altrui che funzionano" },
@@ -128,9 +139,13 @@ function MaterialeNotteSocial() {
   const utils = trpc.useUtils();
   const fonte = trpc.social.fonte.useQuery();
   const reference = trpc.social.reference.useQuery();
+  // Il piano della notte: gli stessi quattro livelli che leggera' l'agente.
+  const piano = trpc.social.piano.useQuery(undefined, { retry: false });
+  const linkList = trpc.social.linkReference.useQuery(undefined, { retry: false });
 
-  const [modo, setModo] = useState<"caricate" | "profilo" | "auto">("caricate");
+  const [modo, setModo] = useState<"caricate" | "profilo" | "link" | "auto">("caricate");
   const [handle, setHandle] = useState("");
+  const [linkUrl, setLinkUrl] = useState("");
   const [tipo, setTipo] = useState<"ispirazione" | "prodotto">("ispirazione");
   const [caricando, setCaricando] = useState(0);
 
@@ -143,7 +158,7 @@ function MaterialeNotteSocial() {
   // L'anteprima dei post da cui partirà la notte: si controlla prima, non dopo.
   const anteprima = trpc.social.postDiRiferimento.useQuery(
     { handle: modo === "profilo" ? fonte.data?.handle : undefined, limit: 6 },
-    { enabled: modo !== "caricate", retry: false },
+    { enabled: modo === "profilo" || modo === "auto", retry: false },
   );
 
   const salva = trpc.social.setFonte.useMutation({
@@ -151,6 +166,19 @@ function MaterialeNotteSocial() {
     onError: (e) => toast.error(e.message),
   });
   const carica = trpc.social.caricaReference.useMutation({ onError: (e) => toast.error(e.message) });
+  const aggiungiLink = trpc.social.aggiungiLink.useMutation({
+    onSuccess: () => {
+      setLinkUrl("");
+      toast.success("Post aggiunto alla coda di stanotte");
+      utils.social.linkReference.invalidate();
+      utils.social.piano.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const rimuoviLink = trpc.social.rimuoviLink.useMutation({
+    onSuccess: () => { utils.social.linkReference.invalidate(); utils.social.piano.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
   const elimina = trpc.social.eliminaReference.useMutation({
     onSuccess: () => { toast.success("Reference rimossa"); utils.social.reference.invalidate(); },
     onError: (e) => toast.error(e.message),
@@ -178,6 +206,7 @@ function MaterialeNotteSocial() {
     if (ok) {
       toast.success(`${ok} reference caricate`);
       utils.social.reference.invalidate();
+      utils.social.piano.invalidate();
       // Caricare implica volerle usare: si allinea il modo senza farglielo ricordare.
       if (modo !== "caricate") salva.mutate({ modo: "caricate" });
     }
@@ -244,7 +273,80 @@ function MaterialeNotteSocial() {
         </div>
       )}
 
-      {modo !== "caricate" && (
+      {modo === "link" && (
+        <div className="space-y-2">
+          <div className="flex gap-2 flex-wrap items-center">
+            <input
+              value={linkUrl}
+              onChange={(e) => setLinkUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && linkUrl.trim()) aggiungiLink.mutate({ url: linkUrl }); }}
+              placeholder="https://www.instagram.com/p/ABC123/  —  il link del POST, non del profilo"
+              className="flex-1 min-w-[280px] bg-transparent text-sm rounded-lg px-3 py-2 outline-none"
+              style={{ border: "1px solid oklch(0.25 0.015 260)" }}
+            />
+            <Button size="sm" disabled={aggiungiLink.isPending || !linkUrl.trim()}
+                    onClick={() => aggiungiLink.mutate({ url: linkUrl })}>
+              Aggiungi post
+            </Button>
+            <p className="w-full text-[11px] opacity-50">
+              Qui vanno i post <b>precisi</b> da cui vuoi partire, <b>caroselli compresi</b> — che nella Watchlist entrano con la sola copertina. L'agente sul VPS è loggato a Instagram con l'account di servizio: apre il post, legge tutte le slide e la caption, e ne studia struttura, ritmo e attacco. Le parole restano nostre.
+            </p>
+          </div>
+
+          {(linkList.data?.length ?? 0) > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {linkList.data!.map((l) => (
+                <div key={l.shortcode}
+                     className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs"
+                     style={{ background: "oklch(0.11 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+                  <a href={l.url} target="_blank" rel="noreferrer" className="hover:underline">
+                    {l.tipo === "carosello" ? "🎠" : l.tipo === "reel" ? "🎬" : "🖼"} {l.shortcode}
+                  </a>
+                  <span className="opacity-45">
+                    {l.stato === "in-attesa" ? "in coda" : l.stato === "usato" ? "usato" : `fallito: ${l.errore ?? "?"}`}
+                  </span>
+                  <button onClick={() => rimuoviLink.mutate({ shortcode: l.shortcode })}
+                          className="opacity-40 hover:opacity-100" title="togli dalla coda">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Il piano della notte: quale livello vince e perché. È la stessa
+          risposta che legge l'agente sul VPS, quindi qui non c'è niente da
+          indovinare — si vede prima quello che succederà all'01:00. */}
+      {piano.data && (
+        <div className="rounded-lg p-3 text-xs" style={{ background: "oklch(0.11 0.015 260)", border: "1px solid oklch(0.2 0.015 260)" }}>
+          <div className="opacity-55 mb-2">
+            {piano.data.scelto
+              ? <>Stanotte si parte da <b style={{ color: "oklch(0.8 0.14 145)" }}>{NOMI_LIVELLO[piano.data.scelto]?.label ?? piano.data.scelto}</b> — gli altri livelli restano come ripiego.</>
+              : <span style={{ color: "oklch(0.78 0.15 70)" }}>Nessun livello ha materiale: l'agente si fermerà invece di inventare. Carica una reference, incolla un link, o aggiorna la Watchlist.</span>}
+          </div>
+          <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+            {piano.data.livelli.map((l, i) => {
+              const vince = piano.data!.scelto === l.livello;
+              return (
+                <div key={l.livello} className="rounded px-2 py-1.5"
+                     style={{
+                       background: vince ? "oklch(0.22 0.05 145)" : "transparent",
+                       border: `1px solid ${vince ? "oklch(0.45 0.12 145)" : "oklch(0.18 0.015 260)"}`,
+                       opacity: l.disponibili > 0 ? 1 : 0.45,
+                     }}>
+                  <div className="font-medium">
+                    {i + 1}. {NOMI_LIVELLO[l.livello]?.label ?? l.livello}
+                    <span className="opacity-50 font-normal"> · {l.disponibili}</span>
+                  </div>
+                  <div className="opacity-50 leading-snug">{l.dettaglio}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {(modo === "profilo" || modo === "auto") && (
         <div className="text-xs">
           {anteprima.isLoading && <span className="opacity-50">carico i post di riferimento…</span>}
           {anteprima.error && (

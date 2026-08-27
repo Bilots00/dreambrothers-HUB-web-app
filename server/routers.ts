@@ -91,6 +91,13 @@ import {
   immagineReferenceSocial,
   postDiRiferimento,
   normalizzaHandle,
+  pianoNotte,
+  listaLinkReference,
+  aggiungiLinkReference,
+  rimuoviLinkReference,
+  esitoBozzaSuReference,
+  manifestCartella,
+  registroReference,
 } from "./socialReferences";
 
 function todayRome(): string {
@@ -296,6 +303,20 @@ export const appRouter = router({
         if (input.status !== undefined) patch.status = input.status;
         if (input.scheduledAt !== undefined) patch.scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
         await updateSocialDraft(input.id, patch);
+
+        // La reference che ha generato questa bozza segue il verdetto: approvata
+        // (o pianificata/pubblicata) e' consumata per sempre, scartata torna
+        // libera per un'altra notte. Regola di Andrea del 2026-08-27: in fase di
+        // test la reference resta nella cartella finche' non la approva lui.
+        if (input.status) {
+          const esito =
+            input.status === "rejected" ? "scartata" : input.status === "draft" ? null : "approvata";
+          if (esito) {
+            await esitoBozzaSuReference(input.id, esito).catch((e) =>
+              console.warn("[social/draftUpdate] registro reference:", e instanceof Error ? e.message : e),
+            );
+          }
+        }
         return { success: true } as const;
       }),
     draftDelete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
@@ -323,7 +344,7 @@ export const appRouter = router({
 
     setFonte: protectedProcedure
       .input(z.object({
-        modo: z.enum(["caricate", "profilo", "auto"]),
+        modo: z.enum(["caricate", "profilo", "link", "auto"]),
         handle: z.string().optional(),
         note: z.string().optional(),
       }))
@@ -344,6 +365,55 @@ export const appRouter = router({
       .query(async ({ ctx, input }) =>
         postDiRiferimento(ctx.user.id, { handle: input?.handle, limit: input?.limit ?? 12 }),
       ),
+
+    /**
+     * Il piano della notte: i quattro livelli della cascata con quanto materiale
+     * hanno, e quale vince. E' la stessa risposta che legge l'agente sul VPS, cosi'
+     * quello che Andrea vede in Bozze e' esattamente quello che succedera' all'01:00.
+     */
+    piano: protectedProcedure
+      .input(z.object({ giorno: z.string().optional() }).optional())
+      .query(async ({ ctx, input }) => pianoNotte(ctx.user.id, { giorno: input?.giorno })),
+
+    /** I post messi in coda incollando il loro link (tab "Da un link/URL"). */
+    linkReference: protectedProcedure
+      .input(z.object({ giorno: z.string().optional() }).optional())
+      .query(async ({ input }) => listaLinkReference(input?.giorno)),
+
+    aggiungiLink: protectedProcedure
+      .input(z.object({ url: z.string().min(1), note: z.string().optional(), giorno: z.string().optional() }))
+      .mutation(async ({ input }) => aggiungiLinkReference(input)),
+
+    rimuoviLink: protectedProcedure
+      .input(z.object({ shortcode: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        await rimuoviLinkReference(input.shortcode);
+        return { ok: true } as const;
+      }),
+
+    /** Quante reference ha la cartella del PC e quante ne restano da usare. */
+    cartellaPc: protectedProcedure.query(async () => {
+      const [manifest, registro] = await Promise.all([
+        manifestCartella().catch(() => null),
+        registroReference().catch(() => ({})),
+      ]);
+      if (!manifest) return null;
+      const occupate = new Set(
+        Object.values(registro)
+          .filter((v) => v.stato === "in-prova" || v.stato === "approvata")
+          .map((v) => v.chiave),
+      );
+      const gruppi = (nomi: typeof manifest.file) => new Set(nomi.map((f) => f.gruppo ?? f.nome)).size;
+      return {
+        aggiornatoIl: manifest.aggiornatoIl,
+        cartellaPc: manifest.cartellaPc,
+        cartellaVps: manifest.cartellaVps,
+        totali: gruppi(manifest.file),
+        disponibili: gruppi(manifest.file.filter((f) => !occupate.has(f.nome))),
+        inProva: Object.values(registro).filter((v) => v.stato === "in-prova").length,
+        approvate: Object.values(registro).filter((v) => v.stato === "approvata").length,
+      };
+    }),
 
     reference: protectedProcedure
       .input(z.object({ giorno: z.string().optional() }).optional())

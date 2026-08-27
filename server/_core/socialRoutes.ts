@@ -195,4 +195,133 @@ export function registerSocialRoutes(app: Express) {
       res.status(500).json({ error: "setting failed" });
     }
   });
+
+  // ─── La cascata della notte ─────────────────────────────────────────────────
+  //
+  // L'agente chiede QUI da dove partire, invece di deciderlo per conto suo: cosi'
+  // l'ordine di precedenza sta scritto in un posto solo (socialReferences.ts) e
+  // quello che Andrea vede in Bozze e' esattamente quello che succedera'.
+  //
+  //   1. caricate → le reference caricate a mano oggi   (repo, gia' nel git pull)
+  //   2. link     → i post di cui ha incollato l'URL    (repo, gia' nel git pull)
+  //   3. cartella → la cartella di reference del PC     (mirror sul disco del VPS)
+  //   4. watchlist→ ULTIMO ripiego                      (/api/social/reference-posts)
+  app.get("/api/social/piano-notte", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { pianoNotte, listaLinkReference, listaReferenceSocial } = await import(
+        "../socialReferences"
+      );
+      const giorno = typeof req.query.giorno === "string" ? req.query.giorno : undefined;
+      const piano = await pianoNotte(OWNER_USER_ID, { giorno });
+      const [link, caricate] = await Promise.all([
+        listaLinkReference(piano.giorno).catch(() => []),
+        listaReferenceSocial(piano.giorno).catch(() => []),
+      ]);
+      res.json({
+        success: true,
+        ...piano,
+        // Il materiale vero dei primi due livelli: l'agente ce l'ha gia' nella
+        // repo dopo il git pull, ma riceverlo qui gli evita di doverla scandire.
+        link: link.filter((l) => l.stato === "in-attesa"),
+        caricate,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[social/piano-notte] error:", msg);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Agente -> "queste reference le ho usate stanotte".
+  //
+  // Entrano in stato "in-prova": restano occupate finche' Andrea non giudica la
+  // bozza che ne e' nata. Approvata → consumate; scartata → tornano libere.
+  app.post("/api/social/reference-usate", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { marcaReferenceUsateMolte } = await import("../socialReferences");
+      type VoceIn = { chiave?: unknown; origine?: unknown; draftId?: unknown };
+      const ORIGINI = ["cartella", "link", "caricate", "watchlist"] as const;
+      const voci: VoceIn[] = Array.isArray(req.body?.voci) ? req.body.voci : [];
+      const pulite = voci
+        .filter((v) => typeof v?.chiave === "string" && String(v.chiave).trim().length > 0)
+        .map((v) => ({
+          chiave: String(v.chiave),
+          origine: ORIGINI.includes(v.origine as (typeof ORIGINI)[number])
+            ? (v.origine as (typeof ORIGINI)[number])
+            : ("cartella" as const),
+          draftId: v.draftId != null ? Number(v.draftId) : undefined,
+        }));
+      const n = await marcaReferenceUsateMolte(pulite);
+      res.json({ success: true, marcate: n });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[social/reference-usate] error:", msg);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Agente -> esito della lettura di un post indicato per link.
+  // Un link che fallisce NON sparisce: resta in UI con il motivo, cosi' Andrea
+  // vede che quel post non e' stato leggibile invece di crederlo usato.
+  app.post("/api/social/link-esito", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { marcaLinkReference } = await import("../socialReferences");
+      const { shortcode, stato, tipo, draftId, errore } = req.body ?? {};
+      if (!shortcode) {
+        res.status(400).json({ error: "shortcode is required" });
+        return;
+      }
+      await marcaLinkReference(String(shortcode), {
+        stato: stato === "usato" || stato === "fallito" ? stato : undefined,
+        tipo: tipo === "carosello" || tipo === "post" || tipo === "reel" ? tipo : undefined,
+        draftId: draftId != null ? Number(draftId) : undefined,
+        errore: errore ? String(errore).slice(0, 300) : undefined,
+      });
+      res.json({ success: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[social/link-esito] error:", msg);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Mirror sul PC di Andrea -> l'elenco di cosa c'e' nella cartella di reference.
+  //
+  // I file veri viaggiano da PC a VPS via ssh; qui arriva solo l'indice, perche'
+  // la web app gira su Railway e il disco di Andrea non lo vede. Serve a mostrare
+  // in Bozze quante reference restano da usare.
+  app.post("/api/social/cartella-manifest", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    try {
+      const { salvaManifestCartella } = await import("../socialReferences");
+      const { cartellaPc, cartellaVps, file } = req.body ?? {};
+      if (!Array.isArray(file)) {
+        res.status(400).json({ error: "file[] is required" });
+        return;
+      }
+      type FileIn = { nome?: unknown; size?: unknown; gruppo?: unknown };
+      const puliti = (file as FileIn[])
+        .filter((f) => typeof f?.nome === "string" && String(f.nome).trim().length > 0)
+        .map((f) => ({
+          nome: String(f.nome),
+          size: Number(f.size ?? 0),
+          gruppo: f.gruppo ? String(f.gruppo) : null,
+        }));
+      await salvaManifestCartella({
+        aggiornatoIl: new Date().toISOString(),
+        cartellaPc: String(cartellaPc ?? DEFAULT_REFERENCE_FOLDER),
+        cartellaVps: String(cartellaVps ?? "~/agents/creative-director/reference-pc"),
+        file: puliti,
+      });
+      res.json({ success: true, file: puliti.length });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[social/cartella-manifest] error:", msg);
+      res.status(500).json({ error: msg });
+    }
+  });
+
 }

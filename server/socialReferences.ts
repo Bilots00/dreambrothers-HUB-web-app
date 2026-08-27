@@ -20,15 +20,16 @@ export const TIPI_REFERENCE = ["ispirazione", "prodotto"] as const;
 export type TipoReference = (typeof TIPI_REFERENCE)[number];
 
 /**
- * Da dove parte la notte. Nessuna delle tre modalità inventa da zero: si parte
+ * Da dove parte la notte. Nessuna delle modalità inventa da zero: si parte
  * sempre da post che sono già esistiti e hanno già funzionato — regola di Andrea,
  * 2026-08-21: "non devo reinventarmi la ruota".
  *
- *   caricate → gli screenshot che carica lui
+ *   caricate → gli screenshot che carica lui dalla sezione Bozze
  *   profilo  → i post di UN profilo Instagram che indica per handle o URL
- *   auto     → i post migliori dei canali che segue già nella Watchlist
+ *   link     → i post (anche caroselli) di cui incolla l'URL diretto
+ *   auto     → la CASCATA: prende il primo livello che ha materiale (vedi pianoNotte)
  */
-export type ModoFonteSocial = "caricate" | "profilo" | "auto";
+export type ModoFonteSocial = "caricate" | "profilo" | "link" | "auto";
 
 export type FonteSocial = {
   modo: ModoFonteSocial;
@@ -386,4 +387,389 @@ async function scriviFile(path: string, contenuto: Buffer, messaggio: string): P
       committer: { name: "DreamBrothers HUB", email: "hub@dreambrothers.local" },
     }),
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Post indicati per link/URL                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * La tab "Da un link/URL" della sezione Bozze.
+ *
+ * Differenza dal modo "profilo": lì si indica un profilo e la Watchlist ne
+ * raccoglie i post migliori; qui Andrea punta il dito su UN post preciso —
+ * caroselli compresi, che in Watchlist non entrano perché lo scraper del feed
+ * ne salva solo la copertina. L'analisi vera la fa l'agente sul VPS, che è
+ * loggato a Instagram con l'account di servizio: da qui parte solo l'URL.
+ */
+export type LinkReference = {
+  /** URL normalizzato del post, senza query di tracciamento. */
+  url: string;
+  /** Lo shortcode Instagram (la parte dopo /p/ o /reel/): è l'identità del post. */
+  shortcode: string;
+  /** post | reel — dedotto dall'URL, l'agente lo corregge se scopre un carosello. */
+  tipo: "post" | "reel" | "carosello";
+  note?: string;
+  aggiuntoIl: string;
+  /** Il giorno di run per cui vale: come per le reference caricate. */
+  giorno: string;
+  stato: "in-attesa" | "usato" | "fallito";
+  usatoIl?: string;
+  draftId?: number;
+  /** Se stato = "fallito": perché, così si vede in UI invece di sparire. */
+  errore?: string;
+};
+
+const PATH_LINK = "references/_link-prossima-notte.json";
+
+/**
+ * Da un URL Instagram allo shortcode del post.
+ *
+ * Si accettano /p/, /reel/, /reels/ e /tv/ — sono tutte forme dello stesso
+ * contenuto. Tutto il resto viene rifiutato con un messaggio che dice cosa
+ * incollare: un link al PROFILO qui non serve, per quello c'è l'altra tab.
+ */
+export function normalizzaLinkPost(raw: string): { url: string; shortcode: string; tipo: "post" | "reel" } {
+  const s = String(raw).trim();
+  const m = s.match(/instagram\.com\/(?:[^/]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})/i);
+  if (!m) {
+    if (/instagram\.com\//i.test(s)) {
+      throw new Error(
+        `Questo è un link a un profilo, non a un post: "${s}". Apri il post e copia il suo link (contiene /p/ o /reel/), oppure usa la tab "Da un profilo".`,
+      );
+    }
+    throw new Error(`Link Instagram non valido: "${s}". Serve un URL tipo https://www.instagram.com/p/ABC123/`);
+  }
+  const tipo = m[1].toLowerCase().startsWith("reel") ? ("reel" as const) : ("post" as const);
+  const shortcode = m[2];
+  // Si ricostruisce pulito: via query di tracciamento (igshid, utm_*) e frammenti.
+  return { url: `https://www.instagram.com/${tipo === "reel" ? "reel" : "p"}/${shortcode}/`, shortcode, tipo };
+}
+
+async function leggiJson<T>(path: string, fallback: T): Promise<T> {
+  const { owner, repo } = repoSlug();
+  const file = await ghJson<{ content: string; encoding: string }>(
+    `/repos/${owner}/${repo}/contents/${path}`,
+  ).catch(() => null);
+  if (!file) return fallback;
+  try {
+    return JSON.parse(
+      Buffer.from(file.content, (file.encoding as BufferEncoding) || "base64").toString("utf8"),
+    ) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+async function scriviJson(path: string, dati: unknown, messaggio: string): Promise<void> {
+  await scriviFile(path, Buffer.from(JSON.stringify(dati, null, 2), "utf8"), messaggio);
+}
+
+/** I link in coda. Senza `giorno` si vedono quelli della prossima notte. */
+export async function listaLinkReference(giorno?: string): Promise<LinkReference[]> {
+  const tutti = await leggiJson<LinkReference[]>(PATH_LINK, []);
+  const g = giorno || giornoDelProssimoRun();
+  return tutti.filter((l) => l.giorno === g);
+}
+
+/** Tutti i link, comprese le notti passate: serve all'agente e al registro. */
+export async function listaLinkReferenceTutti(): Promise<LinkReference[]> {
+  return leggiJson<LinkReference[]>(PATH_LINK, []);
+}
+
+export async function aggiungiLinkReference(input: {
+  url: string;
+  note?: string;
+  giorno?: string;
+}): Promise<LinkReference> {
+  const { url, shortcode, tipo } = normalizzaLinkPost(input.url);
+  const g = input.giorno || giornoDelProssimoRun();
+  const tutti = await listaLinkReferenceTutti();
+
+  // Stesso post già in coda per la stessa notte: non si duplica, si riabilita.
+  const gia = tutti.find((l) => l.shortcode === shortcode && l.giorno === g);
+  if (gia) {
+    gia.note = input.note?.trim() || gia.note;
+    gia.stato = "in-attesa";
+    delete gia.errore;
+    await scriviJson(PATH_LINK, tutti, `link reference aggiornato: ${shortcode}`);
+    return gia;
+  }
+
+  const voce: LinkReference = {
+    url,
+    shortcode,
+    tipo,
+    note: input.note?.trim() || undefined,
+    aggiuntoIl: new Date().toISOString(),
+    giorno: g,
+    stato: "in-attesa",
+  };
+  tutti.push(voce);
+  await scriviJson(PATH_LINK, tutti, `link reference aggiunto: ${shortcode}`);
+  return voce;
+}
+
+export async function rimuoviLinkReference(shortcode: string): Promise<void> {
+  const tutti = await listaLinkReferenceTutti();
+  const restanti = tutti.filter((l) => l.shortcode !== shortcode);
+  if (restanti.length === tutti.length) return;
+  await scriviJson(PATH_LINK, restanti, `link reference rimosso: ${shortcode}`);
+}
+
+/** L'agente marca cosa ha usato (o cosa non è riuscito a leggere). */
+export async function marcaLinkReference(
+  shortcode: string,
+  patch: Partial<Pick<LinkReference, "stato" | "tipo" | "draftId" | "errore">>,
+): Promise<void> {
+  const tutti = await listaLinkReferenceTutti();
+  const voce = tutti.find((l) => l.shortcode === shortcode);
+  if (!voce) return;
+  Object.assign(voce, patch);
+  if (patch.stato === "usato") voce.usatoIl = new Date().toISOString();
+  await scriviJson(PATH_LINK, tutti, `link reference ${shortcode}: ${patch.stato ?? "aggiornato"}`);
+}
+
+/* ------------------------------------------------------------------ */
+/* Registro delle reference già usate                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Perché esiste: la cartella del PC ha centinaia di immagini, e senza memoria
+ * l'agente ripescherebbe le stesse ogni notte. Il registro tiene traccia di
+ * cosa è già stato usato e in che stato è finito.
+ *
+ * Regola di Andrea (fase di test, 2026-08-27): la reference NON si sposta dalla
+ * cartella finché lui non ha APPROVATO la bozza nata da quella reference. Finché
+ * la bozza è in prova la reference resta lì e resta marcata "in-prova"; se la
+ * bozza viene scartata la reference torna libera e può essere ritentata. Finita
+ * la fase di test basta accendere SPOSTA_REFERENCE_USATE sul mirror e le
+ * approvate migrano in _usate/ sul PC.
+ */
+export type StatoReference = "in-prova" | "approvata" | "scartata";
+
+export type VoceRegistro = {
+  /** Chiave: per la cartella PC il nome file, per i link lo shortcode. */
+  chiave: string;
+  origine: "cartella" | "link" | "caricate" | "watchlist";
+  usataIl: string;
+  stato: StatoReference;
+  draftId?: number;
+  /** Quante volte è stata data in pasto all'agente: per non insistere all'infinito. */
+  tentativi: number;
+};
+
+const PATH_REGISTRO = "state/reference-usate.json";
+
+export async function registroReference(): Promise<Record<string, VoceRegistro>> {
+  return leggiJson<Record<string, VoceRegistro>>(PATH_REGISTRO, {});
+}
+
+/**
+ * Le chiavi da NON riproporre stanotte: tutto ciò che è approvato (ha già dato
+ * il suo post) o è in prova (aspetta il giudizio di Andrea). Le scartate tornano
+ * libere: la reference non aveva colpa, il post sì.
+ */
+export async function chiaviOccupate(): Promise<Set<string>> {
+  const reg = await registroReference();
+  return new Set(
+    Object.values(reg)
+      .filter((v) => v.stato === "in-prova" || v.stato === "approvata")
+      .map((v) => v.chiave),
+  );
+}
+
+export async function marcaReferenceUsata(input: {
+  chiave: string;
+  origine: VoceRegistro["origine"];
+  draftId?: number;
+}): Promise<void> {
+  const reg = await registroReference();
+  const prima = reg[input.chiave];
+  reg[input.chiave] = {
+    chiave: input.chiave,
+    origine: input.origine,
+    usataIl: new Date().toISOString(),
+    stato: "in-prova",
+    draftId: input.draftId ?? prima?.draftId,
+    tentativi: (prima?.tentativi ?? 0) + 1,
+  };
+  await scriviJson(PATH_REGISTRO, reg, `reference in prova: ${input.chiave}`);
+}
+
+/** Scrittura in blocco: l'agente marca tutte le reference di una notte in un colpo solo. */
+export async function marcaReferenceUsateMolte(
+  voci: Array<{ chiave: string; origine: VoceRegistro["origine"]; draftId?: number }>,
+): Promise<number> {
+  if (voci.length === 0) return 0;
+  const reg = await registroReference();
+  for (const v of voci) {
+    const prima = reg[v.chiave];
+    reg[v.chiave] = {
+      chiave: v.chiave,
+      origine: v.origine,
+      usataIl: new Date().toISOString(),
+      stato: "in-prova",
+      draftId: v.draftId ?? prima?.draftId,
+      tentativi: (prima?.tentativi ?? 0) + 1,
+    };
+  }
+  await scriviJson(PATH_REGISTRO, reg, `${voci.length} reference marcate in prova`);
+  return voci.length;
+}
+
+/**
+ * Il verdetto di Andrea sulla bozza si riversa sulla reference che l'ha generata.
+ * Chiamata dal router quando una bozza cambia stato: approvata/pianificata →
+ * la reference è consumata per sempre; scartata → torna libera.
+ */
+export async function esitoBozzaSuReference(draftId: number, esito: StatoReference): Promise<void> {
+  const reg = await registroReference();
+  const voci = Object.values(reg).filter((v) => v.draftId === draftId);
+  if (voci.length === 0) return;
+  for (const v of voci) reg[v.chiave] = { ...v, stato: esito };
+  await scriviJson(PATH_REGISTRO, reg, `bozza ${draftId} ${esito}: ${voci.length} reference aggiornate`);
+}
+
+/* ------------------------------------------------------------------ */
+/* La cartella di reference sul PC di Andrea                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Il mirror (scripts/mirror-reference.sh sul PC) copia i file sul VPS e poi
+ * deposita qui l'elenco: la web app non vede il disco di Andrea, ma con questo
+ * manifest può dire quante reference ci sono e quante ne restano da usare.
+ *
+ * I caroselli si riconoscono dal nome che Instagram dà ai download:
+ * `<handle>_<timestampDelPost>_<idMedia>_<idUtente>.webp` — le slide dello
+ * stesso post condividono handle e timestamp, ed è quello il raggruppamento.
+ */
+export type ManifestCartella = {
+  aggiornatoIl: string;
+  /** Il percorso sul PC, così in UI si vede da dove arriva la roba. */
+  cartellaPc: string;
+  /** Dove sono finiti i file sul VPS: è il path che legge l'agente. */
+  cartellaVps: string;
+  file: Array<{ nome: string; size: number; gruppo: string | null }>;
+};
+
+const PATH_MANIFEST = "state/cartella-pc.json";
+
+export async function manifestCartella(): Promise<ManifestCartella | null> {
+  return leggiJson<ManifestCartella | null>(PATH_MANIFEST, null);
+}
+
+export async function salvaManifestCartella(m: ManifestCartella): Promise<void> {
+  await scriviJson(PATH_MANIFEST, m, `manifest cartella PC: ${m.file.length} file`);
+}
+
+/* ------------------------------------------------------------------ */
+/* La cascata: da dove parte davvero la notte                          */
+/* ------------------------------------------------------------------ */
+
+export type LivelloFonte = "caricate" | "link" | "cartella" | "watchlist";
+
+export type Livello = {
+  livello: LivelloFonte;
+  /** Quanti pezzi di materiale ANCORA usabili ci sono a questo livello. */
+  disponibili: number;
+  /** Una riga per la UI e per il log dell'agente. */
+  dettaglio: string;
+};
+
+export type PianoNotte = {
+  modo: ModoFonteSocial;
+  giorno: string;
+  livelli: Livello[];
+  /** Il primo livello con materiale: è da lì che parte l'agente. */
+  scelto: LivelloFonte | null;
+};
+
+/**
+ * L'ordine di precedenza della modalità AUTOMATICO, deciso da Andrea il
+ * 2026-08-27, che vale anche come ripiego per le altre modalità:
+ *
+ *   1. caricate  — quello che ha caricato A MANO oggi dalla sezione Bozze
+ *   2. link      — i post di cui ha incollato l'URL (caroselli compresi)
+ *   3. cartella  — le reference della sua cartella sul PC, mai usate prima
+ *   4. watchlist — ULTIMO ripiego, solo se sopra non è rimasto niente
+ *
+ * La Watchlist per ultima è una scelta precisa: è l'unica fonte che non è
+ * passata dalle sue mani, quindi vale solo quando le altre tre sono a secco.
+ */
+export const ORDINE_CASCATA: LivelloFonte[] = ["caricate", "link", "cartella", "watchlist"];
+
+export async function pianoNotte(
+  userId: number,
+  opts: { giorno?: string } = {},
+): Promise<PianoNotte> {
+  const g = opts.giorno || giornoDelProssimoRun();
+  const fonte = await getFonteSocial().catch(() => null);
+  const modo = fonte?.modo ?? "auto";
+
+  const [caricate, link, manifest, occupate] = await Promise.all([
+    listaReferenceSocial(g).catch(() => [] as FileReferenceSocial[]),
+    listaLinkReference(g).catch(() => [] as LinkReference[]),
+    manifestCartella().catch(() => null),
+    chiaviOccupate().catch(() => new Set<string>()),
+  ]);
+
+  const linkLiberi = link.filter((l) => l.stato === "in-attesa");
+  const tuttiFile = manifest?.file ?? [];
+  const fileLiberi = tuttiFile.filter((f) => !occupate.has(f.nome));
+  // Un carosello vale UNO: le sue slide sono un post solo, non otto reference.
+  const pezziLiberi = new Set(fileLiberi.map((f) => f.gruppo ?? f.nome)).size;
+  const pezziTotali = new Set(tuttiFile.map((f) => f.gruppo ?? f.nome)).size;
+
+  const postWatchlist = await postDiRiferimento(userId, {
+    handle: modo === "profilo" ? fonte?.handle : undefined,
+    limit: 12,
+  }).catch(() => [] as PostRiferimento[]);
+
+  const perLivello: Record<LivelloFonte, Livello> = {
+    caricate: {
+      livello: "caricate",
+      disponibili: caricate.length,
+      dettaglio: caricate.length
+        ? `${caricate.length} reference caricate a mano per il ${g}`
+        : "nessuna reference caricata per questa notte",
+    },
+    link: {
+      livello: "link",
+      disponibili: linkLiberi.length,
+      dettaglio: linkLiberi.length
+        ? `${linkLiberi.length} post da URL in coda (${linkLiberi.map((l) => l.shortcode).join(", ")})`
+        : "nessun link in coda",
+    },
+    cartella: {
+      livello: "cartella",
+      disponibili: pezziLiberi,
+      dettaglio: manifest
+        ? `${pezziLiberi} reference mai usate su ${pezziTotali} nella cartella del PC`
+        : "cartella del PC non ancora sincronizzata sul VPS",
+    },
+    watchlist: {
+      livello: "watchlist",
+      disponibili: postWatchlist.length,
+      dettaglio: postWatchlist.length
+        ? `${postWatchlist.length} post dalla Watchlist (ultimo ripiego)`
+        : "Watchlist senza post utilizzabili",
+    },
+  };
+
+  // In modalità "profilo" la Watchlist filtrata su quel profilo È la fonte
+  // scelta: la cascata resta come rete di sicurezza se quel profilo dà zero.
+  const ordine: LivelloFonte[] =
+    modo === "profilo"
+      ? ["watchlist", "caricate", "link", "cartella"]
+      : modo === "caricate"
+        ? ["caricate", "link", "cartella", "watchlist"]
+        : modo === "link"
+          ? ["link", "caricate", "cartella", "watchlist"]
+          : ORDINE_CASCATA;
+
+  const livelli = ordine.map((l) => perLivello[l]);
+  const scelto = livelli.find((l) => l.disponibili > 0)?.livello ?? null;
+
+  return { modo, giorno: g, livelli, scelto };
 }
