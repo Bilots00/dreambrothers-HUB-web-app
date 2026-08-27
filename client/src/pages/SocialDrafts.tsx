@@ -346,7 +346,11 @@ function MaterialeNotteSocial() {
         </div>
       )}
 
-      {(modo === "profilo" || modo === "auto") && (
+      {/* L'anteprima della Watchlist si mostra solo quando la Watchlist e' davvero
+          la fonte di stanotte. Farla vedere mentre vince la cartella del PC
+          direbbe una cosa falsa: "stanotte partira' da questi post" quando
+          stanotte partira' da altro. */}
+      {(modo === "profilo" || piano.data?.scelto === "watchlist") && (
         <div className="text-xs">
           {anteprima.isLoading && <span className="opacity-50">carico i post di riferimento…</span>}
           {anteprima.error && (
@@ -360,7 +364,9 @@ function MaterialeNotteSocial() {
           {anteprima.data && anteprima.data.length > 0 && (
             <div>
               <div className="opacity-55 mb-2">
-                Stanotte partirà da questi {anteprima.data.length} post:
+                {modo === "profilo"
+                  ? `Stanotte partirà da questi ${anteprima.data.length} post del profilo:`
+                  : `Ultimo ripiego: nessun livello sopra ha materiale, quindi stanotte si parte da questi ${anteprima.data.length} post della Watchlist:`}
               </div>
               <div className="flex flex-wrap gap-2">
                 {anteprima.data.map((p) => (
