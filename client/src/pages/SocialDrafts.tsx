@@ -142,6 +142,9 @@ function MaterialeNotteSocial() {
   // Il piano della notte: gli stessi quattro livelli che leggera' l'agente.
   const piano = trpc.social.piano.useQuery(undefined, { retry: false });
   const linkList = trpc.social.linkReference.useQuery(undefined, { retry: false });
+  // Quante reference della cartella del PC sono ancora libere, e quante sono
+  // impegnate in attesa del tuo giudizio: e' il registro, visto da qui.
+  const cartella = trpc.social.cartellaPc.useQuery(undefined, { retry: false });
 
   const [modo, setModo] = useState<"caricate" | "profilo" | "link" | "auto">("caricate");
   const [handle, setHandle] = useState("");
@@ -343,6 +346,19 @@ function MaterialeNotteSocial() {
               );
             })}
           </div>
+
+          {/* Il registro delle reference della cartella, in una riga: una
+              reference usata resta impegnata finché non giudichi la bozza che
+              ne è nata. Approvi → consumata; scarti → torna libera. */}
+          {cartella.data && (
+            <div className="mt-2 pt-2 opacity-55" style={{ borderTop: "1px solid oklch(0.18 0.015 260)" }}>
+              Cartella del PC: <b>{cartella.data.disponibili}</b> libere ·{" "}
+              {cartella.data.inProva} in attesa del tuo giudizio · {cartella.data.approvate} già approvate.
+              {" "}Sincronizzata il{" "}
+              {new Date(cartella.data.aggiornatoIl).toLocaleString("it-IT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}.
+              {" "}In questa fase di test i file restano dove sono: nessuno viene spostato.
+            </div>
+          )}
         </div>
       )}
 
