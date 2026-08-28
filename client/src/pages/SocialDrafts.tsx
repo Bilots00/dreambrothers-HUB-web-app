@@ -41,10 +41,14 @@ function SelettoreNotte({
   const conBozze = useMemo(() => disponibili.map(daISO), [disponibili]);
   const scegli = (iso: string) => { onChange(iso); setAperto(false); };
 
+  // Stanotte e ieri sono SEMPRE selezionabili, anche se non hanno bozze: e'
+  // l'unico modo che ha Andrea per distinguere "l'agente non ha prodotto
+  // niente" da "il calendario e' rotto". Prima erano condizionate a set.has(),
+  // quindi la notte a zero spariva dal calendario invece di mostrarsi vuota.
   const scorciatoie = [
-    { label: "Ultima notte", iso: disponibili[0] },
-    { label: "Stanotte", iso: set.has(ISO(new Date())) ? ISO(new Date()) : undefined },
-    { label: "Ieri", iso: set.has(ISO(new Date(Date.now() - 86_400_000))) ? ISO(new Date(Date.now() - 86_400_000)) : undefined },
+    { label: "Stanotte", iso: ISO(new Date()) },
+    { label: "Ieri", iso: ISO(new Date(Date.now() - 86_400_000)) },
+    { label: "Ultima notte con bozze", iso: disponibili[0] },
     { label: "Tutte", iso: "tutte" },
   ].filter((s) => s.iso);
 
@@ -72,7 +76,7 @@ function SelettoreNotte({
             ))}
             <div className="mt-1 pt-2 px-3 text-[11px] opacity-45"
                  style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
-              {disponibili.length} notti disponibili
+              {disponibili.length} notti con bozze · le altre si aprono vuote
             </div>
           </div>
           <Calendar
@@ -80,8 +84,11 @@ function SelettoreNotte({
             month={mese}
             onMonthChange={setMese}
             selected={valore && valore !== "tutte" ? daISO(valore) : undefined}
-            onSelect={(d) => d && set.has(ISO(d)) && scegli(ISO(d))}
-            disabled={(d) => !set.has(ISO(d))}
+            onSelect={(d) => d && scegli(ISO(d))}
+            // Si blocca solo il futuro: una notte non ancora arrivata non puo'
+            // avere bozze. Le notti passate senza bozze restano cliccabili e
+            // mostrano lo stato vuoto, che e' un'informazione, non un errore.
+            disabled={(d) => ISO(d) > ISO(new Date())}
             modifiers={{ conBozze }}
             modifiersStyles={{ conBozze: { fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 } }}
           />
@@ -607,18 +614,29 @@ export default function SocialDrafts() {
 
       <MaterialeNotteSocial />
 
-      {notti.length > 0 && (
-        <div className="flex items-center gap-3 flex-wrap">
-          <SelettoreNotte disponibili={notti} valore={notte} onChange={setNotte} />
-          <span className="text-xs opacity-45">
-            {list.length} bozze in questa notte · {tutte.length} in archivio
-          </span>
-        </div>
-      )}
+      <div className="flex items-center gap-3 flex-wrap">
+        <SelettoreNotte disponibili={notti} valore={notte} onChange={setNotte} />
+        <span className="text-xs opacity-45">
+          {list.length} bozze in questa notte · {tutte.length} in archivio
+        </span>
+      </div>
 
       {list.length === 0 && (
         <div className="rounded-2xl p-10 text-center text-sm text-muted-foreground" style={{ background: "oklch(0.13 0.015 260)", border: "1px dashed oklch(0.22 0.015 260)" }}>
-          Nessuna bozza ancora. Genera contenuti da <b>Crea Post</b> o lascia lavorare l'AI Manager: le bozze appariranno qui. ✨
+          {tutte.length === 0 ? (
+            <>Nessuna bozza ancora. Genera contenuti da <b>Crea Post</b> o lascia lavorare l'AI Manager: le bozze appariranno qui. ✨</>
+          ) : (
+            <>
+              Nessuna bozza per <b>{etichettaData(notte)}</b>.
+              <div className="mt-2 opacity-70">
+                O l'automazione non ha girato quella notte, o la critica ha bocciato
+                il batch prima che arrivasse qui. L'ultima notte con bozze e'
+                {" "}<button className="underline underline-offset-2" onClick={() => setNotte(notti[0])}>
+                  {etichettaData(notti[0])}
+                </button>.
+              </div>
+            </>
+          )}
         </div>
       )}
 
