@@ -9,6 +9,7 @@ import { registerCareRoutes } from "./careRoutes";
 import { registerSocialRoutes } from "./socialRoutes";
 import { registerVideoRoutes } from "./videoRoutes";
 import { registerClaudeRoutes } from "./claudeRoutes";
+import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
 import { registerResearchRoutes } from "./researchRoutes";
@@ -519,6 +520,48 @@ async function runMigrations() {
   } catch (err) {
     console.warn("[Migrate] tabelle claude sessions non create:", err);
   }
+  // Dream Team: la stanza del mastermind (specchio del gruppo Telegram).
+  // Stesso pattern IF NOT EXISTS delle altre: il boot le crea da solo su Railway.
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS dream_team_agents (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      code VARCHAR(32) NOT NULL,
+      nome VARCHAR(64) NOT NULL,
+      emoji VARCHAR(8) NOT NULL DEFAULT '•',
+      campo VARCHAR(255) NOT NULL DEFAULT '',
+      telegramUsername VARCHAR(64),
+      capofila BOOLEAN NOT NULL DEFAULT FALSE,
+      attivo BOOLEAN NOT NULL DEFAULT TRUE,
+      lastSeenAt TIMESTAMP NULL,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_dream_team_agent (userId, code)
+    ) DEFAULT CHARSET=utf8mb4`);
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS dream_team_messages (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      role ENUM('user','agent','system') NOT NULL,
+      agentCode VARCHAR(32),
+      text MEDIUMTEXT NOT NULL,
+      source VARCHAR(16) NOT NULL DEFAULT 'web',
+      externalId VARCHAR(191) NOT NULL,
+      status ENUM('new','handled') NOT NULL DEFAULT 'new',
+      replyToId INT,
+      telegramMessageId BIGINT,
+      claimedAt TIMESTAMP NULL,
+      deliveredAt TIMESTAMP NULL,
+      tentativi INT NOT NULL DEFAULT 0,
+      nota TEXT,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_dream_team_msg (userId, externalId),
+      INDEX idx_dt_msg_outbox (userId, source, deliveredAt),
+      INDEX idx_dt_msg_status (userId, status)
+    ) DEFAULT CHARSET=utf8mb4`);
+    console.log("[Migrate] Tabelle dream_team_agents + dream_team_messages pronte");
+  } catch (err) {
+    console.warn("[Migrate] tabelle dream team non create:", err);
+  }
   // Migrazione additiva idempotente: 🩷 sui video della Watchlist (tab Templates)
   try {
     const res: any = await db.execute(sql`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'watchlist_videos' AND COLUMN_NAME = 'liked'`);
@@ -578,6 +621,7 @@ async function startServer() {
   registerCreativeRoutes(app);
   registerAdsLibraryRoutes(app);
   registerFulfillmentRoutes(app);
+  registerDreamteamRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

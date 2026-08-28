@@ -836,3 +836,60 @@ export const videoDrafts = mysqlTable("video_drafts", {
 });
 
 export type VideoDraft = typeof videoDrafts.$inferSelect;
+
+// ─── Dream Team: la stanza del mastermind, specchio del gruppo Telegram ───────
+// Il motore vive sul VPS (dreamteam.py): e' il capofila che decide chi parla.
+// Qui c'e' solo la vista e la casella di posta in uscita — nessuna riga di
+// questo schema apre mai un giro di riunione.
+export const dreamTeamAgents = mysqlTable("dream_team_agents", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  // Lo stesso `id` di squadra.json sul VPS: la fonte di verita' e' quel file,
+  // questa tabella e' la sua copia leggibile dalla web app.
+  code: varchar("code", { length: 32 }).notNull(),
+  nome: varchar("nome", { length: 64 }).notNull(),
+  emoji: varchar("emoji", { length: 8 }).default("•").notNull(),
+  campo: varchar("campo", { length: 255 }).default("").notNull(),
+  telegramUsername: varchar("telegramUsername", { length: 64 }),
+  capofila: boolean("capofila").default(false).notNull(),
+  // attivo = ha un token e sta davvero nel gruppo. Gli altri restano in lista,
+  // spenti: cosi' si vede chi manca invece di far finta che non esista.
+  attivo: boolean("attivo").default(true).notNull(),
+  lastSeenAt: timestamp("lastSeenAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => [uniqueIndex("uq_dream_team_agent").on(t.userId, t.code)]);
+
+export type DreamTeamAgent = typeof dreamTeamAgents.$inferSelect;
+export type InsertDreamTeamAgent = typeof dreamTeamAgents.$inferInsert;
+
+export const dreamTeamMessages = mysqlTable("dream_team_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  role: mysqlEnum("role", ["user", "agent", "system"]).notNull(),
+  // NULL quando parla Andrea; il `code` del roster quando parla un agente.
+  agentCode: varchar("agentCode", { length: 32 }),
+  // Su Telegram il testo viene troncato a 3800: qui vive quello intero.
+  text: mediumtext("text").notNull(),
+  source: varchar("source", { length: 16 }).default("web").notNull(), // web | telegram
+  // La chiave dell'idempotenza: web:<uuid> se nasce qui, tg:<chatId>:<messageId>
+  // se nasce nel gruppo, sys:<uuid> per le risposte e le note di sistema.
+  externalId: varchar("externalId", { length: 191 }).notNull(),
+  status: mysqlEnum("status", ["new", "handled"]).default("new").notNull(),
+  replyToId: int("replyToId"),
+  telegramMessageId: bigint("telegramMessageId", { mode: "number" }),
+  // Lease di consegna, NON consegna: il ponte prende in carico con claimedAt e
+  // conferma con deliveredAt. Una riga presa in carico e mai confermata torna
+  // in coda da sola dopo 2 minuti — un claim che fosse gia' "consegnato"
+  // perderebbe il messaggio per sempre al primo crash fra i due passi.
+  claimedAt: timestamp("claimedAt"),
+  deliveredAt: timestamp("deliveredAt"),
+  // Un messaggio che Telegram rifiuta non deve avvelenare la coda per sempre:
+  // al quinto tentativo la riga si chiude con una nota visibile nella stanza.
+  tentativi: int("tentativi").default(0).notNull(),
+  nota: text("nota"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_dream_team_msg").on(t.userId, t.externalId)]);
+
+export type DreamTeamMessage = typeof dreamTeamMessages.$inferSelect;
+export type InsertDreamTeamMessage = typeof dreamTeamMessages.$inferInsert;

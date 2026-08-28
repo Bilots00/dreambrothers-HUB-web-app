@@ -10,7 +10,7 @@ import {
   LogOut, Megaphone, Package, Package2, PanelLeft, Plug,
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar, CheckCircle2,
-  Newspaper, TrendingUp, Clapperboard, Moon, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck,
+  Newspaper, TrendingUp, Clapperboard, Moon, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck, Users,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -61,6 +61,7 @@ const CARE_ITEMS = [
 
 const CLAUDE_ITEMS = [
   { icon: Brain, label: "Sessions", path: "/claude/sessions", description: "Le tue sessioni Claude, ovunque" },
+  { icon: Users, label: "Dream Team", path: "/claude/dream-team", description: "Il mastermind degli agenti AI" },
 ];
 
 const LIBRARY_ITEMS = [

@@ -30,6 +30,7 @@ import {
   deleteVideoDraft,
 } from "./db";
 import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChannels } from "./watchlistService";
+import { dreamTeamStanza, dreamTeamAgenti, dreamTeamInvia } from "./dreamTeam";
 import { getApifyBudget } from "./apifyBudget";
 import {
   refreshResearch, enrichPendingResearch, generateContentFromResearch,
@@ -793,6 +794,21 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
       }),
   }),
 
+
+  // ─── Dream Team: la stanza del mastermind (specchio del gruppo Telegram) ────
+  // Il motore vive sul VPS (dreamteam.py): qui solo vista + imbucare.
+  dreamTeam: router({
+    stanza: protectedProcedure.query(async () => dreamTeamStanza()),
+
+    agenti: protectedProcedure.query(async () => dreamTeamAgenti()),
+
+    invia: protectedProcedure
+      // max 3500: su Telegram il limite reale e' ~3800 col prefisso "👤 Andrea…".
+      // Un limite piu' alto qui = messaggio mutilato nel gruppo e agenti che
+      // rispondono a un testo che nessuno vede intero.
+      .input(z.object({ text: z.string().min(1).max(3500) }))
+      .mutation(async ({ input }) => dreamTeamInvia(input.text)),
+  }),
   // ─── SEO Approvals: le proposte dell'agente SEO che aspettano una decisione ──
   seoApprovals: router({
     list: protectedProcedure.query(async () => listProposte()),

@@ -37,6 +37,7 @@ import SeoApprovals from "./pages/SeoApprovals";
 import ProductMarketFit from "./pages/ProductMarketFit";
 import ProductArtistApprovals from "./pages/ProductArtistApprovals";
 import ClaudeSessions from "./pages/ClaudeSessions";
+import DreamTeam from "./pages/DreamTeam";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 
@@ -100,6 +101,7 @@ function AppRouter() {
 
       {/* CLAUDE AI */}
       <Route path="/claude/sessions">{withLayout(ClaudeSessions)}</Route>
+      <Route path="/claude/dream-team">{withLayout(DreamTeam)}</Route>
       <Route path="/claude">{() => { window.location.replace("/claude/sessions"); return null; }}</Route>
 
       {/* CUSTOMER CARE */}

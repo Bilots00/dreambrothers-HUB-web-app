@@ -1,6 +1,6 @@
-import { eq, desc, asc, and, or, isNull, gte, lte, sql, notInArray, inArray, like } from "drizzle-orm";
+import { eq, desc, asc, and, or, isNull, gte, lt, lte, sql, notInArray, inArray, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, videoDrafts, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, claudeAttachments, InsertClaudeSession } from "../drizzle/schema";
+import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, videoDrafts, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, claudeAttachments, InsertClaudeSession, dreamTeamAgents, dreamTeamMessages, InsertDreamTeamAgent, InsertDreamTeamMessage } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -1494,4 +1494,132 @@ export async function deleteVideoDraft(id: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.delete(videoDrafts).where(eq(videoDrafts.id, id));
+}
+
+// ─── Dream Team ───────────────────────────────────────────────────────────────
+// La stanza del mastermind: vista + casella di posta. Attenzione ai contratti:
+// - gli helper del PONTE (outbox/claim/delivered) distinguono "DB giu'" da
+//   "nessuna riga": null/false, MAI un default ottimista. Un claim che
+//   rispondesse true senza DB farebbe postare il ponte senza presa in carico.
+
+export async function getDreamTeamAgentsList(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(dreamTeamAgents)
+    .where(eq(dreamTeamAgents.userId, userId))
+    .orderBy(desc(dreamTeamAgents.capofila), asc(dreamTeamAgents.nome));
+}
+
+export async function upsertDreamTeamAgentRow(row: InsertDreamTeamAgent): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(dreamTeamAgents).values(row).onDuplicateKeyUpdate({
+    set: {
+      nome: row.nome, emoji: row.emoji, campo: row.campo,
+      telegramUsername: row.telegramUsername ?? null,
+      capofila: row.capofila ?? false, attivo: row.attivo ?? true,
+      lastSeenAt: new Date(),
+    },
+  });
+}
+
+export async function touchDreamTeamAgent(userId: number, code: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(dreamTeamAgents).set({ lastSeenAt: new Date() })
+    .where(and(eq(dreamTeamAgents.userId, userId), eq(dreamTeamAgents.code, code)));
+}
+
+export async function getDreamTeamMessagesList(userId: number, limit = 200) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select().from(dreamTeamMessages)
+    .where(eq(dreamTeamMessages.userId, userId))
+    .orderBy(desc(dreamTeamMessages.id)).limit(limit);
+  return rows.reverse();
+}
+
+export async function insertDreamTeamMessageIfNew(
+  msg: InsertDreamTeamMessage,
+): Promise<{ id: number; duplicate: boolean } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const res = await db.insert(dreamTeamMessages).values(msg);
+    const insertId = (res as unknown as [{ insertId: number }])[0]?.insertId ?? 0;
+    return { id: insertId, duplicate: false };
+  } catch (e: unknown) {
+    // drizzle incapsula l'errore mysql2 in `cause`: il codice va cercato in entrambi
+    const err = e as { errno?: number; cause?: { errno?: number }; message?: string };
+    const errno = err?.errno ?? err?.cause?.errno;
+    if (errno === 1062 || /Duplicate entry/i.test(String(err?.message ?? ""))) {
+      const existing = await db.select({ id: dreamTeamMessages.id }).from(dreamTeamMessages)
+        .where(and(eq(dreamTeamMessages.userId, msg.userId), eq(dreamTeamMessages.externalId, msg.externalId)))
+        .limit(1);
+      return existing.length ? { id: existing[0].id, duplicate: true } : null;
+    }
+    throw e;
+  }
+}
+
+// La coda in uscita, col recupero dei lease scaduti: una riga presa in carico
+// (claimedAt) ma mai confermata (deliveredAt) torna qui da sola dopo 2 minuti.
+export async function getDreamTeamOutbox(userId: number, limit = 20) {
+  const db = await getDb();
+  if (!db) return null; // null = DB giu': la rotta risponde 503, non "coda vuota"
+  return db.select().from(dreamTeamMessages).where(and(
+    eq(dreamTeamMessages.userId, userId),
+    eq(dreamTeamMessages.source, "web"),
+    isNull(dreamTeamMessages.deliveredAt),
+    lt(dreamTeamMessages.tentativi, 5),
+    or(isNull(dreamTeamMessages.claimedAt), lte(dreamTeamMessages.claimedAt, sql`(NOW() - INTERVAL 2 MINUTE)`)),
+  )).orderBy(asc(dreamTeamMessages.createdAt)).limit(limit);
+}
+
+export async function claimDreamTeamMessage(id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false; // MAI true senza DB
+  const res = await db.update(dreamTeamMessages).set({ claimedAt: new Date() }).where(and(
+    eq(dreamTeamMessages.id, id),
+    isNull(dreamTeamMessages.deliveredAt),
+    or(isNull(dreamTeamMessages.claimedAt), lte(dreamTeamMessages.claimedAt, sql`(NOW() - INTERVAL 2 MINUTE)`)),
+  ));
+  const hdr = (res as unknown as [{ affectedRows?: number }])[0];
+  return (hdr?.affectedRows ?? 0) > 0;
+}
+
+export async function markDreamTeamDelivered(
+  id: number, esito: "ok" | "errore", telegramMessageId?: number,
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  if (esito === "ok") {
+    await db.update(dreamTeamMessages)
+      .set({ deliveredAt: new Date(), telegramMessageId: telegramMessageId ?? null })
+      .where(eq(dreamTeamMessages.id, id));
+    return true;
+  }
+  // errore: libera il lease e conta il tentativo; al quinto la riga si chiude
+  // con una nota visibile — un messaggio velenoso non deve girare in eterno.
+  await db.update(dreamTeamMessages)
+    .set({ claimedAt: null, tentativi: sql`${dreamTeamMessages.tentativi} + 1` })
+    .where(eq(dreamTeamMessages.id, id));
+  await db.update(dreamTeamMessages)
+    .set({ deliveredAt: new Date(), status: "handled", nota: "Consegna su Telegram fallita 5 volte: guarda il log del VPS (~/dreamteam.log)." })
+    .where(and(eq(dreamTeamMessages.id, id), gte(dreamTeamMessages.tentativi, 5)));
+  return true;
+}
+
+export async function markDreamTeamHandled(id: number, nota?: string | null): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  await db.update(dreamTeamMessages).set({ status: "handled", nota: nota ?? null })
+    .where(eq(dreamTeamMessages.id, id));
+  return true;
+}
+
+export async function dreamTeamDbOk(): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try { await db.execute(sql`SELECT 1`); return true; } catch { return false; }
 }
