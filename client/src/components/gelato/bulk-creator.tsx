@@ -1,3 +1,4 @@
+import { workerAuthHeaders } from "@/lib/gelatoFetch";
 import React, { useEffect, useState } from "react";
 import { StepCard } from "./step-card";
 import { ApiConnection } from "./api-connection";
@@ -77,7 +78,7 @@ function ShopifyProductPicker({ label, hint, icon, value, onChange }: { label: s
     let active = true; setLoading(true);
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`${WORKER_BASE}/shopify-search-products?q=${encodeURIComponent(q.trim())}`);
+        const r = await fetch(`${WORKER_BASE}/shopify-search-products?q=${encodeURIComponent(q.trim())}`, { headers: workerAuthHeaders() });
         const d = await r.json();
         if (active) setResults((d.products || []).map((p: any) => ({ legacyId: p.legacyId, title: p.title, image: p.image })));
       } catch { /* ignore */ } finally { if (active) setLoading(false); }
@@ -120,7 +121,7 @@ function ShopifyProductPicker({ label, hint, icon, value, onChange }: { label: s
 async function uploadOriginalFile(file: File, exactFileName: string) {
   const BASE_URL = WORKER_BASE;
   const CHUNK_SIZE = 6 * 1024 * 1024;
-  const startRes = await fetch(`${BASE_URL}/upload-start?filename=${encodeURIComponent(exactFileName)}`, { method: "POST" });
+  const startRes = await fetch(`${BASE_URL}/upload-start?filename=${encodeURIComponent(exactFileName)}`, { method: "POST", headers: workerAuthHeaders() });
   if (!startRes.ok) { const e = await startRes.json().catch(() => ({})); throw new Error(`Errore Inizio Upload: ${e.error || await startRes.text()}`); }
   const { uploadId, key } = await startRes.json();
   const encodedUploadId = encodeURIComponent(uploadId);
@@ -133,14 +134,14 @@ async function uploadOriginalFile(file: File, exactFileName: string) {
     let partData = null; let retries = 3; let lastError = "";
     while (retries > 0) {
       try {
-        const partRes = await fetch(`${BASE_URL}/upload-part?uploadId=${encodedUploadId}&key=${encodedKey}&partNumber=${partNumber}`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: chunk });
+        const partRes = await fetch(`${BASE_URL}/upload-part?uploadId=${encodedUploadId}&key=${encodedKey}&partNumber=${partNumber}`, { method: "POST", headers: { "Content-Type": "application/octet-stream", ...workerAuthHeaders() }, body: chunk });
         if (!partRes.ok) { const e = await partRes.json().catch(() => ({})); throw new Error(e.error || `Codice ${partRes.status}`); }
         partData = await partRes.json(); break;
       } catch (e: any) { lastError = e.message; retries--; if (retries === 0) throw new Error(`Fallito chunk ${partNumber}/${totalChunks}: ${lastError}`); await new Promise(r => setTimeout(r, 1000)); }
     }
     parts.push(partData);
   }
-  const completeRes = await fetch(`${BASE_URL}/upload-complete?uploadId=${encodedUploadId}&key=${encodedKey}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parts }) });
+  const completeRes = await fetch(`${BASE_URL}/upload-complete?uploadId=${encodedUploadId}&key=${encodedKey}`, { method: "POST", headers: { "Content-Type": "application/json", ...workerAuthHeaders() }, body: JSON.stringify({ parts }) });
   if (!completeRes.ok) { const e = await completeRes.json().catch(() => ({})); throw new Error(`Errore Assemblaggio: ${e.error || await completeRes.text()}`); }
   return (await completeRes.json()).url;
 }
@@ -157,6 +158,11 @@ export function BulkCreator() {
   const [creationProgress, setCreationProgress] = useState(0);
   // v25: modalità Set — una sola listing con N design (come Artelo, ma su Gelato)
   const [setMode, setSetMode] = useState(false);
+  // Listing unica: se ON aggiunge Material + Frame sul prodotto creato da UN
+  // solo template; se OFF aggiunge solo Frame (listing separate per materiale).
+  const [listingUnica, setListingUnica] = useState(false);
+  const [materialValues, setMaterialValues] = useState("Poster, Canvas");
+  const [frameValues, setFrameValues] = useState("Without Frame, Black Frame, White Frame");
   const [setTitle, setSetTitle] = useState("");
   const [createdProducts, setCreatedProducts] = useState<any[]>([]);
   const [template, setTemplate] = useState<any | null>(null);
@@ -177,12 +183,12 @@ export function BulkCreator() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem("gelato.automation");
-      if (raw) { const a = JSON.parse(raw); if (a.mostPopularVariant) setMostPopularVariant(a.mostPopularVariant); if (a.refsByTemplate) setRefsByTemplate(a.refsByTemplate); }
+      if (raw) { const a = JSON.parse(raw); if (a.mostPopularVariant) setMostPopularVariant(a.mostPopularVariant); if (a.refsByTemplate) setRefsByTemplate(a.refsByTemplate); if (typeof a.listingUnica === "boolean") setListingUnica(a.listingUnica); if (a.materialValues) setMaterialValues(a.materialValues); if (a.frameValues) setFrameValues(a.frameValues); }
     } catch {}
   }, []);
   useEffect(() => {
-    try { localStorage.setItem("gelato.automation", JSON.stringify({ mostPopularVariant, refsByTemplate })); } catch {}
-  }, [mostPopularVariant, refsByTemplate]);
+    try { localStorage.setItem("gelato.automation", JSON.stringify({ mostPopularVariant, refsByTemplate, listingUnica, materialValues, frameValues })); } catch {}
+  }, [mostPopularVariant, refsByTemplate, listingUnica, materialValues, frameValues]);
 
   // ricorda i template scelti nello step 3 (permanente, per la prossima run)
   useEffect(() => {
@@ -242,7 +248,7 @@ export function BulkCreator() {
       const allResults: any[] = [];
       let tIndex = 0;
       for (const t of templateList) {
-        const tplRes = await fetch(`${WORKER_BASE}/gelato-get-template?templateId=${t.id}`);
+        const tplRes = await fetch(`${WORKER_BASE}/gelato-get-template?templateId=${t.id}`, { headers: workerAuthHeaders() });
         if (!tplRes.ok) { allResults.push({ title: `Template ${t.id.slice(0, 8)}`, status: "error", error: "Template non trovato" }); tIndex++; continue; }
         const tpl = await tplRes.json();
         if (t.id === selectedProduct.id) setTemplate(tpl);
@@ -266,7 +272,7 @@ export function BulkCreator() {
         const tref = refsByTemplate[t.id] || { priceRef: null, inventoryRef: null };
         const runSettings = { mostPopular: mostPopularVariant.trim() || "", priceRef: tref.priceRef?.legacyId || "", inventoryRef: tref.inventoryRef?.legacyId || "" };
         const createRes = await fetch(`${WORKER_BASE}/gelato-bulk-create`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json", ...workerAuthHeaders() },
           body: JSON.stringify({ templateId: tpl.id, publish: true, products: [product], storeId: STORE_ID, salesChannels: ["shopify"], settings: runSettings }),
         });
         let data: any = {}; try { data = await createRes.json(); } catch {}
@@ -327,7 +333,7 @@ export function BulkCreator() {
       const allResults: any[] = [];
       let tIndex = 0;
       for (const t of templateList) {
-        const tplRes = await fetch(`${WORKER_BASE}/gelato-get-template?templateId=${t.id}`);
+        const tplRes = await fetch(`${WORKER_BASE}/gelato-get-template?templateId=${t.id}`, { headers: workerAuthHeaders() });
         if (!tplRes.ok) { allResults.push({ title: `Template ${t.id.slice(0, 8)}`, status: "error", error: "Template non trovato" }); tIndex++; continue; }
         const tpl = await tplRes.json();
         if (t.id === selectedProduct.id) setTemplate(tpl);
@@ -352,7 +358,7 @@ export function BulkCreator() {
           inventoryRef: tref.inventoryRef?.legacyId || "",
         };
         const createRes = await fetch(`${WORKER_BASE}/gelato-bulk-create`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json", ...workerAuthHeaders() },
           body: JSON.stringify({ templateId: tpl.id, publish: true, products, storeId: STORE_ID, salesChannels: ["shopify"], settings: runSettings }),
         });
         let data: any = {}; try { data = await createRes.json(); } catch {}
@@ -361,6 +367,34 @@ export function BulkCreator() {
         else allResults.push(...results);
         tIndex++;
         setCreationProgress(40 + (tIndex / templateList.length) * 60);
+      }
+
+      // Il prodotto Shopify lo crea Gelato in modo ASINCRONO, quindi il worker
+      // lo cerca per titolo. Il toggle decide se aggiungere anche Material
+      // (listing unica) o solo Frame (listing separate per materiale).
+      const creati = allResults.filter((r: any) => r.status === "active" || r.status === "created_in_background");
+      if (creati.length) {
+        const splitta = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
+        const opzioni: Record<string, string[]> = {};
+        if (listingUnica) opzioni["Material"] = splitta(materialValues);
+        opzioni["Frame"] = splitta(frameValues);
+        const primoTpl = templateList[0];
+        const tref = (primoTpl && refsByTemplate[primoTpl.id]) || { priceRef: null, inventoryRef: null };
+        for (const r of creati) {
+          try {
+            const cr = await fetch(`${WORKER_BASE}/combine-product`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...workerAuthHeaders() },
+              body: JSON.stringify({ title: r.title, options: opzioni, priceRef: tref.priceRef?.legacyId || "" }),
+            });
+            const cd = await cr.json().catch(() => ({}));
+            (r as any).opzioni = cd.error
+              ? `errore: ${cd.error}`
+              : `+${cd.variantiCreate ?? 0} varianti${cd.scartatePerPrezzoMancante ? `, ${cd.scartatePerPrezzoMancante} senza prezzo` : ""}`;
+          } catch (e: any) {
+            (r as any).opzioni = `errore: ${e?.message || "combine fallito"}`;
+          }
+        }
       }
 
       setCreatedProducts(allResults); setCreationProgress(100); setIsCreating(false);
@@ -439,6 +473,42 @@ export function BulkCreator() {
         {currentStep === 4 && selectedProduct && (
           <div className="space-y-8">
             <ProductRules rules={rules} onRulesChange={setRules} onSave={() => toast.success("Regole salvate")} />
+
+            {/* Listing unica: Material + Frame su un solo prodotto, oppure solo Frame */}
+            <Card style={{ background: "oklch(0.19 0.025 265)", border: "1px solid oklch(0.62 0.15 265)", boxShadow: "0 0 0 1px oklch(0.62 0.15 265 / 0.25)" }}>
+              <CardContent className="p-6 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="font-semibold flex items-center gap-2"><Layers className="h-4 w-4 text-indigo-400" />Aggiungi opzione MATERIAL (prodotto unico) — NON è il SET</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Automazione post-pubblicazione sul prodotto creato da Gelato.
+                      <strong> ON</strong>: pubblichi su UN solo template (es. Poster) e il worker aggiunge le opzioni <strong>Material</strong> e <strong>Frame</strong> → un design = una sola scheda prodotto con tutti i materiali dentro.
+                      <strong> OFF</strong>: pubblicazione invariata (un prodotto per ogni template scelto), ma il worker aggiunge la sola opzione <strong>Frame</strong> — serve ora che le versioni Framed Poster / Framed Canvas non si pubblicano più.
+                    </p>
+                  </div>
+                  <Switch checked={listingUnica} onCheckedChange={setListingUnica} />
+                </div>
+                <div className="space-y-3 pt-2" style={{ borderTop: "1px solid oklch(0.34 0.03 265)" }}>
+                  {listingUnica && (
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Valori dell'opzione Material</label>
+                      <p className="text-xs text-muted-foreground">Separati da virgola. Il primo valore viene assegnato alle varianti già create dal template.</p>
+                      <Input value={materialValues} style={{ background: "oklch(0.12 0.012 260)" }} onChange={(e) => setMaterialValues(e.target.value)} />
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Valori dell'opzione Frame</label>
+                    <p className="text-xs text-muted-foreground">
+                      Il PRIMO valore viene assegnato alle varianti esistenti: tieni "Without Frame" in testa, altrimenti i prodotti già creati diventano tutti incorniciati.
+                    </p>
+                    <Input value={frameValues} style={{ background: "oklch(0.12 0.012 260)" }} onChange={(e) => setFrameValues(e.target.value)} />
+                  </div>
+                  <p className="text-xs text-amber-400">
+                    I prezzi delle nuove varianti vengono copiati dal prodotto impostato in "Copia PREZZI" qui sotto. Senza quel riferimento, o per le taglie che non ci sono, la variante NON viene creata: i prezzi non si inventano.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* v25: modalità Set — una listing con N design (stile Artelo, su Gelato) */}
             <Card style={{ background: "oklch(0.19 0.025 265)", border: "1px solid oklch(0.55 0.14 160)", boxShadow: "0 0 0 1px oklch(0.55 0.14 160 / 0.25)" }}>
