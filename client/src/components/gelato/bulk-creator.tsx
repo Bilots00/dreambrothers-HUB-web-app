@@ -359,7 +359,19 @@ export function BulkCreator() {
         };
         const createRes = await fetch(`${WORKER_BASE}/gelato-bulk-create`, {
           method: "POST", headers: { "Content-Type": "application/json", ...workerAuthHeaders() },
-          body: JSON.stringify({ templateId: tpl.id, publish: true, products, storeId: STORE_ID, salesChannels: ["shopify"], settings: runSettings }),
+          body: JSON.stringify({
+            templateId: tpl.id, publish: true, products, storeId: STORE_ID, salesChannels: ["shopify"], settings: runSettings,
+            // La combine la fa il WORKER dopo che il prodotto compare su Shopify
+            // (Gelato lo crea in modo asincrono): il browser non deve aspettare.
+            combine: {
+              unified: listingUnica,
+              options: {
+                ...(listingUnica ? { Material: materialValues.split(",").map((x) => x.trim()).filter(Boolean) } : {}),
+                Frame: frameValues.split(",").map((x) => x.trim()).filter(Boolean),
+              },
+              priceRef: tref.priceRef?.legacyId || "",
+            },
+          }),
         });
         let data: any = {}; try { data = await createRes.json(); } catch {}
         const results = (data.results || []).map((r: any) => ({ ...r, templateName: tpl.title || t.label || tpl.productType }));
@@ -369,38 +381,10 @@ export function BulkCreator() {
         setCreationProgress(40 + (tIndex / templateList.length) * 60);
       }
 
-      // Il prodotto Shopify lo crea Gelato in modo ASINCRONO, quindi il worker
-      // lo cerca per titolo. Il toggle decide se aggiungere anche Material
-      // (listing unica) o solo Frame (listing separate per materiale).
-      const creati = allResults.filter((r: any) => r.status === "active" || r.status === "created_in_background");
-      if (creati.length) {
-        const splitta = (v: string) => v.split(",").map((x) => x.trim()).filter(Boolean);
-        const opzioni: Record<string, string[]> = {};
-        if (listingUnica) opzioni["Material"] = splitta(materialValues);
-        opzioni["Frame"] = splitta(frameValues);
-        const primoTpl = templateList[0];
-        const tref = (primoTpl && refsByTemplate[primoTpl.id]) || { priceRef: null, inventoryRef: null };
-        for (const r of creati) {
-          try {
-            const cr = await fetch(`${WORKER_BASE}/combine-product`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...workerAuthHeaders() },
-              body: JSON.stringify({ title: r.title, options: opzioni, priceRef: tref.priceRef?.legacyId || "" }),
-            });
-            const cd = await cr.json().catch(() => ({}));
-            (r as any).opzioni = cd.error
-              ? `errore: ${cd.error}`
-              : `+${cd.variantiCreate ?? 0} varianti${cd.scartatePerPrezzoMancante ? `, ${cd.scartatePerPrezzoMancante} senza prezzo` : ""}`;
-          } catch (e: any) {
-            (r as any).opzioni = `errore: ${e?.message || "combine fallito"}`;
-          }
-        }
-      }
-
       setCreatedProducts(allResults); setCreationProgress(100); setIsCreating(false);
       const successCount = allResults.filter((r: any) => r.status === "active" || r.status === "created_in_background").length;
       const errorCount = allResults.filter((r: any) => r.status === "error").length;
-      if (successCount > 0) toast.success(`Creati ${successCount} prodotti su ${templateList.length} template${errorCount ? `, ${errorCount} falliti` : ""}`);
+      if (successCount > 0) toast.success(`Creati ${successCount} prodotti su ${templateList.length} template${errorCount ? `, ${errorCount} falliti` : ""}. Le opzioni ${listingUnica ? "Material + Frame" : "Frame"} vengono aggiunte dal worker entro ~3 minuti dalla comparsa su Shopify.`, { duration: 12000 });
       else toast.error("0 prodotti creati. Controlla i Template ID.");
     } catch (error: any) {
       setIsCreating(false); setCreationProgress(0);
