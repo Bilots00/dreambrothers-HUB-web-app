@@ -28,15 +28,18 @@ function headersWorker(extra?: Record<string, string>): Record<string, string> {
   return { ...(key ? { "x-db-key": key } : {}), ...(extra || {}) };
 }
 
-function storeId(): string {
-  const id = process.env.GELATO_STORE_ID || process.env.VITE_GELATO_STORE_ID || "";
-  if (!id) {
-    throw new Error(
-      "Manca GELATO_STORE_ID (o VITE_GELATO_STORE_ID) nelle variabili Railway: " +
-        "senza non so su quale store Gelato pubblicare il quadro.",
-    );
-  }
-  return id;
+/**
+ * Lo store Gelato su cui pubblicare — OPZIONALE, e non e' una svista.
+ *
+ * Lo store vero lo tiene il worker nelle sue variabili (`GELATO_STORE_ID` su
+ * Cloudflare): e' lui che chiama `stores/<id>/products:create-from-template`.
+ * Il Bulk Creator passa `storeId` solo quando il browser ce l'ha, e quando
+ * manca il worker usa il suo — che e' il caso normale. Pretenderlo anche qui
+ * ha bloccato una pubblicazione per una variabile che non serviva a nessuno
+ * (successo il 2026-09-01, primo quadro in automatico).
+ */
+function storeId(): string | null {
+  return (process.env.GELATO_STORE_ID || process.env.VITE_GELATO_STORE_ID || "").trim() || null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -168,6 +171,13 @@ export async function pubblicaWallartAuto(input: {
 }): Promise<{ esiti: EsitoWallart[]; ok: number }> {
   const conf = await impostazioniBulkCreator();
   const shop = storeId();
+  const key = process.env.WORKER_KEY || process.env.VITE_WORKER_KEY || "";
+  if (!key) {
+    throw new Error(
+      "Manca WORKER_KEY (o VITE_WORKER_KEY) nelle variabili Railway: il worker Gelato " +
+        "rifiuta le richieste senza la chiave amministrativa.",
+    );
+  }
 
   // Il nome file deve reggere R2 e la query string: stessi caratteri vietati
   // che pulisce l'upscale (titoloDa), cosi' i due mondi coincidono.
@@ -216,7 +226,8 @@ export async function pubblicaWallartAuto(input: {
           tags: input.tags,
           variants: variantsPayload,
         }],
-        storeId: shop,
+        // Solo se ce l'abbiamo: senza, il worker usa il suo (vedi storeId()).
+        ...(shop ? { storeId: shop } : {}),
         salesChannels: ["shopify"],
         settings: {
           mostPopular: conf.mostPopular,
