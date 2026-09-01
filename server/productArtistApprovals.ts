@@ -1229,6 +1229,25 @@ export function designDaDonna(d: Design): boolean {
   return /(women|woman|girls?|ladies)/i.test(`${d.stampa?.titolo || ""} ${d.testoDaComporre || ""}`);
 }
 
+/**
+ * Il nome leggibile ricavato dall'id del design.
+ *
+ * E' l'ultima spiaggia, ma non un ripiego qualsiasi: le wall art mute nascono
+ * senza `testoDaComporre` e senza `concept` (verificato sul batch del
+ * 2026-09-01: 14 quadri, tutti e due i campi vuoti), e senza questo passaggio
+ * finivano tutte con lo STESSO titolo generico — quattordici "Dreamers Art
+ * Print" su Shopify, indistinguibili in bacheca e in SERP. L'id invece la
+ * frase ce l'ha: `2026-09-01_never_stop_dreaming_v1` → "Never Stop Dreaming".
+ */
+function nomeDaId(id: string): string {
+  const slug = id
+    .replace(/^\d{4}-\d{2}-\d{2}[_-]/, "") // la data della notte non e' un nome
+    .replace(/(^|[_-])v\d+$/i, "")         // ne' la versione, in coda o rimasta da sola
+    .replace(/[_-]+/g, " ")
+    .trim();
+  return slug.replace(/(^|\s)(\S)/g, (_m, sep: string, c: string) => sep + c.toUpperCase());
+}
+
 export function titoloProdotto(d: Design): string {
   const scritto = d.stampa?.titolo?.trim();
   if (scritto) return RIPULISCI_TRATTINI(scritto).slice(0, 140);
@@ -1240,7 +1259,7 @@ export function titoloProdotto(d: Design): string {
   // neutro davvero. Quando lo sa, lo scrive l'agente nella scheda.
   const capo = d.tipo === "apparel" ? "Tee" : "Art Print";
   const { titolo, slogan } = paroleDesign(d);
-  const frase = titolo || titoloCase(slogan || d.concept || "Dreamers");
+  const frase = titolo || titoloCase(slogan || d.concept || "") || nomeDaId(d.id) || "Dreamers";
   return RIPULISCI_TRATTINI([frase, capo].filter(Boolean).join(" ")).slice(0, 60);
 }
 
@@ -1274,7 +1293,7 @@ export function descrizioneProdotto(d: Design): string {
 export function metaProdotto(d: Design): { title: string; description: string } {
   const { titolo, slogan } = paroleDesign(d);
   const capo = d.tipo === "apparel" ? "Tee" : "Print";
-  const nome = titolo || titoloCase(d.concept || "Dreamers");
+  const nome = titolo || titoloCase(d.concept || "") || nomeDaId(d.id) || "Dreamers";
 
   const title = RIPULISCI_TRATTINI(
     d.stampa?.metaTitle?.trim() ||

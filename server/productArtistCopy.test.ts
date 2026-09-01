@@ -99,6 +99,53 @@ describe("descrizioneProdotto", () => {
   });
 });
 
+/**
+ * Le wall art mute: nascono senza testo E senza concept (batch 2026-09-01: 14
+ * quadri, entrambi i campi vuoti). Prima finivano tutte come "Dreamers Art
+ * Print" — quattordici prodotti con lo stesso nome su Shopify, e il primo e'
+ * stato pubblicato davvero. Il nome vero sta nell'id.
+ */
+const quadroMuto = {
+  id: "2026-09-01_never_stop_dreaming_v1",
+  file: "2026-09-01_never_stop_dreaming_v1.png",
+  concept: "",
+  avatar: "Money Game",
+  prodotto: "wall art",
+  fornitore: "Gelato",
+  testoDaComporre: "",
+  tipo: "wallart",
+  decisione: "approvato",
+  decisoIl: null,
+  note: null,
+  applicato: false,
+} as unknown as Design;
+
+describe("wall art senza testo ne' concept", () => {
+  it("prende il nome dall'id invece del generico 'Dreamers'", () => {
+    const t = titoloProdotto(quadroMuto);
+    expect(t).toBe("Never Stop Dreaming Art Print");
+    expect(t).not.toMatch(/^Dreamers/);
+  });
+
+  it("non porta la data della notte ne' il numero di versione nel titolo", () => {
+    expect(titoloProdotto(quadroMuto)).not.toMatch(/2026|\bv1\b/i);
+  });
+
+  it("da' un titolo DIVERSO a due quadri muti diversi", () => {
+    const altro = { ...quadroMuto, id: "2026-09-01_hardest_worker_room_v1" } as Design;
+    expect(titoloProdotto(altro)).not.toBe(titoloProdotto(quadroMuto));
+  });
+
+  it("vale anche per il meta title", () => {
+    expect(metaProdotto(quadroMuto).title).toMatch(/Never Stop Dreaming/);
+  });
+
+  it("un id senza nulla di utile ricade sul generico invece di restare vuoto", () => {
+    const anonimo = { ...quadroMuto, id: "2026-09-01_v1" } as Design;
+    expect(titoloProdotto(anonimo)).toBe("Dreamers Art Print");
+  });
+});
+
 describe("metaProdotto", () => {
   it("non ripete titolo e descrizione del prodotto", () => {
     const m = metaProdotto(leone);
