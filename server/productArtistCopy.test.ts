@@ -97,6 +97,21 @@ describe("descrizioneProdotto", () => {
     expect(descrizioneProdotto(quadro)).toMatch(/paper/i);
     expect(descrizioneProdotto(quadro)).not.toMatch(/cotton/i);
   });
+
+  /* Il 2026-09-01 una TELA e' finita in vetrina descritta come "heavyweight
+     matte paper": la stessa descrizione andava a entrambi i materiali. */
+  it("su tela dice tela, e non nomina la carta", () => {
+    const quadro = { ...leone, tipo: "wallart" } as Design;
+    const html = descrizioneProdotto(quadro, "Canvas");
+    expect(html).toMatch(/canvas/i);
+    expect(html).not.toMatch(/paper/i);
+  });
+
+  it("senza materiale, o su poster, resta la carta", () => {
+    const quadro = { ...leone, tipo: "wallart" } as Design;
+    expect(descrizioneProdotto(quadro, "Poster")).toMatch(/paper/i);
+    expect(descrizioneProdotto(quadro, null)).toMatch(/paper/i);
+  });
 });
 
 /**

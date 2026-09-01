@@ -1066,7 +1066,7 @@ export async function eseguiWallartAuto(data: string, id: string): Promise<void>
   try {
     const r = await pubblicaWallartAuto({
       titolo: titoloProdotto({ ...design, tipo: "wallart" }),
-      descrizione: descrizioneProdotto(design),
+      descrizione: materiale => descrizioneProdotto({ ...design, tipo: "wallart" }, materiale),
       tags: [design.avatar, "wallart", "DreamBrothers"].filter(Boolean),
       files: trovati,
       scarica: async nome => {
@@ -1263,7 +1263,13 @@ export function titoloProdotto(d: Design): string {
   return RIPULISCI_TRATTINI([frase, capo].filter(Boolean).join(" ")).slice(0, 60);
 }
 
-export function descrizioneProdotto(d: Design): string {
+/**
+ * @param materiale su cosa si stampa DAVVERO questo prodotto (il nome del
+ * template Gelato: "Canvas", "Poster", …). Senza, la wall art parla di carta,
+ * ed e' quello che il 2026-09-01 ha messo in vetrina una tela descritta come
+ * "heavyweight matte paper": la descrizione non puo' contraddire il prodotto.
+ */
+export function descrizioneProdotto(d: Design, materiale?: string | null): string {
   const scritta = d.stampa?.descrizione?.trim();
   if (scritta) return RIPULISCI_TRATTINI(scritta);
 
@@ -1277,7 +1283,9 @@ export function descrizioneProdotto(d: Design): string {
     // pattern che il Brain vieta esplicitamente.
     d.tipo === "apparel"
       ? `<p>Printed on ringspun cotton with a soft hand feel, so the graphic sits in the fabric instead of on top of it. Unisex fit, true to size.</p>`
-      : `<p>Printed on heavyweight matte paper with pigment inks, made to be framed and to stay on the wall for years.</p>`,
+      : /canvas/i.test(materiale || "")
+        ? `<p>Printed on artist grade canvas with pigment inks, made to stay on the wall for years.</p>`
+        : `<p>Printed on heavyweight matte paper with pigment inks, made to be framed and to stay on the wall for years.</p>`,
     `<p>Made to order and shipped from the production house closest to you. No warehouse, no overproduction, no leftovers.</p>`,
   ]
     .filter(Boolean)

@@ -162,7 +162,13 @@ export type EsitoWallart = { titolo: string; stato: string; errore?: string };
 export async function pubblicaWallartAuto(input: {
   /** titolo commerciale del quadro (fa anche da nome file su R2) */
   titolo: string;
-  descrizione: string;
+  /**
+   * La descrizione dipende dal MATERIALE, quindi si chiede una volta per
+   * template: la stessa frase su carta e su tela farebbe dire a una delle due
+   * schede una cosa falsa (successo il 2026-09-01: canvas venduto come
+   * "heavyweight matte paper").
+   */
+  descrizione: (materiale: string | null) => string;
   tags: string[];
   /** i due file di stampa gia' trovati nella repo dell'agente */
   files: { tag: string; nome: string }[];
@@ -212,7 +218,10 @@ export async function pubblicaWallartAuto(input: {
       return { templateVariantId: v.id, imagePlaceholders: [{ name: nome, fileUrl: url }] };
     });
 
-    const suffix = t.label ? ` — ${t.label}` : "";
+    // Il materiale si separa con la pipe, MAI con l'em dash: il Brain lo vieta
+    // ("nessun umano lo digita") e productArtistApprovals lo ripulisce ovunque.
+    // Il Bulk Creator dal browser lo usa ancora, ed e' un difetto suo.
+    const suffix = t.label ? ` | ${t.label}` : "";
     const tref = conf.refsByTemplate[t.id] || { priceRef: null, inventoryRef: null };
     const res = await fetch(`${WORKER_BASE}/gelato-bulk-create`, {
       method: "POST",
@@ -222,7 +231,9 @@ export async function pubblicaWallartAuto(input: {
         publish: true,
         products: [{
           title: `${input.titolo}${suffix}`,
-          description: input.descrizione,
+          // Il materiale vero: l'etichetta che Andrea ha dato allo slot, o in
+          // mancanza il nome del template su Gelato.
+          description: input.descrizione(t.label || tpl?.title || tpl?.productType || null),
           tags: input.tags,
           variants: variantsPayload,
         }],
