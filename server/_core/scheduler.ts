@@ -6,6 +6,7 @@ import { runAllEtsyShops } from "../etsyService";
 import { generateDailyPicks } from "../dailyPicksService";
 import { runAgentsCycle } from "../metaAgentsService";
 import { refreshAllBrands } from "../adsLibraryService";
+import { riprendiWallartAuto } from "../productArtistApprovals";
 
 // Scheduler in-process (il server Railway è always-on): job giornalieri a orario
 // fisso italiano, indipendenti dai bottoni della UI e dal browser aperto.
@@ -137,4 +138,20 @@ export function registerDailySchedules() {
   }, AGENTS_CYCLE_MS);
   agentsTimer.unref?.();
   console.log("[Scheduler] \"meta-agents-cycle\" attivo ogni 30 min (solo campagne gestite dagli agenti)");
+
+  // Wall art in automatico: le pubblicazioni approvate che aspettano i file di
+  // stampa dal VPS. Il poller le riprende appena i PNG compaiono nella repo
+  // dell'agente; senza token GitHub non c'e' niente da riprendere.
+  if (process.env.PRODUCT_ARTIST_GITHUB_TOKEN || process.env.SEO_AGENT_GITHUB_TOKEN || process.env.GITHUB_TOKEN) {
+    const WALLART_POLL_MS = 3 * 60 * 1000;
+    const wallartTimer = setInterval(async () => {
+      try {
+        await riprendiWallartAuto();
+      } catch (err) {
+        console.warn("[Scheduler] wallart-auto fallito:", err);
+      }
+    }, WALLART_POLL_MS);
+    wallartTimer.unref?.();
+    console.log("[Scheduler] \"wallart-auto\" attivo ogni 3 min (quadri approvati in modalita' automatica)");
+  }
 }

@@ -179,26 +179,40 @@ export function BulkCreator() {
     } catch {}
   }, []);
 
-  // ricorda le ultime scelte di automazione
+  // Le scelte di automazione e i template NON vivono piu' solo nel localStorage
+  // di QUESTO browser: si specchiano nelle impostazioni server (DB), perche' la
+  // pubblicazione automatica delle wall art (pagina Approvazione design) le
+  // legge da li' — dal telefono, a PC spento. Il server vince al caricamento;
+  // ogni modifica riscrive entrambi.
+  const serverSettings = trpc.settings.getAll.useQuery();
+  const hydrated = React.useRef(false);
   useEffect(() => {
+    if (hydrated.current || serverSettings.isLoading) return;
+    hydrated.current = true;
     try {
-      const raw = localStorage.getItem("gelato.automation");
+      const raw = serverSettings.data?.["gelato.automation"] || localStorage.getItem("gelato.automation");
       if (raw) { const a = JSON.parse(raw); if (a.mostPopularVariant) setMostPopularVariant(a.mostPopularVariant); if (a.refsByTemplate) setRefsByTemplate(a.refsByTemplate); if (typeof a.listingUnica === "boolean") setListingUnica(a.listingUnica); if (a.materialValues) setMaterialValues(a.materialValues); if (a.frameValues) setFrameValues(a.frameValues); }
     } catch {}
-  }, []);
-  useEffect(() => {
-    try { localStorage.setItem("gelato.automation", JSON.stringify({ mostPopularVariant, refsByTemplate, listingUnica, materialValues, frameValues })); } catch {}
-  }, [mostPopularVariant, refsByTemplate, listingUnica, materialValues, frameValues]);
-
-  // ricorda i template scelti nello step 3 (permanente, per la prossima run)
-  useEffect(() => {
     try {
-      const raw = localStorage.getItem("gelato.templates");
+      const raw = serverSettings.data?.["gelato.templates"] || localStorage.getItem("gelato.templates");
       if (raw) { const t = JSON.parse(raw); if (t.selectedProduct) setSelectedProduct(t.selectedProduct); if (Array.isArray(t.extraSlots)) setExtraSlots(t.extraSlots); }
     } catch {}
-  }, []);
+  }, [serverSettings.isLoading, serverSettings.data]);
+
   useEffect(() => {
-    try { localStorage.setItem("gelato.templates", JSON.stringify({ selectedProduct: selectedProduct || null, extraSlots })); } catch {}
+    if (!hydrated.current) return; // mai sovrascrivere il server coi default del mount
+    const v = JSON.stringify({ mostPopularVariant, refsByTemplate, listingUnica, materialValues, frameValues });
+    try { localStorage.setItem("gelato.automation", v); } catch {}
+    const t = setTimeout(() => setSetting.mutate({ key: "gelato.automation", value: v }), 1500);
+    return () => clearTimeout(t);
+  }, [mostPopularVariant, refsByTemplate, listingUnica, materialValues, frameValues]);
+
+  useEffect(() => {
+    if (!hydrated.current) return;
+    const v = JSON.stringify({ selectedProduct: selectedProduct || null, extraSlots });
+    try { localStorage.setItem("gelato.templates", v); } catch {}
+    const t = setTimeout(() => setSetting.mutate({ key: "gelato.templates", value: v }), 1500);
+    return () => clearTimeout(t);
   }, [selectedProduct, extraSlots]);
   // se il template e' gia' ricordato e ci sono immagini, vai diretto allo step 4
   useEffect(() => {

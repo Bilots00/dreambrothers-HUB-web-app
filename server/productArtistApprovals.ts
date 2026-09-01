@@ -15,6 +15,8 @@
 
 import { pubblicaProdotto, aggiornaArtworkEsistente, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI, coloreScuro, salvaRicettaStampa } from "./printify";
 import { linkArtwork } from "./artworkLink";
+import { getAllUserSettings } from "./db";
+import { pubblicaWallartAuto, type EsitoWallart } from "./gelatoWallart";
 import {
   validaPacchetto,
   momentoCorrente,
@@ -72,6 +74,18 @@ export type Pubblicazione = {
   avvisoQualita?: string;
   /** wall art: i file pronti da scaricare e passare al Bulk Creator */
   fileStampa?: FileStampa[];
+  /**
+   * Wall art: con che modalita' e' partita questa pubblicazione.
+   * "manuale" = file da scaricare, prodotto creato da Andrea nel Bulk Creator;
+   * "auto" = il server fa upload e bulk-create da solo (dal telefono, a PC
+   * spento). Resta scritta qui perche' il poller che riprende le pubblicazioni
+   * in attesa deve riconoscere le sue.
+   */
+  modalita?: "manuale" | "auto";
+  /** auto: sto aspettando che il VPS produca i file di stampa */
+  attesaFile?: boolean;
+  /** auto: l'esito per ogni template Gelato (Poster, Canvas, ...) */
+  esiti?: EsitoWallart[];
 };
 
 /**
@@ -677,21 +691,46 @@ export async function pubblicaDesign(
 
   try {
     /* ── Wall art: nessun Printify ────────────────────────────────────────
-       I quadri li stampa Gelato, e la pubblicazione la fa Andrea dal Bulk
-       Creator. Qui si consegnano solo i file gia' tagliati nei due rapporti
-       del catalogo, con i nomi che il Bulk Creator sa leggere. */
+       I quadri li stampa Gelato. In modalita' MANUALE (il default storico) qui
+       si consegnano solo i file gia' tagliati nei due rapporti del catalogo,
+       che Andrea scarica e passa al Bulk Creator. In modalita' AUTOMATICA il
+       server fa da solo anche il resto: se i file mancano li chiede al VPS
+       (coda + cron con Real-ESRGAN, nessun PC richiesto) e appena ci sono
+       replica le chiamate del Bulk Creator verso il worker Gelato. */
     if (tipo === "wallart") {
-      const files = await listaFileBatch(data);
-      const trovati: FileStampa[] = [];
-      for (const tag of ["3x4", "5x7"]) {
-        const f = files.find(x => x.name.includes(`(${tag})`) && /\.png$/i.test(x.name));
-        if (f) trovati.push({ tag, nome: f.name, url: linkArtwork(data, f.name), size: f.size });
+      const modo = await modalitaWallart();
+
+      if (modo === "auto") {
+        const trovati = trovaFileWallart(data, await listaFileBatch(data), design);
+        if (trovati.length < 2) {
+          await accodaUpscaleWallart(data, design);
+          await aggiornaDesign(
+            data,
+            id,
+            d => {
+              segna(d, {
+                stato: "in_corso",
+                avviataIl: d.pubblicazioni?.[tipo]?.avviataIl || new Date().toISOString(),
+                modalita: "auto",
+                attesaFile: true,
+              });
+            },
+            `wall art in coda per l'upscale sul VPS: ${id}`,
+          );
+          return;
+        }
+        await eseguiWallartAuto(data, id);
+        return;
       }
+
+      const files = await listaFileBatch(data);
+      const trovati = trovaFileWallart(data, files, design);
 
       if (!trovati.length) {
         throw new Error(
           "I file di stampa non ci sono ancora. Lanciali sul PC con " +
-            "`node engine/upscale-batch.mjs` nella repo dell'agente: produce i due formati (3x4) e (5x7).",
+            "`node engine/upscale-batch.mjs` nella repo dell'agente: produce i due formati (3x4) e (5x7). " +
+            "Oppure metti la pubblicazione wall art su Automatica: l'upscale lo fa il VPS da solo.",
         );
       }
 
@@ -704,6 +743,7 @@ export async function pubblicaDesign(
             avviataIl: d.pubblicazioni?.[tipo]?.avviataIl || new Date().toISOString(),
             conclusaIl: new Date().toISOString(),
             fileStampa: trovati,
+            modalita: "manuale",
             avvisoQualita:
               trovati.length < 2
                 ? "Manca uno dei due formati: rilancia upscale-batch per avere sia (3x4) sia (5x7)."
@@ -907,6 +947,203 @@ export async function pubblicaDesign(
       },
       `pubblicazione fallita: ${id}`,
     );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Wall art in automatico: upscale sul VPS + bulk-create dal server     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * La modalita' scelta da Andrea nella pagina Approvazione design.
+ * Vive nelle impostazioni utente (DB), cosi' vale da qualsiasi dispositivo.
+ * Il default e' "manuale": e' il comportamento storico, e l'automatismo deve
+ * essere una scelta, mai una sorpresa.
+ */
+async function modalitaWallart(): Promise<"manuale" | "auto"> {
+  const s = await getAllUserSettings(1).catch(() => ({} as Record<string, string>));
+  return s["wallart.publishMode"] === "auto" ? "auto" : "manuale";
+}
+
+/**
+ * Il titolo con cui l'upscale nomina i file wall art: specchio ESATTO di
+ * `titoloDa` in engine/upscale-batch.mjs. Serve ad abbinare i file al design
+ * giusto: con due quadri nella stessa notte, il vecchio match "contiene (3x4)"
+ * poteva consegnare il file di un ALTRO design.
+ */
+function titoloFileWallart(d: Design): string {
+  const frase = (d.testoDaComporre || "").replace(/"/g, "").split("/")[0].trim();
+  const grezzo = frase || d.concept || d.id;
+  const pulito = grezzo
+    .replace(/[\\/:*?"<>|()]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[\s,.;:!\-]+$/, "")
+    .trim()
+    .slice(0, 60);
+  return pulito.charAt(0).toUpperCase() + pulito.slice(1).toLowerCase();
+}
+
+/**
+ * I file (3x4)/(5x7) di QUESTO design dentro la cartella della notte.
+ * Prima il nome esatto; il vecchio match per suffisso resta come ripiego per i
+ * file gia' prodotti quando la pulizia del titolo era leggermente diversa.
+ */
+function trovaFileWallart(data: string, files: { name: string; size: number }[], design: Design): FileStampa[] {
+  const titolo = titoloFileWallart(design).toLowerCase();
+  const trovati: FileStampa[] = [];
+  for (const tag of ["3x4", "5x7"]) {
+    const f =
+      files.find(x => x.name.toLowerCase() === `${titolo} (${tag}).png`) ||
+      files.find(x => x.name.includes(`(${tag})`) && /\.png$/i.test(x.name));
+    if (f) trovati.push({ tag, nome: f.name, url: linkArtwork(data, f.name), size: f.size });
+  }
+  return trovati;
+}
+
+type RichiestaUpscale = { data: string; id: string; file: string; chiestoIl: string; tentativi: number };
+
+/**
+ * Mette il design nella coda `state/upscale-wallart.json` della repo agente:
+ * il VPS la svuota con un cron ogni 5 minuti (Real-ESRGAN, nessun PC). Stesso
+ * schema della coda dei fronti: la web app scrive, il VPS legge.
+ */
+async function accodaUpscaleWallart(data: string, design: Design): Promise<void> {
+  const { owner, repo } = repoSlug();
+  const path = "state/upscale-wallart.json";
+  const attuale = await ghJson<{ sha: string; content: string }>(
+    `/repos/${owner}/${repo}/contents/${path}`,
+  ).catch(() => null);
+
+  let coda: RichiestaUpscale[] = [];
+  if (attuale?.content) {
+    try { coda = JSON.parse(Buffer.from(attuale.content, "base64").toString("utf8")); } catch { coda = []; }
+  }
+  if (coda.some(r => r.data === data && r.id === design.id)) return; // gia' in coda
+  coda.push({ data, id: design.id, file: design.file, chiestoIl: new Date().toISOString(), tentativi: 0 });
+
+  await ghJson(`/repos/${owner}/${repo}/contents/${path}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      message: `web app: upscale wall art in coda — ${design.id}`,
+      content: Buffer.from(JSON.stringify(coda, null, 2), "utf8").toString("base64"),
+      ...(attuale?.sha ? { sha: attuale.sha } : {}),
+      committer: { name: "DreamBrothers HUB", email: "hub@dreambrothers.local" },
+    }),
+  });
+}
+
+/** Quanto si aspetta il VPS prima di dichiarare il fallimento dell'attesa. */
+const ATTESA_UPSCALE_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * Pubblica DAVVERO il quadro: upload dei file sul worker e bulk-create su
+ * Gelato → Shopify, con le impostazioni salvate dal Bulk Creator. Usata sia
+ * dall'approvazione (quando i file ci sono gia') sia dal poller (quando il VPS
+ * li ha appena prodotti).
+ */
+export async function eseguiWallartAuto(data: string, id: string): Promise<void> {
+  const batch = await getBatch(data);
+  const design = batch?.design.find(d => d.id === id);
+  if (!design) return;
+  if (design.pubblicazioni?.wallart?.stato === "pubblicato") return;
+
+  const files = await listaFileBatch(data);
+  const trovati = trovaFileWallart(data, files, design);
+  if (trovati.length < 2) return; // non ancora: il poller ripassera'
+
+  const scrivi = (pub: Pubblicazione, messaggio: string) =>
+    aggiornaDesign(data, id, d => {
+      d.pubblicazioni = { ...(d.pubblicazioni || {}), wallart: pub };
+      if (pub.stato === "pubblicato") d.applicato = true;
+    }, messaggio);
+
+  const avviataIl = design.pubblicazioni?.wallart?.avviataIl || new Date().toISOString();
+  await scrivi(
+    { stato: "in_corso", avviataIl, modalita: "auto", attesaFile: false },
+    `pubblico il quadro su Gelato: ${id}`,
+  );
+
+  try {
+    const r = await pubblicaWallartAuto({
+      titolo: titoloProdotto({ ...design, tipo: "wallart" }),
+      descrizione: descrizioneProdotto(design),
+      tags: [design.avatar, "wallart", "DreamBrothers"].filter(Boolean),
+      files: trovati,
+      scarica: async nome => {
+        const img = await getImmagine(data, nome);
+        if (!img) throw new Error(`File ${nome} non leggibile dalla repo dell'agente.`);
+        return Buffer.from(img.base64, "base64");
+      },
+    });
+    await scrivi(
+      {
+        stato: "pubblicato",
+        avviataIl,
+        conclusaIl: new Date().toISOString(),
+        modalita: "auto",
+        esiti: r.esiti,
+        varianti: undefined,
+        avvisoQualita: r.esiti.some(e => e.stato === "error")
+          ? "Alcuni template non sono stati creati: guarda gli esiti."
+          : undefined,
+      },
+      `quadro pubblicato su Gelato/Shopify: ${id}`,
+    );
+  } catch (e) {
+    const errore = e instanceof Error ? e.message : String(e);
+    await scrivi(
+      { stato: "errore", avviataIl, conclusaIl: new Date().toISOString(), modalita: "auto", errore },
+      `pubblicazione quadro fallita: ${id}`,
+    );
+  }
+}
+
+/**
+ * Il poller dello scheduler: riprende le wall art approvate in automatico che
+ * aspettano i file del VPS. Guarda solo le ultime notti — una pubblicazione
+ * rimasta in attesa per settimane e' un problema gia' segnalato, non lavoro
+ * arretrato.
+ */
+export async function riprendiWallartAuto(): Promise<void> {
+  const date = (await listaBatch().catch(() => [] as string[])).slice(0, 3);
+  for (const data of date) {
+    const batch = await getBatch(data).catch(() => null);
+    if (!batch) continue;
+    const inAttesa = batch.design.filter(
+      d => d.pubblicazioni?.wallart?.stato === "in_corso" &&
+        d.pubblicazioni.wallart.modalita === "auto" &&
+        d.pubblicazioni.wallart.attesaFile,
+    );
+    if (!inAttesa.length) continue;
+
+    const files = await listaFileBatch(data);
+    for (const d of inAttesa) {
+      const pub = d.pubblicazioni!.wallart!;
+      if (trovaFileWallart(data, files, d).length >= 2) {
+        await eseguiWallartAuto(data, d.id).catch(err =>
+          console.warn(`[wallart-auto] pubblicazione fallita ${d.id}:`, err),
+        );
+      } else if (Date.now() - Date.parse(pub.avviataIl) > ATTESA_UPSCALE_MS) {
+        await aggiornaDesign(
+          data,
+          d.id,
+          dd => {
+            dd.pubblicazioni = {
+              ...(dd.pubblicazioni || {}),
+              wallart: {
+                ...pub,
+                stato: "errore",
+                conclusaIl: new Date().toISOString(),
+                errore:
+                  "L'upscale sul VPS non e' arrivato entro 3 ore. Controlla il log " +
+                  "`logs/upscale-wallart.log` sul VPS (o accendi il PC: il watchdog li produce con Topaz), poi premi riprova.",
+              },
+            };
+          },
+          `attesa upscale scaduta: ${d.id}`,
+        );
+      }
+    }
   }
 }
 

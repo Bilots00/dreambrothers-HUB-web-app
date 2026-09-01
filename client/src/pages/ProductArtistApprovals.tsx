@@ -651,7 +651,81 @@ type Pubblicazione = {
   errore?: string | null;
   avvisoQualita?: string | null;
   fileStampa?: FileStampa[] | null;
+  /** wall art: "manuale" = file da scaricare, "auto" = pubblica da sola */
+  modalita?: "manuale" | "auto" | null;
+  /** auto: in attesa che il VPS produca i file di stampa */
+  attesaFile?: boolean | null;
+  /** auto: esito per ogni template Gelato */
+  esiti?: { titolo: string; stato: string; errore?: string | null }[] | null;
 };
+
+/* ------------------------------------------------------------------ */
+/* Wall art: manuale (file da scaricare) o automatica (Gelato+Shopify)  */
+/* ------------------------------------------------------------------ */
+
+function ModalitaWallart() {
+  const utils = trpc.useUtils();
+  const settings = trpc.settings.getAll.useQuery();
+  const set = trpc.settings.set.useMutation({
+    onSuccess: () => utils.settings.getAll.invalidate(),
+    onError: e => toast.error(e.message),
+  });
+  const modo = settings.data?.["wallart.publishMode"] === "auto" ? "auto" : "manuale";
+
+  const OPZIONI = [
+    {
+      valore: "manuale",
+      titolo: "Manuale",
+      testo: "Ti consegno i file (3x4) e (5x7) da scaricare: il prodotto lo crei tu dal Bulk Creator.",
+    },
+    {
+      valore: "auto",
+      titolo: "Automatica",
+      testo: "Approvare È pubblicare: upscale sul VPS e prodotto creato da solo su Gelato + Shopify. Funziona anche dal telefono, a PC spento.",
+    },
+  ] as const;
+
+  return (
+    <div className="rounded-xl p-3 space-y-2" style={CARD}>
+      <div className="flex items-center gap-2 text-sm">
+        <Frame className="w-4 h-4 opacity-70" />
+        <span className="font-medium">Pubblicazione wall art</span>
+        {settings.isLoading && <Loader2 className="w-3 h-3 animate-spin opacity-50" />}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {OPZIONI.map(o => (
+          <label
+            key={o.valore}
+            className="flex items-start gap-2.5 rounded-lg p-2.5 cursor-pointer transition-colors"
+            style={{
+              background: modo === o.valore ? "oklch(0.2 0.03 265)" : "oklch(0.16 0.012 260)",
+              border: modo === o.valore ? "1px solid oklch(0.55 0.12 265)" : "1px solid oklch(0.22 0.015 260)",
+            }}
+          >
+            <input
+              type="radio"
+              name="wallart-mode"
+              className="mt-0.5 accent-[#006fcf]"
+              checked={modo === o.valore}
+              disabled={set.isPending || settings.isLoading}
+              onChange={() => set.mutate({ key: "wallart.publishMode", value: o.valore })}
+            />
+            <span className="text-xs leading-snug">
+              <b className="block text-[13px] mb-0.5">{o.titolo}</b>
+              <span className="opacity-70">{o.testo}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {modo === "auto" && (
+        <p className="text-[11px] opacity-55 leading-snug">
+          Template, prezzi e inventario di riferimento sono quelli salvati nel Bulk Creator: se non l'hai
+          mai configurato, aprilo una volta e scegli il template — da lì in poi vale ovunque.
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** Cosa è successo al prodotto dopo il sì: sta salendo, è online, o è fallito. */
 function StatoProdotto({ p, veste, data, file, onRiprova, onRifai, onRiallinea, inCorso }: {
@@ -674,7 +748,15 @@ function StatoProdotto({ p, veste, data, file, onRiprova, onRifai, onRiallinea, 
            style={{ background: "oklch(0.6 0.15 250 / 0.15)", color: "oklch(0.8 0.14 250)" }}>
         <Loader2 className="w-3 h-3 animate-spin shrink-0" />
         <Icona className="w-3 h-3 shrink-0" />
-        <span>{veste === "apparel" ? "Sto creando il prodotto su Printify…" : "Preparo i file per il Bulk Creator…"}</span>
+        <span>
+          {veste === "apparel"
+            ? "Sto creando il prodotto su Printify…"
+            : p.attesaFile
+              ? "Upscale sul VPS in corso… il quadro si pubblica da solo appena i file sono pronti (anche a PC spento)."
+              : p.modalita === "auto"
+                ? "Creo il prodotto su Gelato e Shopify…"
+                : "Preparo i file per il Bulk Creator…"}
+        </span>
       </div>
     );
   }
@@ -733,7 +815,8 @@ function StatoProdotto({ p, veste, data, file, onRiprova, onRifai, onRiallinea, 
          style={{ background: DEC_META.approvato.bg, color: DEC_META.approvato.fg }}>
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5">
-          <Check className="w-3 h-3" /> <Shirt className="w-3 h-3" /> Capo online su Shopify
+          <Check className="w-3 h-3" /> <Icona className="w-3 h-3" />
+          {veste === "apparel" ? "Capo online su Shopify" : "Quadro online su Shopify (via Gelato)"}
           {p.prezzoDa ? ` · da ${(p.prezzoDa / 100).toFixed(2)} €` : ""}
           {p.varianti ? ` · ${p.varianti} varianti` : ""}
         </span>
@@ -773,6 +856,20 @@ function StatoProdotto({ p, veste, data, file, onRiprova, onRifai, onRiallinea, 
             >
               {label}
             </button>
+          ))}
+        </div>
+      )}
+      {(p.esiti || []).length > 0 && (
+        <div className="space-y-0.5 opacity-80">
+          {(p.esiti || []).map((e, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              {e.stato === "error" ? <TriangleAlert className="w-3 h-3 shrink-0 mt-0.5" /> : <Check className="w-3 h-3 shrink-0 mt-0.5" />}
+              <span className="leading-snug">
+                {e.titolo}
+                {e.stato === "created_in_background" ? " · in arrivo su Shopify" : ""}
+                {e.errore ? ` — ${e.errore}` : ""}
+              </span>
+            </div>
           ))}
         </div>
       )}
@@ -1102,6 +1199,8 @@ export default function ProductArtistApprovals() {
       </div>
 
       <MaterialeProssimaNotte />
+
+      <ModalitaWallart />
 
       {/* Selettore della notte + riepilogo */}
       <div className="flex items-center gap-3 flex-wrap rounded-xl p-3" style={CARD}>
