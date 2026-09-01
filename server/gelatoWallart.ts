@@ -280,3 +280,82 @@ export async function pubblicaWallartAuto(input: {
   }
   return { esiti, ok };
 }
+
+/* ------------------------------------------------------------------ */
+/* Rete di sicurezza: le varianti che nascono invendibili              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Rende acquistabili le varianti che restano col tracciamento acceso.
+ *
+ * COSA SUCCEDE (visto il 2026-09-01 sul primo quadro pubblicato in automatico).
+ * Le varianti che nascono dal template Gelato hanno `tracked: false`, cioe'
+ * nessun magazzino: e' la forma giusta per un print on demand, che stampa a
+ * ordine e non ha scorte. Le varianti che il worker AGGIUNGE dopo — le taglie
+ * copiate dal prodotto di riferimento, le opzioni Frame/Material — nascono
+ * invece con `tracked: true`, quantita' 0 e politica DENY, cioe' SOLD OUT
+ * appena pubblicate. Sul primo quadro erano 3 su 9, e il prodotto non era
+ * acquistabile in quelle taglie.
+ *
+ * Qui non si inventano giacenze: si toglie il tracciamento, che e' esattamente
+ * quello che hanno le altre varianti dello stesso prodotto. Si toccano SOLO le
+ * varianti a zero e bloccanti, quindi una giacenza vera non viene mai persa.
+ */
+export async function sbloccaVariantiInvendibili(titolo: string): Promise<{ prodotti: number; sbloccate: number }> {
+  const shop = process.env.SHOPIFY_SHOP;
+  const token = process.env.SHOPIFY_ADMIN_TOKEN;
+  if (!shop || !token) {
+    throw new Error("Mancano SHOPIFY_SHOP / SHOPIFY_ADMIN_TOKEN nelle variabili Railway.");
+  }
+  const base = `https://${String(shop).replace(/^https?:\/\//, "").replace(/\/$/, "")}/admin/api/2024-10/graphql.json`;
+  const H = { "X-Shopify-Access-Token": token, "Content-Type": "application/json" };
+
+  const gql = async (query: string, variables?: Record<string, unknown>) => {
+    const r = await fetch(base, { method: "POST", headers: H, body: JSON.stringify({ query, variables }) });
+    const d = (await r.json()) as any;
+    if (d.errors) throw new Error(`Shopify: ${JSON.stringify(d.errors).slice(0, 200)}`);
+    return d.data;
+  };
+
+  // Il titolo arriva senza il suffisso del materiale, quindi la ricerca prende
+  // tutte le vesti dello stesso quadro (Poster, Canvas, …) in un colpo solo.
+  const dati = await gql(
+    `query($q: String!) {
+      products(first: 10, query: $q) {
+        edges { node { id title variants(first: 100) { edges { node {
+          id title inventoryPolicy inventoryQuantity
+          inventoryItem { id tracked }
+        } } } } }
+      }
+    }`,
+    { q: `title:${JSON.stringify(titolo)}` },
+  );
+
+  let prodotti = 0;
+  let sbloccate = 0;
+  for (const p of dati?.products?.edges || []) {
+    prodotti++;
+    for (const v of p.node?.variants?.edges || []) {
+      const n = v.node;
+      // Solo quelle che bloccano davvero la vendita: tracciate, a zero e con
+      // politica DENY. Una variante con giacenza vera non si tocca.
+      if (!n.inventoryItem?.tracked || n.inventoryQuantity > 0 || n.inventoryPolicy !== "DENY") continue;
+      const esito = await gql(
+        `mutation($id: ID!) {
+          inventoryItemUpdate(id: $id, input: { tracked: false }) {
+            inventoryItem { id tracked }
+            userErrors { message }
+          }
+        }`,
+        { id: n.inventoryItem.id },
+      );
+      const errori = esito?.inventoryItemUpdate?.userErrors || [];
+      if (errori.length) {
+        console.warn(`[wallart] variante "${n.title}" non sbloccata: ${errori[0].message}`);
+        continue;
+      }
+      sbloccate++;
+    }
+  }
+  return { prodotti, sbloccate };
+}

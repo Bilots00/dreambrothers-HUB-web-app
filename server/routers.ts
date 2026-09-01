@@ -32,6 +32,7 @@ import {
 } from "./db";
 import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChannels } from "./watchlistService";
 import { sincronizzaChargebacks, eAperto } from "./shopifyChargebacks";
+import { controllaCanali, giroWatchdog } from "./careWatchdog";
 import { dreamTeamStanza, dreamTeamAgenti, dreamTeamInvia } from "./dreamTeam";
 import { getApifyBudget } from "./apifyBudget";
 import {
@@ -1736,6 +1737,17 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
     markRead: protectedProcedure.input(z.object({ conversationId: z.number() })).mutation(async ({ input }) => {
       await updateCsConversation(input.conversationId, { unread: false });
       return { success: true } as const;
+    }),
+
+    // Salute dei canali: dice se l'orecchio sta ancora ascoltando. Separata da
+    // list() perche' risponde a una domanda diversa — non "cosa e' arrivato",
+    // ma "sta ancora arrivando qualcosa".
+    salute: protectedProcedure.query(async ({ ctx }) => {
+      return controllaCanali(ctx.user.id);
+    }),
+
+    controllaOra: protectedProcedure.mutation(async ({ ctx }) => {
+      return giroWatchdog(ctx.user.id);
     }),
   }),
 

@@ -16,7 +16,7 @@
 import { pubblicaProdotto, aggiornaArtworkEsistente, dimensioniPng, MIN_LATO_LUNGO, COLORI_CAPO_AMMESSI, coloreScuro, salvaRicettaStampa } from "./printify";
 import { linkArtwork } from "./artworkLink";
 import { getAllUserSettings } from "./db";
-import { pubblicaWallartAuto, type EsitoWallart } from "./gelatoWallart";
+import { pubblicaWallartAuto, sbloccaVariantiInvendibili, type EsitoWallart } from "./gelatoWallart";
 import {
   validaPacchetto,
   momentoCorrente,
@@ -86,6 +86,12 @@ export type Pubblicazione = {
   attesaFile?: boolean;
   /** auto: l'esito per ogni template Gelato (Poster, Canvas, ...) */
   esiti?: EsitoWallart[];
+  /**
+   * auto: le varianti nate col tracciamento acceso sono state sbloccate?
+   * Il worker le aggiunge qualche minuto DOPO la pubblicazione, quindi il
+   * controllo non puo' stare nella pubblicazione stessa: ci ripassa il poller.
+   */
+  variantiSbloccateIl?: string;
 };
 
 /**

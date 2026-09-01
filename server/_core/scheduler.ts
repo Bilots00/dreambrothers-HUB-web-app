@@ -8,6 +8,7 @@ import { runAgentsCycle } from "../metaAgentsService";
 import { refreshAllBrands } from "../adsLibraryService";
 import { riprendiWallartAuto } from "../productArtistApprovals";
 import { sincronizzaChargebacks } from "../shopifyChargebacks";
+import { giroWatchdog } from "../careWatchdog";
 
 // Scheduler in-process (il server Railway è always-on): job giornalieri a orario
 // fisso italiano, indipendenti dai bottoni della UI e dal browser aperto.
@@ -166,6 +167,25 @@ export function registerDailySchedules() {
   } else {
     console.log("[Scheduler] chargeback-sync spento — mancano SHOPIFY_SHOP / SHOPIFY_ADMIN_TOKEN");
   }
+
+  // Cane da guardia dei canali clienti, ogni ora. Non trasporta messaggi: conta
+  // i silenzi. Gira qui e non in n8n proprio perche' deve poter dire "n8n e'
+  // morto" — e il 29 giugno n8n e' morto in silenzio per due mesi.
+  const WATCHDOG_MS = 60 * 60 * 1000;
+  const eseguiWatchdog = async () => {
+    try {
+      const r = await giroWatchdog();
+      if (r.nuoviAllarmi.length || r.riaccesi.length || r.rientrati.length) {
+        console.log(`[Scheduler] care-watchdog: allarmi=${r.nuoviAllarmi.join(",") || "-"} riaccesi=${r.riaccesi.join(",") || "-"} rientrati=${r.rientrati.join(",") || "-"}`);
+      }
+    } catch (err) {
+      console.warn("[Scheduler] care-watchdog fallito:", err);
+    }
+  };
+  setTimeout(eseguiWatchdog, 90_000).unref?.();
+  const watchdogTimer = setInterval(eseguiWatchdog, WATCHDOG_MS);
+  watchdogTimer.unref?.();
+  console.log("[Scheduler] \"care-watchdog\" attivo ogni ora (silenzio dei canali clienti)");
 
   // Wall art in automatico: le pubblicazioni approvate che aspettano i file di
   // stampa dal VPS. Il poller le riprende appena i PNG compaiono nella repo

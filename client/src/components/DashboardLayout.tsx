@@ -11,7 +11,7 @@ import {
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar, CheckCircle2,
   Newspaper, TrendingUp, Clapperboard, Moon, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck, Users,
-  Landmark, Timer,
+  Landmark, Timer, EarOff,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -186,9 +186,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // anche qui, su ogni pagina, e non solo dentro /care/chargebacks.
   const { data: cb } = trpc.chargebacks.conteggio.useQuery(undefined, { enabled: !!user, refetchInterval: 60000 });
   const chargebackAperti = cb?.aperti ?? 0;
+  // Se l'orecchio smette di ascoltare, il silenzio non deve essere silenzioso:
+  // un canale muto e' indistinguibile da "nessuno scrive" finche' qualcuno non
+  // lo conta. Vedi server/careWatchdog.ts.
+  const { data: canali } = trpc.customerCare.salute.useQuery(undefined, { enabled: !!user, refetchInterval: 300000 });
+  const canaliMuti = (canali ?? []).filter((c) => c.inAllarme);
   // La bolla vale quello che si vede aprendo il pannello: se un numero fosse
   // escluso, Andrea imparerebbe a non fidarsi del totale.
-  const notificheTotali = unreadCount + chargebackAperti + careUnread;
+  const notificheTotali = unreadCount + chargebackAperti + careUnread + canaliMuti.length;
   const giorniAllaScadenza = cb?.prossimaScadenza
     ? Math.ceil((new Date(cb.prossimaScadenza).getTime() - Date.now()) / 86_400_000)
     : null;
@@ -484,6 +489,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                       </div>
                     </div>
                   </button>
+
+                  {canaliMuti.length > 0 && (
+                    <button
+                      onClick={() => navigate("/care")}
+                      className="w-full flex items-start gap-3 p-2.5 rounded-xl text-left hover:bg-accent transition-colors"
+                    >
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: "oklch(0.55 0.22 25 / 0.15)" }}>
+                        <EarOff className="w-4 h-4" style={{ color: "oklch(0.65 0.22 25)" }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-foreground">
+                          Canale clienti muto
+                          <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full font-bold" style={{ background: "oklch(0.55 0.22 25)", color: "white" }}>
+                            {canaliMuti.length}
+                          </span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {canaliMuti.map((c) => `${c.etichetta}: ${c.motivo}`).join(" · ")}
+                        </div>
+                      </div>
+                    </button>
+                  )}
 
                   <button
                     onClick={() => navigate("/alerts")}

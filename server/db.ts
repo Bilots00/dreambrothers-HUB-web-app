@@ -1708,3 +1708,29 @@ export async function markAllChargebacksSeen(userId: number) {
     .where(and(eq(shopifyChargebacks.userId, userId), eq(shopifyChargebacks.visto, false)));
   return daVedere.length;
 }
+
+/**
+ * L'ultimo messaggio ENTRANTE per ogni canale.
+ *
+ * E' il dato su cui si regge il cane da guardia: un canale il cui ultimo
+ * messaggio in ingresso e' vecchio settimane o non esiste non sta ricevendo
+ * niente, e va detto. Si contano solo i messaggi `in`: le nostre risposte
+ * uscenti direbbero che il canale funziona anche quando l'orecchio e' sordo.
+ */
+export async function getUltimoMessaggioPerCanale(userId: number): Promise<Record<string, Date>> {
+  const db = await getDb();
+  if (!db) return {};
+  const righe = await db
+    .select({ channel: csConversations.channel, quando: csMessages.createdAt })
+    .from(csMessages)
+    .innerJoin(csConversations, eq(csMessages.conversationId, csConversations.id))
+    .where(and(eq(csConversations.userId, userId), eq(csMessages.direction, "in")));
+
+  const out: Record<string, Date> = {};
+  for (const r of righe) {
+    if (!r.channel || !r.quando) continue;
+    const d = new Date(r.quando);
+    if (!out[r.channel] || d > out[r.channel]) out[r.channel] = d;
+  }
+  return out;
+}
