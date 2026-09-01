@@ -1042,6 +1042,12 @@ async function accodaUpscaleWallart(data: string, design: Design): Promise<void>
 const ATTESA_UPSCALE_MS = 3 * 60 * 60 * 1000;
 
 /**
+ * Quanto si aspetta prima di sbloccare le varianti: il worker le aggiunge
+ * "entro ~3 minuti dalla comparsa su Shopify", quindi si guarda piu' tardi.
+ */
+const ATTESA_VARIANTI_MS = 8 * 60 * 1000;
+
+/**
  * Pubblica DAVVERO il quadro: upload dei file sul worker e bulk-create su
  * Gelato → Shopify, con le impostazioni salvate dal Bulk Creator. Usata sia
  * dall'approvazione (quando i file ci sono gia') sia dal poller (quando il VPS
@@ -1115,6 +1121,35 @@ export async function riprendiWallartAuto(): Promise<void> {
   for (const data of date) {
     const batch = await getBatch(data).catch(() => null);
     if (!batch) continue;
+    /* ── Quadri gia' online: le varianti che il worker aggiunge dopo nascono
+       SOLD OUT (tracciate, a zero, DENY). Si sbloccano una volta sola, qualche
+       minuto dopo, quando il worker ha finito di aggiungerle. ── */
+    for (const d of batch.design) {
+      const pub = d.pubblicazioni?.wallart;
+      if (!pub || pub.stato !== "pubblicato" || pub.modalita !== "auto") continue;
+      if (pub.variantiSbloccateIl) continue;
+      if (Date.now() - Date.parse(pub.conclusaIl || pub.avviataIl) < ATTESA_VARIANTI_MS) continue;
+
+      const titolo = titoloProdotto({ ...d, tipo: "wallart" });
+      try {
+        const r = await sbloccaVariantiInvendibili(titolo);
+        await aggiornaDesign(
+          data,
+          d.id,
+          dd => {
+            const p = dd.pubblicazioni?.wallart;
+            if (p) p.variantiSbloccateIl = new Date().toISOString();
+          },
+          `varianti sbloccate (${r.sbloccate}): ${d.id}`,
+        );
+        if (r.sbloccate) console.log(`[wallart-auto] "${titolo}": ${r.sbloccate} varianti rese acquistabili`);
+      } catch (e) {
+        // Non si segna niente: al giro dopo ci riprova. Un token scaduto non
+        // deve far passare per fatto un lavoro non fatto.
+        console.warn(`[wallart-auto] sblocco varianti fallito per "${titolo}":`, e);
+      }
+    }
+
     const inAttesa = batch.design.filter(
       d => d.pubblicazioni?.wallart?.stato === "in_corso" &&
         d.pubblicazioni.wallart.modalita === "auto" &&
