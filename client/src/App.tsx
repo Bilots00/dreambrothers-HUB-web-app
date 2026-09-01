@@ -29,6 +29,7 @@ import SocialMedia from "./pages/SocialMedia";
 import AssetsLibrary from "./pages/AssetsLibrary";
 import Inspiration from "./pages/Inspiration";
 import CustomerCare from "./pages/CustomerCare";
+import Chargebacks from "./pages/Chargebacks";
 import SocialDrafts from "./pages/SocialDrafts";
 import SocialWatchlist from "./pages/SocialWatchlist";
 import SeoResearch from "./pages/SeoResearch";
@@ -106,6 +107,7 @@ function AppRouter() {
 
       {/* CUSTOMER CARE */}
       <Route path="/care">{withLayout(CustomerCare)}</Route>
+      <Route path="/care/chargebacks">{withLayout(Chargebacks)}</Route>
       <Route path="/care/urgent">{withLayout(CustomerCare)}</Route>
 
       {/* META LIBRARY */}

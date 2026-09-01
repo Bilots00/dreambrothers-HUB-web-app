@@ -7,6 +7,7 @@ import { generateDailyPicks } from "../dailyPicksService";
 import { runAgentsCycle } from "../metaAgentsService";
 import { refreshAllBrands } from "../adsLibraryService";
 import { riprendiWallartAuto } from "../productArtistApprovals";
+import { sincronizzaChargebacks } from "../shopifyChargebacks";
 
 // Scheduler in-process (il server Railway è always-on): job giornalieri a orario
 // fisso italiano, indipendenti dai bottoni della UI e dal browser aperto.
@@ -138,6 +139,33 @@ export function registerDailySchedules() {
   }, AGENTS_CYCLE_MS);
   agentsTimer.unref?.();
   console.log("[Scheduler] \"meta-agents-cycle\" attivo ogni 30 min (solo campagne gestite dagli agenti)");
+
+  // Chargeback Shopify ogni 20 minuti. E' la rete di sicurezza del webhook
+  // disputes/*: se il webhook non e' registrato, o una consegna si perde, la
+  // contestazione salta fuori comunque entro 20 minuti invece che per caso
+  // giorni dopo (il caso #1261). Senza token Shopify non c'e' niente da
+  // chiedere, e il job si spegne da solo.
+  if (process.env.SHOPIFY_SHOP && process.env.SHOPIFY_ADMIN_TOKEN) {
+    const CHARGEBACK_POLL_MS = 20 * 60 * 1000;
+    const eseguiSync = async () => {
+      try {
+        const r = await sincronizzaChargebacks();
+        if (r.nuovi > 0 || r.aggiornati > 0 || r.errori.length > 0) {
+          console.log(`[Scheduler] chargeback-sync: trovati=${r.trovati} nuovi=${r.nuovi} aggiornati=${r.aggiornati} errori=${r.errori.length}`);
+        }
+      } catch (err) {
+        console.warn("[Scheduler] chargeback-sync fallito:", err);
+      }
+    };
+    // Un giro al boot: se una contestazione e' arrivata mentre il server era
+    // giu', aspettare i primi 20 minuti sarebbe tempo regalato alla scadenza.
+    setTimeout(eseguiSync, 30_000).unref?.();
+    const chargebackTimer = setInterval(eseguiSync, CHARGEBACK_POLL_MS);
+    chargebackTimer.unref?.();
+    console.log("[Scheduler] \"chargeback-sync\" attivo ogni 20 min");
+  } else {
+    console.log("[Scheduler] chargeback-sync spento — mancano SHOPIFY_SHOP / SHOPIFY_ADMIN_TOKEN");
+  }
 
   // Wall art in automatico: le pubblicazioni approvate che aspettano i file di
   // stampa dal VPS. Il poller le riprende appena i PNG compaiono nella repo

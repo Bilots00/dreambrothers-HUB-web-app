@@ -1,6 +1,6 @@
 import { eq, desc, asc, and, or, isNull, gte, lt, lte, sql, notInArray, inArray, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, videoDrafts, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, claudeAttachments, InsertClaudeSession, dreamTeamAgents, dreamTeamMessages, InsertDreamTeamAgent, InsertDreamTeamMessage } from "../drizzle/schema";
+import { InsertUser, users, metaAccounts, campaigns, adSets, ads, kpiSnapshots, goals, agentLogs, abTests, alerts, copyGenerations, trackingConfigs, userSettings, csConversations, csMessages, socialDrafts, socialChatMessages, videoDrafts, watchlistChannels, watchlistVideos, researchItems, marketStores, marketProducts, marketSnapshots, marketChanges, etsyShops, etsyShopSnapshots, etsyListings, adFinds, dailyPicks, mcAgents, mcActivity, mcCampaignState, metaChatMessages, adBrands, adInspirations, claudeSessions, claudeSessionMessages, claudeAttachments, InsertClaudeSession, dreamTeamAgents, dreamTeamMessages, InsertDreamTeamAgent, InsertDreamTeamMessage, shopifyChargebacks, InsertShopifyChargeback } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -1622,4 +1622,85 @@ export async function dreamTeamDbOk(): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
   try { await db.execute(sql`SELECT 1`); return true; } catch { return false; }
+}
+
+// ─── Shopify Chargebacks ──────────────────────────────────────────────────────
+export async function getChargebacks(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(shopifyChargebacks)
+    .where(eq(shopifyChargebacks.userId, userId))
+    // Le contestazioni ancora aperte vanno in cima anche se piu' vecchie: qui
+    // conta la scadenza, non la novita'.
+    .orderBy(asc(shopifyChargebacks.nostroStato), desc(shopifyChargebacks.createdAt))
+    .limit(200);
+}
+
+export async function getChargebackById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(shopifyChargebacks).where(eq(shopifyChargebacks.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Scrive (o aggiorna) una contestazione a partire da `disputeId`.
+ *
+ * Webhook e poller raccontano lo stesso fatto con dettagli diversi: il webhook
+ * porta importo/motivo/scadenza, il poller vede solo l'ordine e lo stato. Per
+ * questo l'update ignora i campi `undefined` invece di sovrascriverli con
+ * null, altrimenti il poller cancellerebbe la scadenza appena arrivata dal
+ * webhook. `visto` e `nostroStato` non si toccano MAI qui: sono di Andrea.
+ *
+ * Ritorna cosa e' successo, cosi' il chiamante sa se deve suonare la campanella.
+ */
+export async function upsertChargeback(data: InsertShopifyChargeback): Promise<
+  { esito: "nuovo" | "aggiornato" | "invariato"; id: number; statoPrecedente?: string }
+> {
+  const db = await getDb();
+  if (!db) return { esito: "invariato", id: 0 };
+
+  const esistenti = await db.select().from(shopifyChargebacks)
+    .where(and(eq(shopifyChargebacks.userId, data.userId), eq(shopifyChargebacks.disputeId, data.disputeId)))
+    .limit(1);
+  const esistente = esistenti[0];
+
+  if (!esistente) {
+    await db.insert(shopifyChargebacks).values(data);
+    const creati = await db.select().from(shopifyChargebacks)
+      .where(and(eq(shopifyChargebacks.userId, data.userId), eq(shopifyChargebacks.disputeId, data.disputeId)))
+      .limit(1);
+    return { esito: "nuovo", id: creati[0]?.id ?? 0 };
+  }
+
+  const set: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined || v === null) continue;
+    if (k === "userId" || k === "disputeId" || k === "visto" || k === "nostroStato" || k === "note") continue;
+    if ((esistente as Record<string, unknown>)[k] !== v) set[k] = v;
+  }
+  if (Object.keys(set).length === 0) return { esito: "invariato", id: esistente.id };
+
+  await db.update(shopifyChargebacks).set(set).where(eq(shopifyChargebacks.id, esistente.id));
+  return { esito: "aggiornato", id: esistente.id, statoPrecedente: esistente.status };
+}
+
+export async function updateChargeback(
+  id: number,
+  patch: Partial<Pick<InsertShopifyChargeback, "visto" | "nostroStato" | "note" | "status">>,
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(shopifyChargebacks).set(patch).where(eq(shopifyChargebacks.id, id));
+}
+
+export async function markAllChargebacksSeen(userId: number) {
+  const db = await getDb();
+  if (!db) return 0;
+  const daVedere = await db.select().from(shopifyChargebacks)
+    .where(and(eq(shopifyChargebacks.userId, userId), eq(shopifyChargebacks.visto, false)));
+  if (!daVedere.length) return 0;
+  await db.update(shopifyChargebacks).set({ visto: true })
+    .where(and(eq(shopifyChargebacks.userId, userId), eq(shopifyChargebacks.visto, false)));
+  return daVedere.length;
 }

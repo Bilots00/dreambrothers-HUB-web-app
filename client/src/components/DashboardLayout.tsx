@@ -11,9 +11,11 @@ import {
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar, CheckCircle2,
   Newspaper, TrendingUp, Clapperboard, Moon, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck, Users,
+  Landmark, Timer,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 
 // ─── Nav Config ───────────────────────────────────────────────────────────────
@@ -57,6 +59,7 @@ const SEO_ITEMS = [
 
 const CARE_ITEMS = [
   { icon: Inbox, label: "Inbox", path: "/care", description: "Tutti i messaggi clienti" },
+  { icon: Landmark, label: "Chargebacks", path: "/care/chargebacks", description: "Contestazioni bancarie & scadenze" },
 ];
 
 const CLAUDE_ITEMS = [
@@ -178,6 +181,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const careUnread = (careConvos ?? []).filter((c) => c.unread).length;
   const { data: videoDrafts } = trpc.video.draftsList.useQuery(undefined, { enabled: !!user, refetchInterval: 60000 });
   const videoDaRevisionare = (videoDrafts ?? []).filter((d) => d.status === "draft").length;
+  // I chargeback non nascono nell'app: arrivano da Shopify, che avvisa solo per
+  // mail all'indirizzo proprietario dello store. Per questo il conteggio gira
+  // anche qui, su ogni pagina, e non solo dentro /care/chargebacks.
+  const { data: cb } = trpc.chargebacks.conteggio.useQuery(undefined, { enabled: !!user, refetchInterval: 60000 });
+  const chargebackAperti = cb?.aperti ?? 0;
+  // La bolla vale quello che si vede aprendo il pannello: se un numero fosse
+  // escluso, Andrea imparerebbe a non fidarsi del totale.
+  const notificheTotali = unreadCount + chargebackAperti + careUnread;
+  const giorniAllaScadenza = cb?.prossimaScadenza
+    ? Math.ceil((new Date(cb.prossimaScadenza).getTime() - Date.now()) / 86_400_000)
+    : null;
 
   if (loading) return <DashboardLayoutSkeleton />;
 
@@ -327,7 +341,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             location={location}
             navigate={navigate}
             sidebarOpen={sidebarOpen}
-            badges={{ "/care": careUnread }}
+            badges={{ "/care": careUnread, "/care/chargebacks": chargebackAperti }}
             defaultOpen={false}
           />
 
@@ -404,14 +418,117 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <button onClick={() => { if (!document.fullscreenElement) { document.documentElement.requestFullscreen?.(); } else { document.exitFullscreen?.(); } }} className="p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Schermo intero (focus mode)">
               <Maximize className="w-5 h-5" />
             </button>
-            <button onClick={() => navigate("/alerts")} className="relative p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-              <Bell className="w-5 h-5" />
-              {unreadCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full text-xs flex items-center justify-center font-bold" style={{ background: "oklch(0.55 0.22 25)", color: "white" }}>
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
-              )}
-            </button>
+            {/* Campanella unificata: non solo gli alert delle campagne Meta, ma
+                anche i chargeback di Shopify — che Shopify annuncia SOLO via
+                mail all'indirizzo proprietario dello store e mai con una push.
+                La bolla porta il totale, il pannello dice da dove viene. */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  className="relative p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  title={notificheTotali > 0 ? `${notificheTotali} notifiche da vedere` : "Nessuna notifica"}
+                >
+                  <Bell className="w-5 h-5" />
+                  {notificheTotali > 0 && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full text-xs flex items-center justify-center font-bold"
+                      style={{ background: "oklch(0.55 0.22 25)", color: "white" }}
+                    >
+                      {notificheTotali > 9 ? "9+" : notificheTotali}
+                    </span>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80 p-0" style={{ background: "oklch(0.13 0.015 260)", border: "1px solid oklch(0.22 0.015 260)" }}>
+                <div className="px-4 py-3" style={{ borderBottom: "1px solid oklch(0.22 0.015 260)" }}>
+                  <div className="text-sm font-semibold text-foreground">Notifiche</div>
+                  <div className="text-xs text-muted-foreground">
+                    {notificheTotali === 0 ? "Niente da vedere" : `${notificheTotali} da vedere`}
+                  </div>
+                </div>
+
+                <div className="p-2 space-y-1">
+                  {/* Shopify prima di Meta: un chargeback ha una scadenza legale,
+                      un alert di campagna no. */}
+                  <button
+                    onClick={() => navigate("/care/chargebacks")}
+                    className="w-full flex items-start gap-3 p-2.5 rounded-xl text-left hover:bg-accent transition-colors"
+                  >
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: chargebackAperti > 0 ? "oklch(0.55 0.22 25 / 0.15)" : "oklch(0.2 0.015 260)" }}>
+                      <Landmark className="w-4 h-4" style={{ color: chargebackAperti > 0 ? "oklch(0.65 0.22 25)" : "oklch(0.5 0.02 260)" }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        Chargeback Shopify
+                        {chargebackAperti > 0 && (
+                          <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full font-bold" style={{ background: "oklch(0.55 0.22 25)", color: "white" }}>
+                            {chargebackAperti}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {chargebackAperti === 0 ? (
+                          "Nessuna contestazione aperta"
+                        ) : giorniAllaScadenza !== null ? (
+                          <span className="flex items-center gap-1" style={{ color: giorniAllaScadenza <= 3 ? "oklch(0.7 0.2 25)" : undefined }}>
+                            <Timer className="w-3 h-3" />
+                            {giorniAllaScadenza < 0
+                              ? "termine per le prove scaduto"
+                              : giorniAllaScadenza === 0
+                                ? "prove da inviare OGGI"
+                                : `${giorniAllaScadenza} giorni per rispondere`}
+                          </span>
+                        ) : (
+                          "da gestire"
+                        )}
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => navigate("/alerts")}
+                    className="w-full flex items-start gap-3 p-2.5 rounded-xl text-left hover:bg-accent transition-colors"
+                  >
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: unreadCount > 0 ? "oklch(0.72 0.18 75 / 0.15)" : "oklch(0.2 0.015 260)" }}>
+                      <AlertTriangle className="w-4 h-4" style={{ color: unreadCount > 0 ? "oklch(0.75 0.18 75)" : "oklch(0.5 0.02 260)" }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        Alert campagne Meta
+                        {unreadCount > 0 && (
+                          <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full font-bold" style={{ background: "oklch(0.72 0.18 75)", color: "oklch(0.15 0.01 260)" }}>
+                            {unreadCount}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {unreadCount === 0 ? "Nessun alert non letto" : "anomalie budget, CPA, ROAS"}
+                      </div>
+                    </div>
+                  </button>
+
+                  {careUnread > 0 && (
+                    <button
+                      onClick={() => navigate("/care")}
+                      className="w-full flex items-start gap-3 p-2.5 rounded-xl text-left hover:bg-accent transition-colors"
+                    >
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: "oklch(0.6 0.18 145 / 0.15)" }}>
+                        <Inbox className="w-4 h-4" style={{ color: "oklch(0.65 0.18 145)" }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-foreground">
+                          Messaggi clienti
+                          <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full font-bold" style={{ background: "oklch(0.6 0.18 145)", color: "white" }}>
+                            {careUnread}
+                          </span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">conversazioni non lette in inbox</div>
+                      </div>
+                    </button>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </header>
 

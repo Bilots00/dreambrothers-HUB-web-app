@@ -26,10 +26,12 @@ import {
   getWatchlistVideoById, setWatchlistVideoLiked,
   getResearchItems, getResearchItemById, updateResearchItem, getResearchCountries,
   getVideoDraftsForUser,
+  getChargebacks, getChargebackById, updateChargeback, markAllChargebacksSeen,
   updateVideoDraft,
   deleteVideoDraft,
 } from "./db";
 import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChannels } from "./watchlistService";
+import { sincronizzaChargebacks, eAperto } from "./shopifyChargebacks";
 import { dreamTeamStanza, dreamTeamAgenti, dreamTeamInvia } from "./dreamTeam";
 import { getApifyBudget } from "./apifyBudget";
 import {
@@ -1733,6 +1735,80 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
 
     markRead: protectedProcedure.input(z.object({ conversationId: z.number() })).mutation(async ({ input }) => {
       await updateCsConversation(input.conversationId, { unread: false });
+      return { success: true } as const;
+    }),
+  }),
+
+  // ─── Chargeback Shopify ─────────────────────────────────────────────────────
+  // Le contestazioni bancarie: Shopify le annuncia solo per mail all'indirizzo
+  // proprietario dello store, che oggi e' una casella inaccessibile. Qui
+  // vivono dentro l'app, con la scadenza sempre in vista.
+  chargebacks: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const righe = await getChargebacks(ctx.user.id);
+      return righe.map((c) => {
+        const scadenza = c.evidenceDueBy ? new Date(c.evidenceDueBy) : null;
+        return {
+          id: c.id,
+          disputeId: c.disputeId,
+          orderName: c.orderName ?? "",
+          orderId: c.orderId ?? "",
+          customerName: c.customerName ?? "",
+          customerEmail: c.customerEmail ?? "",
+          amount: c.amount ?? null,
+          currency: c.currency ?? "",
+          reason: c.reason ?? "",
+          tipo: c.tipo,
+          status: c.status,
+          nostroStato: c.nostroStato,
+          visto: c.visto,
+          note: c.note ?? "",
+          evidenceDueBy: scadenza ? scadenza.toISOString() : null,
+          // Il numero che decide le priorita' della giornata: negativo = fuori
+          // tempo massimo, e in quel caso non c'e' piu' niente da preparare.
+          giorniRimasti: scadenza ? Math.ceil((scadenza.getTime() - Date.now()) / 86_400_000) : null,
+          initiatedAt: c.initiatedAt ? new Date(c.initiatedAt).toISOString() : null,
+          createdAt: new Date(c.createdAt).toISOString(),
+          aperto: eAperto(c.status) && c.nostroStato !== "risolto",
+        };
+      });
+    }),
+
+    // Contatore per la campanella: separato da list() perche' gira ogni 30s
+    // sul layout di ogni pagina e non deve trascinarsi dietro tutte le note.
+    conteggio: protectedProcedure.query(async ({ ctx }) => {
+      const righe = await getChargebacks(ctx.user.id);
+      const aperti = righe.filter((c) => eAperto(c.status) && c.nostroStato !== "risolto");
+      const scadenze = aperti
+        .map((c) => (c.evidenceDueBy ? new Date(c.evidenceDueBy).getTime() : null))
+        .filter((t): t is number => t !== null);
+      return {
+        aperti: aperti.length,
+        nonVisti: righe.filter((c) => !c.visto).length,
+        prossimaScadenza: scadenze.length ? new Date(Math.min(...scadenze)).toISOString() : null,
+      };
+    }),
+
+    sync: protectedProcedure.mutation(async () => {
+      return sincronizzaChargebacks();
+    }),
+
+    markSeen: protectedProcedure.mutation(async ({ ctx }) => {
+      const count = await markAllChargebacksSeen(ctx.user.id);
+      return { success: true, count } as const;
+    }),
+
+    aggiorna: protectedProcedure.input(z.object({
+      id: z.number(),
+      nostroStato: z.enum(["nuovo", "in_lavorazione", "risolto"]).optional(),
+      note: z.string().max(5000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const riga = await getChargebackById(input.id);
+      if (!riga || riga.userId !== ctx.user.id) throw new Error("Chargeback non trovato");
+      const patch: { nostroStato?: "nuovo" | "in_lavorazione" | "risolto"; note?: string; visto?: boolean } = { visto: true };
+      if (input.nostroStato) patch.nostroStato = input.nostroStato;
+      if (input.note !== undefined) patch.note = input.note;
+      await updateChargeback(input.id, patch);
       return { success: true } as const;
     }),
   }),

@@ -893,3 +893,55 @@ export const dreamTeamMessages = mysqlTable("dream_team_messages", {
 
 export type DreamTeamMessage = typeof dreamTeamMessages.$inferSelect;
 export type InsertDreamTeamMessage = typeof dreamTeamMessages.$inferInsert;
+
+// ─── Shopify Chargebacks ──────────────────────────────────────────────────────
+// Shopify avvisa dei chargeback SOLO via mail all'indirizzo proprietario dello
+// store (info@dreambrothers.it, la casella bloccata): niente push sull'app
+// mobile, niente avviso qui dentro. Il caso #1261 e' stato scoperto per caso
+// 3 giorni dopo, con meta' del tempo per rispondere gia' bruciato. Questa
+// tabella e' la copia locale della contestazione: la scrive il webhook
+// `disputes/create|update` e, come rete di sicurezza, il poller dello
+// scheduler (un webhook non registrato o una consegna persa non devono
+// ricreare lo stesso buco).
+export const shopifyChargebacks = mysqlTable("shopify_chargebacks", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  // Id numerico della dispute su Shopify. E' la chiave di deduplica: webhook e
+  // poller descrivono lo stesso fatto e non devono generare due righe.
+  disputeId: varchar("disputeId", { length: 64 }).notNull(),
+  orderId: varchar("orderId", { length: 64 }),
+  orderGid: varchar("orderGid", { length: 128 }),
+  orderName: varchar("orderName", { length: 32 }),
+  customerName: varchar("customerName", { length: 191 }),
+  customerEmail: varchar("customerEmail", { length: 191 }),
+  // Importo contestato nella valuta con cui ha pagato il cliente (USD su #1261),
+  // che non e' la valuta dello store: mostrarne una per l'altra falsa il danno.
+  amount: decimal("amount", { precision: 10, scale: 2 }),
+  currency: varchar("currency", { length: 8 }),
+  // Motivo della banca: product_not_received, fraudulent, duplicate, ...
+  reason: varchar("reason", { length: 64 }),
+  networkReasonCode: varchar("networkReasonCode", { length: 32 }),
+  tipo: mysqlEnum("tipo", ["chargeback", "inquiry"]).default("chargeback").notNull(),
+  status: mysqlEnum("status", [
+    "needs_response",
+    "under_review",
+    "won",
+    "lost",
+    "accepted",
+  ]).default("needs_response").notNull(),
+  // La sola data che conta davvero: dopo questa Shopify risponde da solo con
+  // quello che trova, e la partita e' persa senza averla giocata.
+  evidenceDueBy: timestamp("evidenceDueBy"),
+  initiatedAt: timestamp("initiatedAt"),
+  // Stato NOSTRO, separato da quello di Shopify: la banca puo' restare in
+  // "needs_response" per giorni mentre noi abbiamo gia' fatto la nostra mossa.
+  nostroStato: mysqlEnum("nostroStato", ["nuovo", "in_lavorazione", "risolto"]).default("nuovo").notNull(),
+  visto: boolean("visto").default(false).notNull(),
+  note: text("note"),
+  raw: json("raw"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => [uniqueIndex("uq_shopify_chargeback").on(t.userId, t.disputeId)]);
+
+export type ShopifyChargeback = typeof shopifyChargebacks.$inferSelect;
+export type InsertShopifyChargeback = typeof shopifyChargebacks.$inferInsert;

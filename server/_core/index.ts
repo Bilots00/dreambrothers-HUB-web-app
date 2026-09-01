@@ -17,6 +17,7 @@ import { registerMarketRoutes } from "./marketRoutes";
 import { registerCreativeRoutes } from "./creativeRoutes";
 import { registerAdsLibraryRoutes } from "./adsLibraryRoutes";
 import { registerFulfillmentRoutes } from "./fulfillmentRoutes";
+import { registerChargebackRoutes } from "./chargebackRoutes";
 import { registerDailySchedules } from "./scheduler";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -562,6 +563,41 @@ async function runMigrations() {
   } catch (err) {
     console.warn("[Migrate] tabelle dream team non create:", err);
   }
+  // Chargeback Shopify: la copia locale delle contestazioni. Serve una tabella
+  // nostra e non una riga in `alerts` perche' un chargeback ha una scadenza e
+  // uno stato che evolvono nel tempo, mentre un alert e' un fatto puntuale.
+  try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS shopify_chargebacks (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId INT NOT NULL,
+      disputeId VARCHAR(64) NOT NULL,
+      orderId VARCHAR(64),
+      orderGid VARCHAR(128),
+      orderName VARCHAR(32),
+      customerName VARCHAR(191),
+      customerEmail VARCHAR(191),
+      amount DECIMAL(10,2),
+      currency VARCHAR(8),
+      reason VARCHAR(64),
+      networkReasonCode VARCHAR(32),
+      tipo ENUM('chargeback','inquiry') NOT NULL DEFAULT 'chargeback',
+      status ENUM('needs_response','under_review','won','lost','accepted') NOT NULL DEFAULT 'needs_response',
+      evidenceDueBy TIMESTAMP NULL,
+      initiatedAt TIMESTAMP NULL,
+      nostroStato ENUM('nuovo','in_lavorazione','risolto') NOT NULL DEFAULT 'nuovo',
+      visto BOOLEAN NOT NULL DEFAULT FALSE,
+      note TEXT,
+      raw JSON,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_shopify_chargeback (userId, disputeId),
+      INDEX idx_chargeback_stato (userId, status),
+      INDEX idx_chargeback_scadenza (evidenceDueBy)
+    ) DEFAULT CHARSET=utf8mb4`);
+    console.log("[Migrate] Tabella shopify_chargebacks pronta");
+  } catch (err) {
+    console.warn("[Migrate] tabella shopify_chargebacks non creata:", err);
+  }
   // Migrazione additiva idempotente: 🩷 sui video della Watchlist (tab Templates)
   try {
     const res: any = await db.execute(sql`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'watchlist_videos' AND COLUMN_NAME = 'liked'`);
@@ -621,6 +657,7 @@ async function startServer() {
   registerCreativeRoutes(app);
   registerAdsLibraryRoutes(app);
   registerFulfillmentRoutes(app);
+  registerChargebackRoutes(app);
   registerDreamteamRoutes(app);
   // tRPC API
   app.use(
