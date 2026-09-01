@@ -81,6 +81,7 @@ export default function Chargebacks() {
       utils.chargebacks.list.invalidate();
       utils.chargebacks.conteggio.invalidate();
       if (r.errori.length) toast.error(`Sincronizzato con errori: ${r.errori[0]}`);
+      else if (r.note) toast.warning(`${r.trovati} contestazioni (${r.nuovi} nuove). ${r.note}`);
       else toast.success(`Sincronizzato: ${r.trovati} contestazioni (${r.nuovi} nuove)`);
     },
     onError: (e) => toast.error(e.message),

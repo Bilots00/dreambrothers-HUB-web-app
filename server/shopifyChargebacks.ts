@@ -39,6 +39,22 @@ async function shopify<T>(query: string, variables: Record<string, unknown> = {}
   return j.data as T;
 }
 
+/**
+ * Il muro PII dei piani Shopify base.
+ *
+ * Con il token di questa app, chiedere `customer { ... }` o `order { email }`
+ * fa fallire l'INTERA query con "This app is not approved to access the Customer
+ * object" — non degrada, non ritorna null: butta via anche i campi che avevamo
+ * il diritto di leggere. E' cosi' che il chargeback #1261 non e' mai comparso
+ * nella lista pur essendo aperto su Shopify. Quindi la richiesta del nome
+ * cliente va tentata e, se il piano la nega, rifatta senza: la contestazione
+ * deve arrivare comunque, il nome e' un di piu'.
+ */
+export function eMuroPII(err: unknown): boolean {
+  const m = err instanceof Error ? err.message : String(err);
+  return /not approved to access the Customer object|personally identifiable information|protected customer data/i.test(m);
+}
+
 export type StatoChargeback = "needs_response" | "under_review" | "won" | "lost" | "accepted";
 
 /** DisputeStatus dell'Admin API (SCREAMING_CASE) -> il nostro enum. */
@@ -136,25 +152,36 @@ async function registra(dati: Parameters<typeof upsertChargeback>[0], statoNuovo
 /* 1. Webhook                                                          */
 /* ------------------------------------------------------------------ */
 
-async function dettagliOrdine(orderGid: string) {
-  const d = await shopify<{
-    order: {
-      name: string;
-      email: string | null;
-      customer: { firstName: string | null; lastName: string | null; email: string | null } | null;
-    } | null;
-  }>(
-    `query($id: ID!){ order(id:$id){ name email customer { firstName lastName email } } }`,
-    { id: orderGid },
-  );
-  const o = d.order;
-  if (!o) return {} as { orderName?: string; customerName?: string; customerEmail?: string };
-  const nome = [o.customer?.firstName, o.customer?.lastName].filter(Boolean).join(" ").trim();
-  return {
-    orderName: o.name,
-    customerName: nome || undefined,
-    customerEmail: o.customer?.email ?? o.email ?? undefined,
-  };
+type DettagliOrdine = { orderName?: string; customerName?: string; customerEmail?: string };
+
+async function dettagliOrdine(orderGid: string): Promise<DettagliOrdine> {
+  try {
+    const d = await shopify<{
+      order: {
+        name: string;
+        email: string | null;
+        customer: { firstName: string | null; lastName: string | null; email: string | null } | null;
+      } | null;
+    }>(
+      `query($id: ID!){ order(id:$id){ name email customer { firstName lastName email } } }`,
+      { id: orderGid },
+    );
+    const o = d.order;
+    if (!o) return {};
+    const nome = [o.customer?.firstName, o.customer?.lastName].filter(Boolean).join(" ").trim();
+    return {
+      orderName: o.name,
+      customerName: nome || undefined,
+      customerEmail: o.customer?.email ?? o.email ?? undefined,
+    };
+  } catch (err) {
+    if (!eMuroPII(err)) throw err;
+    const d = await shopify<{ order: { name: string } | null }>(
+      `query($id: ID!){ order(id:$id){ name } }`,
+      { id: orderGid },
+    );
+    return d.order ? { orderName: d.order.name } : {};
+  }
 }
 
 /**
@@ -207,11 +234,12 @@ export async function ingestDisputeWebhook(payload: any) {
 type NodoOrdine = {
   id: string;
   name: string;
-  email: string | null;
   createdAt: string;
   totalPriceSet: { presentmentMoney: { amount: string; currencyCode: string } };
-  customer: { firstName: string | null; lastName: string | null; email: string | null } | null;
   disputes: { id: string; status: string; initiatedAs: string }[];
+  // Assenti quando il piano Shopify nega i dati personali.
+  email?: string | null;
+  customer?: { firstName: string | null; lastName: string | null; email: string | null } | null;
 };
 
 /**
@@ -226,31 +254,52 @@ type NodoOrdine = {
  * sovrascrive con null quello che il webhook ha gia' scritto.
  */
 export async function sincronizzaChargebacks(): Promise<{
-  trovati: number; nuovi: number; aggiornati: number; errori: string[];
+  trovati: number; nuovi: number; aggiornati: number; errori: string[]; note?: string;
 }> {
-  const esito = { trovati: 0, nuovi: 0, aggiornati: 0, errori: [] as string[] };
+  const esito = { trovati: 0, nuovi: 0, aggiornati: 0, errori: [] as string[], note: undefined as string | undefined };
 
   const stati = ["needs_response", "under_review", "won", "lost", "accepted"];
   const q = stati.map((s) => `chargeback_status:${s}`).join(" OR ");
 
+  // La stessa ricerca in due versioni: con i dati del cliente e senza. Su un
+  // piano che non concede i campi PII la prima muore per intero (non degrada),
+  // quindi la seconda non e' un lusso, e' cio' che tiene viva la rete di
+  // sicurezza. Vedi eMuroPII().
+  const campiComuni = `
+    id name createdAt
+    totalPriceSet { presentmentMoney { amount currencyCode } }
+    disputes { id status initiatedAs }`;
+  const ricerca = (conCliente: boolean) => `query($q: String!) {
+    orders(first: 100, query: $q, sortKey: CREATED_AT, reverse: true) {
+      edges { node {${campiComuni}${conCliente ? `
+        email
+        customer { firstName lastName email }` : ""}
+      } }
+    }
+  }`;
+
   let dati: { orders: { edges: { node: NodoOrdine }[] } };
+  let conPII = true;
   try {
-    dati = await shopify(
-      `query($q: String!) {
-        orders(first: 100, query: $q, sortKey: CREATED_AT, reverse: true) {
-          edges { node {
-            id name email createdAt
-            totalPriceSet { presentmentMoney { amount currencyCode } }
-            customer { firstName lastName email }
-            disputes { id status initiatedAs }
-          } }
-        }
-      }`,
-      { q },
-    );
+    dati = await shopify(ricerca(true), { q });
   } catch (err) {
-    esito.errori.push(err instanceof Error ? err.message : String(err));
-    return esito;
+    if (!eMuroPII(err)) {
+      esito.errori.push(err instanceof Error ? err.message : String(err));
+      return esito;
+    }
+    conPII = false;
+    try {
+      dati = await shopify(ricerca(false), { q });
+    } catch (err2) {
+      esito.errori.push(err2 instanceof Error ? err2.message : String(err2));
+      return esito;
+    }
+  }
+  if (!conPII) {
+    // Non e' un errore da mostrare come rosso: la contestazione c'e' lo stesso,
+    // manca solo il nome del cliente. Ma va detto, perche' spiega la scheda
+    // senza nome invece di lasciarla sembrare un dato perso.
+    esito.note = "Piano Shopify senza accesso ai dati cliente: nome ed email non importati.";
   }
 
   for (const { node } of dati.orders?.edges ?? []) {

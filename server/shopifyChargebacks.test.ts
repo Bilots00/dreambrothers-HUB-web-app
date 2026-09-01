@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { statoDa, soloNumeri, eAperto, scadenzaLeggibile } from "./shopifyChargebacks";
+import { statoDa, soloNumeri, eAperto, scadenzaLeggibile, eMuroPII } from "./shopifyChargebacks";
 
 describe("soloNumeri (deduplica webhook <-> poller)", () => {
   // Il punto piu' fragile di tutto il sistema. La stessa contestazione arriva
@@ -72,5 +72,28 @@ describe("scadenzaLeggibile", () => {
     // panico falso, o peggio, farebbe accettare un chargeback ancora vincibile.
     expect(scadenzaLeggibile(undefined)).toBe("scadenza non comunicata");
     expect(scadenzaLeggibile(null)).toBe("scadenza non comunicata");
+  });
+});
+
+describe("eMuroPII", () => {
+  // Il chargeback #1261 era aperto su Shopify e la pagina diceva "Nessuna
+  // contestazione": la query chiedeva il nome del cliente e su un piano senza
+  // accesso ai dati personali Shopify butta via TUTTA la risposta, non solo il
+  // campo negato. Questo riconoscimento e' cio' che fa scattare la seconda
+  // query senza PII. Se smettesse di riconoscere il messaggio, la sezione
+  // tornerebbe vuota in silenzio, che e' il modo peggiore di sbagliare.
+  it("riconosce il rifiuto PII di Shopify, nella forma esatta che ha rotto #1261", () => {
+    expect(eMuroPII(new Error('Shopify: [{"message":"This app is not approved to access the Customer object. Access to personally identifiable information (PII) like customer names, addresses, emails, phone numbers is only available on Shopify, Advanced, and Plus plans."}]'))).toBe(true);
+    expect(eMuroPII(new Error("Field access denied: protected customer data requires approval"))).toBe(true);
+    expect(eMuroPII("personally identifiable information")).toBe(true);
+  });
+
+  it("NON scambia per PII un errore diverso, che va invece mostrato", () => {
+    // Un token scaduto o una rete giu' devono restare rossi: ritentare senza
+    // i campi cliente non li risolverebbe, li nasconderebbe soltanto.
+    expect(eMuroPII(new Error("Shopify: [{\"message\":\"Invalid API key or access token\"}]"))).toBe(false);
+    expect(eMuroPII(new Error("Mancano SHOPIFY_SHOP / SHOPIFY_ADMIN_TOKEN nelle variabili Railway."))).toBe(false);
+    expect(eMuroPII(new Error("fetch failed"))).toBe(false);
+    expect(eMuroPII(null)).toBe(false);
   });
 });
