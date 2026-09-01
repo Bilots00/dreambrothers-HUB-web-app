@@ -1802,12 +1802,25 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
       id: z.number(),
       nostroStato: z.enum(["nuovo", "in_lavorazione", "risolto"]).optional(),
       note: z.string().max(5000).optional(),
+      // "YYYY-MM-DD" dal date input, oppure "" per cancellarla.
+      evidenceDueBy: z.string().optional(),
     })).mutation(async ({ ctx, input }) => {
       const riga = await getChargebackById(input.id);
       if (!riga || riga.userId !== ctx.user.id) throw new Error("Chargeback non trovato");
-      const patch: { nostroStato?: "nuovo" | "in_lavorazione" | "risolto"; note?: string; visto?: boolean } = { visto: true };
+      const patch: {
+        nostroStato?: "nuovo" | "in_lavorazione" | "risolto";
+        note?: string; visto?: boolean; evidenceDueBy?: Date | null;
+      } = { visto: true };
       if (input.nostroStato) patch.nostroStato = input.nostroStato;
       if (input.note !== undefined) patch.note = input.note;
+      if (input.evidenceDueBy !== undefined) {
+        if (!input.evidenceDueBy) patch.evidenceDueBy = null;
+        else {
+          const d = new Date(`${input.evidenceDueBy}T00:00:00`);
+          if (Number.isNaN(d.getTime())) throw new Error("Data non valida");
+          patch.evidenceDueBy = d;
+        }
+      }
       await updateChargeback(input.id, patch);
       return { success: true } as const;
     }),

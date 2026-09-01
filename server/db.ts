@@ -1687,7 +1687,11 @@ export async function upsertChargeback(data: InsertShopifyChargeback): Promise<
 
 export async function updateChargeback(
   id: number,
-  patch: Partial<Pick<InsertShopifyChargeback, "visto" | "nostroStato" | "note" | "status">>,
+  // `evidenceDueBy` e' modificabile a mano di proposito: Shopify non espone la
+  // scadenza delle prove senza lo scope `read_shopify_payments`, che questa app
+  // non ha, e una pagina costruita attorno a un countdown senza countdown non
+  // serve a niente. Se poi il webhook porta la data vera, quella vince.
+  patch: Partial<Pick<InsertShopifyChargeback, "visto" | "nostroStato" | "note" | "status" | "evidenceDueBy">>,
 ) {
   const db = await getDb();
   if (!db) return;

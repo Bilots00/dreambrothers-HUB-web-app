@@ -50,7 +50,11 @@ const motivi: Record<string, string> = {
 
 function Countdown({ giorni, data }: { giorni: number | null; data: string | null }) {
   if (giorni === null || !data) {
-    return <span className="text-xs text-muted-foreground">scadenza non comunicata da Shopify</span>;
+    return (
+      <span className="text-xs text-muted-foreground">
+        Shopify non comunica la scadenza a questa app: leggila nel banner dell'ordine su Shopify e scrivila qui sotto.
+      </span>
+    );
   }
   // Sotto i 4 giorni il colore diventa rosso: e' il punto in cui non c'e' piu'
   // tempo per una risposta del cliente e bisogna decidere da soli.
@@ -200,7 +204,19 @@ export default function Chargebacks() {
                           {!c.visto && <div className="w-2 h-2 rounded-full" style={{ background: "oklch(0.55 0.22 25)" }} />}
                         </div>
 
-                        <Countdown giorni={c.giorniRimasti} data={c.evidenceDueBy} />
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Countdown giorni={c.giorniRimasti} data={c.evidenceDueBy} />
+                          <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                            <span>Termine prove:</span>
+                            <input
+                              type="date"
+                              className="text-xs rounded-lg px-2 py-1 bg-transparent"
+                              style={{ border: "1px solid oklch(0.24 0.015 260)", colorScheme: "dark" }}
+                              defaultValue={c.evidenceDueBy ? c.evidenceDueBy.slice(0, 10) : ""}
+                              onChange={(e) => aggiorna.mutate({ id: c.id, evidenceDueBy: e.target.value })}
+                            />
+                          </label>
+                        </div>
 
                         <div className="text-xs text-muted-foreground space-y-0.5">
                           {c.customerName && (
