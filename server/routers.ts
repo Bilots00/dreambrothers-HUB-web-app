@@ -75,6 +75,7 @@ import {
   rigeneraFronte,
   aggiornaArtwork,
   decidiDesign,
+  cambiaTipoDesign,
   decidiMolti,
   getFonte,
   setFonte,
@@ -853,9 +854,29 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
           decisione: z.enum(["approvato", "rifiutato", "in_attesa"]),
           note: z.string().max(4000).optional(),
           sha: z.string().optional(),
+          /** Con che veste pubblicare il sì: la scelta viaggia CON la decisione,
+           *  non in un pannello che si apre dopo (il 02/09 il quadro era già in
+           *  vetrina prima che Andrea potesse dire "capo"). */
+          tipo: z.enum(["apparel", "wallart"]).optional(),
+          /** dove va la grafica sul capo; senza, decide la scheda dell'agente */
+          posizione: z.enum(["front", "back"]).optional(),
         }),
       )
       .mutation(async ({ input }) => decidiDesign(input)),
+
+    /**
+     * La veste (capo o quadro) cambiata a mano, in qualsiasi momento.
+     * Non pubblica: sposta la mira. A pubblicare ci pensa "Approva".
+     */
+    cambiaTipo: protectedProcedure
+      .input(
+        z.object({
+          data: z.string().min(1),
+          id: z.string().min(1),
+          tipo: z.enum(["apparel", "wallart"]),
+        }),
+      )
+      .mutation(async ({ input }) => cambiaTipoDesign(input)),
 
     decidiMolti: protectedProcedure
       .input(

@@ -532,6 +532,18 @@ export async function decidiDesign(input: {
   decisione: DecisioneDesign;
   note?: string;
   sha?: string;
+  /**
+   * Con che veste pubblicare, deciso QUI insieme al sì.
+   *
+   * Il 02/09 è costato due prodotti sbagliati: approvare pubblicava con il
+   * tipo dedotto dal manifest, e la scelta di Andrea (capo, fronte) viveva in
+   * un pannello che compariva solo DOPO l'approvazione — quando il quadro era
+   * già in vetrina. Il sì e la veste sono la stessa decisione: viaggiano
+   * insieme.
+   */
+  tipo?: "apparel" | "wallart";
+  /** dove va la grafica sul capo; senza, decide la scheda dell'agente */
+  posizione?: "front" | "back";
 }): Promise<Batch> {
   const batch = await getBatch(input.data);
   if (!batch) throw new Error(`Nessun batch per la data ${input.data}`);
@@ -558,8 +570,40 @@ export async function decidiDesign(input: {
   // Approvare È la decisione: da qui il prodotto parte da solo verso Printify
   // e quindi Shopify. Non si aspetta il risultato, così un Printify lento non
   // blocca la pagina; lo stato compare dentro il design.
-  if (input.decisione === "approvato") avviaPubblicazione(input.data, input.id);
+  if (input.decisione === "approvato") {
+    avviaPubblicazione(input.data, input.id, input.tipo, input.posizione);
+  }
 
+  return batch;
+}
+
+/**
+ * Cambia la veste di un design: capo o quadro, in qualsiasi momento.
+ *
+ * Il tipo lo deduce l'agente dal manifest, e sbaglia: il 02/09 una T-shirt è
+ * finita su Gelato come quadro perché nessuno poteva dire il contrario prima
+ * di approvare, né correggerlo dopo. Questa etichetta ora è sempre in mano ad
+ * Andrea — anche a prodotto già pubblicato, perché lo stesso file vive in
+ * entrambi i mondi e la vetrina si costruisce in più passaggi.
+ *
+ * Cambiare la veste NON pubblica niente: sposta solo la mira. A pubblicare
+ * ci pensa "Approva", o il pannello "pubblica come" a valle.
+ */
+export async function cambiaTipoDesign(input: {
+  data: string;
+  id: string;
+  tipo: "apparel" | "wallart";
+}): Promise<Batch> {
+  await aggiornaDesign(
+    input.data,
+    input.id,
+    d => {
+      d.tipo = input.tipo;
+    },
+    `veste cambiata a mano: ${input.id} → ${input.tipo}`,
+  );
+  const batch = await getBatch(input.data);
+  if (!batch) throw new Error(`Nessun batch per la data ${input.data}`);
   return batch;
 }
 
@@ -1402,8 +1446,14 @@ export async function aggiornaArtwork(data: string, id: string): Promise<{ varia
 }
 
 /** Fa partire la pubblicazione senza far aspettare chi ha premuto "Approva". */
-function avviaPubblicazione(data: string, id: string): void {
-  void pubblicaDesign(data, id).catch(err => {
+function avviaPubblicazione(
+  data: string,
+  id: string,
+  /** la veste scelta col sì; senza, vale quella dedotta dal manifest */
+  tipo?: "apparel" | "wallart",
+  posizione?: "front" | "back",
+): void {
+  void pubblicaDesign(data, id, tipo, false, posizione).catch(err => {
     console.warn("[productArtist] pubblicazione fallita", id, err);
   });
 }

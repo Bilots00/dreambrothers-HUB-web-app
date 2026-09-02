@@ -17,6 +17,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 
@@ -1056,8 +1059,103 @@ function StatoCreative({ r, onAnnulla, annullando }: {
   );
 }
 
+/** La veste scelta per un design prima di dire sì, con il lato del capo. */
+type VesteScelta = { tipo: Veste; posizione?: "front" | "back" };
+
+const VESTE_META = {
+  apparel: { label: "abbigliamento", icona: Shirt },
+  wallart: { label: "wall art", icona: Frame },
+} as const;
+
+/**
+ * La veste del design: un menu, non un'etichetta.
+ *
+ * Era scritto e basta — "wall art" — e quel tipo lo deduceva l'agente dal
+ * manifest. Il 02/09 "HARDEST WORKER IN THE ROOM", dichiarato "T-shirt retro"
+ * nel manifest, è finito su Gelato come quadro: la deduzione era saltata a
+ * monte e qui nessuno poteva smentirla, né prima di approvare né dopo. Ora si
+ * cambia in qualsiasi momento, anche a prodotto già pubblicato — lo stesso
+ * file vive in due mondi e la vetrina si costruisce in più passaggi.
+ *
+ * Cambiare la veste non pubblica niente: sposta la mira di "Approva" e del
+ * pannello a valle.
+ */
+function VesteMenu({ tipo, onCambia, inCorso }: {
+  tipo: Veste;
+  onCambia: (v: Veste) => void;
+  inCorso: boolean;
+}) {
+  const { label, icona: Icona } = VESTE_META[tipo];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className="text-[11px] flex items-center gap-1 rounded-full px-2 py-0.5 hover:opacity-80 disabled:opacity-40"
+        style={{ background: "oklch(0.2 0.015 260)", border: "1px solid oklch(0.3 0.02 260)" }}
+        disabled={inCorso}
+        title="Cambia la veste: capo o quadro"
+      >
+        <Icona className="w-3 h-3" /> {label}
+        <ChevronDown className="w-3 h-3 opacity-60" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[9rem]">
+        {(Object.keys(VESTE_META) as Veste[]).map(v => {
+          const M = VESTE_META[v];
+          return (
+            <DropdownMenuItem key={v} onSelect={() => v !== tipo && onCambia(v)}>
+              <M.icona className="w-3.5 h-3.5 mr-2" />
+              {M.label}
+              {v === tipo && <Check className="w-3.5 h-3.5 ml-auto opacity-70" />}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Dove va la grafica sul capo, scelto PRIMA del sì.
+ *
+ * Compariva solo dopo l'approvazione, quando il prodotto era già partito.
+ * Un quadro non ha un dietro: questa riga vive solo sull'abbigliamento.
+ */
+function LatoDelCapo({ valore, onCambia, disabilitato }: {
+  valore?: "front" | "back";
+  onCambia: (p?: "front" | "back") => void;
+  disabilitato: boolean;
+}) {
+  return (
+    <div className="space-y-1 text-[11px] rounded-lg px-2.5 py-1.5"
+         style={{ background: "oklch(0.155 0.012 260)" }}>
+      <div className="opacity-70">La grafica va</div>
+      <div className="flex gap-1 text-[10px]">
+        {([["front", "sul fronte"], ["back", "sul retro"], [undefined, "decide l'agente"]] as const).map(([pos, label]) => {
+          const attivo = valore === pos;
+          return (
+            <button
+              key={label}
+              className="flex-1 rounded px-1 py-0.5 hover:opacity-80 disabled:opacity-40"
+              style={{
+                background: attivo ? "oklch(0.6 0.15 250 / 0.28)" : "oklch(0.16 0.012 260)",
+                color: attivo ? "oklch(0.92 0.05 250)" : undefined,
+                border: `1px solid ${attivo ? "oklch(0.5 0.12 250)" : "oklch(0.26 0.02 260)"}`,
+              }}
+              disabled={disabilitato}
+              onClick={() => onCambia(pos)}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ProductArtistApprovals() {
   const [dataSel, setDataSel] = useState<string | undefined>(undefined);
+  /* La veste scelta a mano, per design. Vuoto = vale quella dell'agente. */
+  const [vesti, setVesti] = useState<Record<string, VesteScelta>>({});
 
   const batches = trpc.productArtist.batches.useQuery();
   const batch = trpc.productArtist.batch.useQuery(
@@ -1097,6 +1195,14 @@ export default function ProductArtistApprovals() {
       ricarica();
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const cambiaTipo = trpc.productArtist.cambiaTipo.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success(vars.tipo === "apparel" ? "Veste: abbigliamento" : "Veste: wall art");
+      ricarica();
+    },
+    onError: e => toast.error(e.message),
   });
 
   const decidiMolti = trpc.productArtist.decidiMolti.useMutation({
@@ -1275,6 +1381,14 @@ export default function ProductArtistApprovals() {
           const meta = DEC_META[d.decisione as Decisione] ?? DEC_META.in_attesa;
           const bloccato = d.applicato || inCorso;
           const msRestanti = restanti(d);
+          // Di partenza la veste è quella dell'agente: la scelta a mano la
+          // corregge, non la sostituisce a scatola chiusa. Il tipo lo scrive il
+          // server (sopravvive al refresh), la posizione vive finché la card è
+          // aperta — poi la ricorda la pubblicazione.
+          const veste: VesteScelta = {
+            tipo: vesti[d.id]?.tipo ?? d.tipo,
+            posizione: vesti[d.id]?.posizione ?? d.stampa?.posizione,
+          };
           return (
             <div key={d.id} className="rounded-xl p-3 flex flex-col gap-3 transition-opacity"
                  style={{ ...CARD, opacity: d.decisione === "rifiutato" ? 0.55 : 1 }}>
@@ -1286,10 +1400,16 @@ export default function ProductArtistApprovals() {
                         style={{ color: meta.fg, background: meta.bg }}>
                     {meta.label}
                   </span>
-                  <span className="text-[11px] opacity-60 flex items-center gap-1">
-                    {d.tipo === "apparel" ? <Shirt className="w-3 h-3" /> : <Frame className="w-3 h-3" />}
-                    {d.tipo === "apparel" ? "abbigliamento" : "wall art"}
-                  </span>
+                  <VesteMenu
+                    tipo={d.tipo}
+                    inCorso={cambiaTipo.isPending}
+                    onCambia={t => {
+                      // La scelta a mano resta anche quando il batch torna dal
+                      // server: la posizione vive qui, il tipo nel batch.
+                      setVesti(s => ({ ...s, [d.id]: { ...veste, tipo: t } }));
+                      cambiaTipo.mutate({ data: batch.data!.data, id: d.id, tipo: t });
+                    }}
+                  />
                   {d.applicato && <span className="text-[11px] opacity-50">già eseguito</span>}
                 </div>
 
@@ -1316,7 +1436,18 @@ export default function ProductArtistApprovals() {
                 </div>
               )}
 
-              {d.tipo === "apparel" && d.stampa?.posizione === "back" && (
+              {/* Il lato del capo si sceglie prima del sì, non dopo. Sul quadro
+                  non ha senso, e a decisione presa comanda lo stato reale del
+                  prodotto (il pannello "pubblica come" più sotto). */}
+              {veste.tipo === "apparel" && d.decisione === "in_attesa" && !d.applicato && (
+                <LatoDelCapo
+                  valore={veste.posizione}
+                  disabilitato={bloccato}
+                  onCambia={p => setVesti(s => ({ ...s, [d.id]: { ...veste, posizione: p } }))}
+                />
+              )}
+
+              {veste.tipo === "apparel" && veste.posizione !== "front" && d.stampa?.posizione === "back" && (
                 <FronteDaApprovare
                   data={batch.data!.data}
                   file={d.file}
@@ -1443,7 +1574,14 @@ export default function ProductArtistApprovals() {
                 ) : (
                   <Button
                     size="sm" className="flex-1" disabled={bloccato}
-                    onClick={() => decidi.mutate({ data: batch.data!.data, id: d.id, decisione: "approvato" })}
+                    onClick={() => decidi.mutate({
+                      data: batch.data!.data,
+                      id: d.id,
+                      decisione: "approvato",
+                      // La veste viaggia col sì: è la stessa decisione.
+                      tipo: veste.tipo,
+                      posizione: veste.tipo === "apparel" ? veste.posizione : undefined,
+                    })}
                   >
                     <Check className="w-4 h-4 mr-1" /> Approva
                   </Button>
