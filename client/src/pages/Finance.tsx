@@ -38,26 +38,55 @@ const ora = (t: string | null | undefined) => (t ? new Date(t).toLocaleString("i
 const giornoBreve = (t: string) => t.slice(5, 10).split("-").reverse().join("/");
 const colorePnl = (x: number | null | undefined) => (x == null ? MUTO : x > 0 ? VERDE : x < 0 ? ROSSO : MUTO);
 
+// Le schede hanno un blu piu' chiaro dello sfondo e un bordo visibile: il contrasto e'
+// quello che rende leggibile una dashboard a colpo d'occhio, non la finezza dei grigi.
+const SCHEDA = { background: "oklch(0.22 0.035 262)", border: "1px solid oklch(0.34 0.045 262)" } as const;
+const RIQUADRO = { background: "oklch(0.19 0.03 262)", border: "1px solid oklch(0.3 0.04 262)" } as const;
+
 function Riquadro({ label, value, sub, color, icon: Icon }: { label: string; value: string; sub?: string; color: string; icon: React.ElementType }) {
   return (
-    <div className="card-premium kpi-card rounded-2xl p-5">
+    <div className="rounded-2xl p-5" style={SCHEDA}>
       <div className="flex items-start justify-between mb-3">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
-        <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}18`, border: `1px solid ${color}30` }}>
+        <div className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">{label}</div>
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: `${color}18`, border: `1px solid ${color}30` }}>
           <Icon className="w-4 h-4" style={{ color }} />
         </div>
       </div>
-      <div className="text-2xl font-bold text-foreground tabular-nums">{value}</div>
-      {sub && <div className="text-xs mt-1 font-medium" style={{ color }}>{sub}</div>}
+      <div className="text-3xl font-bold text-foreground tabular-nums">{value}</div>
+      {sub && <div className="text-sm mt-1.5 font-medium" style={{ color }}>{sub}</div>}
     </div>
   );
 }
 
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="rounded-xl p-3 text-center" style={{ background: "oklch(0.16 0.02 260 / 0.5)", border: "1px solid oklch(0.25 0.02 260 / 0.5)" }}>
-      <div className="text-lg font-bold tabular-nums" style={{ color: color ?? "inherit" }}>{value}</div>
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mt-0.5">{label}</div>
+    <div className="rounded-xl p-4 text-center" style={RIQUADRO}>
+      <div className="text-2xl font-bold tabular-nums" style={{ color: color ?? "inherit" }}>{value}</div>
+      <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">{label}</div>
+    </div>
+  );
+}
+
+type Intervallo = "7g" | "30g" | "tutto";
+const giornoUtc = (d: Date) => d.toISOString().slice(0, 10);
+
+/** I giorni dell'intervallo, dal piu' vecchio a oggi: cosi' il grafico ha sempre lo stesso asse. */
+function giorniIntervallo(n: number): string[] {
+  const out: string[] = [];
+  for (let i = n - 1; i >= 0; i--) out.push(giornoUtc(new Date(Date.now() - i * 86_400_000)));
+  return out;
+}
+
+function SelettoreIntervallo({ valore, onChange }: { valore: Intervallo; onChange: (v: Intervallo) => void }) {
+  const voci: Array<[Intervallo, string]> = [["7g", "7 giorni"], ["30g", "30 giorni"], ["tutto", "Tutto"]];
+  return (
+    <div className="flex items-center gap-1 rounded-lg p-1" style={RIQUADRO}>
+      {voci.map(([v, testo]) => (
+        <button key={v} onClick={() => onChange(v)} className="px-3 py-1 rounded-md text-sm font-medium transition-colors"
+          style={valore === v ? { background: "oklch(0.65 0.2 265)", color: "white" } : { color: "oklch(0.7 0.02 260)" }}>
+          {testo}
+        </button>
+      ))}
     </div>
   );
 }
@@ -86,13 +115,13 @@ function CartaLibro({ s, attivo, onClick }: { s: any; attivo: boolean; onClick: 
   const meta = LIBRI[s.libro as LibroId];
   return (
     <button onClick={onClick} className="text-left w-full rounded-2xl p-5 transition-all" style={{
-      background: attivo ? `${meta.colore}12` : "oklch(0.16 0.02 260 / 0.5)",
-      border: `1px solid ${attivo ? meta.colore + "55" : "oklch(0.25 0.02 260 / 0.5)"}`,
+      background: attivo ? "oklch(0.24 0.045 262)" : "oklch(0.2 0.03 262)",
+      border: `2px solid ${attivo ? meta.colore : "oklch(0.32 0.04 262)"}`,
     }}>
       <div className="flex items-center justify-between mb-3">
         <div>
-          <div className="font-semibold text-foreground">{meta.nome}</div>
-          <div className="text-xs text-muted-foreground">{meta.sotto}</div>
+          <div className="text-lg font-bold text-foreground">{meta.nome}</div>
+          <div className="text-sm text-muted-foreground">{meta.sotto}</div>
         </div>
         <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${meta.colore}20` }}>
           <Bot className="w-4 h-4" style={{ color: meta.colore }} />
@@ -107,22 +136,22 @@ function CartaLibro({ s, attivo, onClick }: { s: any; attivo: boolean; onClick: 
         <>
           <div className="grid grid-cols-3 gap-3 mb-3">
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">Capitale</div>
-              <div className="text-lg font-bold tabular-nums">{usd(s.equity)}</div>
-              <div className="text-xs font-medium" style={{ color: colorePnl(s.ritorno_pct) }}>{pct(s.ritorno_pct)} dal via</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Capitale</div>
+              <div className="text-2xl font-bold tabular-nums">{usd(s.equity)}</div>
+              <div className="text-sm font-medium" style={{ color: colorePnl(s.ritorno_pct) }}>{pct(s.ritorno_pct)} dal via</div>
             </div>
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">BTC buy & hold</div>
-              <div className="text-lg font-bold tabular-nums">{pct(s.benchmark_btc_pct)}</div>
-              <div className="text-xs text-muted-foreground">stesso capitale, mai toccato</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">BTC buy & hold</div>
+              <div className="text-2xl font-bold tabular-nums">{pct(s.benchmark_btc_pct)}</div>
+              <div className="text-sm text-muted-foreground">stesso capitale, mai toccato</div>
             </div>
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">Vs non fare niente</div>
-              <div className="text-lg font-bold tabular-nums" style={{ color: colorePnl(s.differenza_pct) }}>{s.differenza_pct == null ? "—" : `${s.differenza_pct >= 0 ? "+" : ""}${s.differenza_pct.toFixed(2)} pt`}</div>
-              <div className="text-xs text-muted-foreground">la domanda che conta</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Vs non fare niente</div>
+              <div className="text-2xl font-bold tabular-nums" style={{ color: colorePnl(s.differenza_pct) }}>{s.differenza_pct == null ? "—" : `${s.differenza_pct >= 0 ? "+" : ""}${s.differenza_pct.toFixed(2)} pt`}</div>
+              <div className="text-sm text-muted-foreground">la domanda che conta</div>
             </div>
           </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
             <span>{s.operazioni} operazioni</span>
             <span>win rate {s.win_rate_pct == null ? "—" : `${s.win_rate_pct}%`}</span>
             <span>expectancy {s.expectancy_r == null ? "—" : `${s.expectancy_r} R`}</span>
@@ -149,6 +178,7 @@ function CartaLibro({ s, attivo, onClick }: { s: any; attivo: boolean; onClick: 
 function Dettaglio({ libro }: { libro: LibroId }) {
   const q = trpc.finance.libro.useQuery({ libro }, { refetchInterval: 60_000 });
   const [aperta, setAperta] = useState<number | null>(null);
+  const [intervallo, setIntervallo] = useState<Intervallo>("7g");
   const meta = LIBRI[libro];
 
   if (q.isLoading) return <div className="space-y-3">{[1, 2, 3].map((i) => <div key={i} className="h-32 rounded-xl skeleton-shimmer" />)}</div>;
@@ -163,9 +193,18 @@ function Dettaglio({ libro }: { libro: LibroId }) {
     );
   }
 
-  const { dati: d, curva, campione, ciclo, differenza_pct, estremi } = q.data;
+  const { dati: d, curva: curvaTutta, campione, ciclo, differenza_pct, estremi } = q.data;
   const m = d.metriche;
-  const perf = d.performance_giornaliera ?? [];
+  // Un solo selettore governa curva e colonne: stesso intervallo, stesso asse dei tempi.
+  const daMs = intervallo === "tutto" ? 0 : Date.now() - (intervallo === "7g" ? 7 : 30) * 86_400_000;
+  const curva = curvaTutta.filter((p) => Date.parse(p.t) >= daMs);
+  const perTutti = new Map((d.performance_giornaliera ?? []).map((p) => [p.giorno, p.pct] as const));
+  const perf: Array<{ giorno: string; pct: number | null }> = intervallo === "tutto"
+    ? (d.performance_giornaliera ?? [])
+    : giorniIntervallo(intervallo === "7g" ? 7 : 30).map((g) => ({ giorno: g, pct: perTutti.get(g) ?? null }));
+  // L'asse delle colonne e' simmetrico e mai sotto il mezzo punto: una giornata da +0,01%
+  // non deve sembrare un grattacielo solo perche' e' l'unica.
+  const maxAbs = Math.max(0.5, ...perf.map((p) => Math.abs(p.pct ?? 0) * 1.25));
   const eqMin = curva.length ? Math.min(...curva.flatMap((p) => [p.portafoglio, p.btc ?? p.portafoglio])) : 0;
   const eqMax = curva.length ? Math.max(...curva.flatMap((p) => [p.portafoglio, p.btc ?? p.portafoglio])) : 0;
   const margine = (eqMax - eqMin) * 0.15 || d.capitale_iniziale * 0.01;
@@ -200,16 +239,17 @@ function Dettaglio({ libro }: { libro: LibroId }) {
       </div>
 
       {/* Equity curve */}
-      <div className="card-premium rounded-2xl p-5">
-        <div className="flex items-center justify-between mb-3">
-          <div className="text-sm font-semibold">Equity curve</div>
-          <div className="flex items-center gap-4 text-xs">
+      <div className="rounded-2xl p-5" style={SCHEDA}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="text-lg font-bold">Equity curve</div>
+          <div className="flex flex-wrap items-center gap-4 text-sm">
             <div className="flex items-center gap-1.5"><div className="w-6 h-0.5" style={{ background: meta.colore }} /><span className="text-muted-foreground">Portafoglio</span></div>
             <div className="flex items-center gap-1.5"><div className="w-6 h-0.5 border-t border-dashed" style={{ borderColor: BTC }} /><span className="text-muted-foreground">BTC buy & hold</span></div>
+            <SelettoreIntervallo valore={intervallo} onChange={setIntervallo} />
           </div>
         </div>
         {curva.length > 1 ? (
-          <ResponsiveContainer width="100%" height={240}>
+          <ResponsiveContainer width="100%" height={280}>
             <LineChart data={curva} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.2 0.01 260)" />
               <XAxis dataKey="t" tick={{ fontSize: 10, fill: MUTO }} tickFormatter={(v) => ora(v)} minTickGap={60} />
@@ -221,14 +261,14 @@ function Dettaglio({ libro }: { libro: LibroId }) {
             </LineChart>
           </ResponsiveContainer>
         ) : (
-          <div className="h-[240px] flex items-center justify-center text-sm text-muted-foreground">curva equity: servono almeno due battiti</div>
+          <div className="h-[280px] flex items-center justify-center text-sm text-muted-foreground">curva equity: nessun battito nell'intervallo scelto</div>
         )}
       </div>
 
       {/* Statistiche */}
-      <div className="card-premium rounded-2xl p-5">
+      <div className="rounded-2xl p-5" style={SCHEDA}>
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <div className="text-sm font-semibold">Statistiche</div>
+          <div className="text-lg font-bold">Statistiche</div>
           <span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" style={{ background: "oklch(0.72 0.18 75 / 0.15)", color: "oklch(0.8 0.15 80)" }}>
             <Info className="w-3 h-3" /> {campione.testo}
           </span>
@@ -253,18 +293,21 @@ function Dettaglio({ libro }: { libro: LibroId }) {
       </div>
 
       {/* Performance giornaliera */}
-      <div className="card-premium rounded-2xl p-5">
-        <div className="text-sm font-semibold mb-3">Performance giornaliera</div>
+      <div className="rounded-2xl p-5" style={SCHEDA}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="text-lg font-bold">Performance giornaliera</div>
+          <div className="text-sm text-muted-foreground">{intervallo === "tutto" ? "tutte le giornate" : intervallo === "7g" ? "ultimi 7 giorni" : "ultimi 30 giorni"} · i giorni senza dati restano vuoti</div>
+        </div>
         {perf.length ? (
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={perf} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.2 0.01 260)" vertical={false} />
-              <XAxis dataKey="giorno" tick={{ fontSize: 10, fill: MUTO }} tickFormatter={giornoBreve} />
-              <YAxis tick={{ fontSize: 10, fill: MUTO }} tickFormatter={(v) => `${v}%`} width={44} />
-              <Tooltip formatter={(v: number) => [pct(v), "giornata"]} labelFormatter={(l) => String(l)} contentStyle={{ background: "oklch(0.16 0.02 260)", border: "1px solid oklch(0.25 0.02 260)", borderRadius: 12, fontSize: 12 }} />
-              <ReferenceLine y={0} stroke="oklch(0.35 0.02 260)" />
-              <Bar dataKey="pct" isAnimationActive={false} radius={[4, 4, 0, 0]}>
-                {perf.map((p, i) => <Cell key={i} fill={p.pct == null ? MUTO : p.pct >= 0 ? VERDE : ROSSO} />)}
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={perf} margin={{ top: 10, right: 5, bottom: 5, left: 5 }} barCategoryGap="30%">
+              <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.3 0.02 260)" vertical={false} />
+              <XAxis dataKey="giorno" tick={{ fontSize: 12, fill: "oklch(0.7 0.02 260)" }} tickFormatter={giornoBreve} interval={intervallo === "30g" ? 2 : 0} />
+              <YAxis domain={[-maxAbs, maxAbs]} tick={{ fontSize: 12, fill: "oklch(0.7 0.02 260)" }} tickFormatter={(v) => `${v > 0 ? "+" : ""}${Number(v).toFixed(1)}%`} width={56} />
+              <Tooltip formatter={(v: any) => [v == null ? "nessun dato" : pct(Number(v)), "giornata"]} labelFormatter={(l) => String(l)} contentStyle={{ background: "oklch(0.16 0.02 260)", border: "1px solid oklch(0.3 0.03 260)", borderRadius: 12, fontSize: 13 }} />
+              <ReferenceLine y={0} stroke="oklch(0.5 0.02 260)" />
+              <Bar dataKey="pct" isAnimationActive={false} radius={[4, 4, 4, 4]} maxBarSize={48}>
+                {perf.map((p, i) => <Cell key={i} fill={p.pct == null ? "transparent" : p.pct >= 0 ? VERDE : ROSSO} />)}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -272,8 +315,8 @@ function Dettaglio({ libro }: { libro: LibroId }) {
       </div>
 
       {/* Posizioni aperte */}
-      <div className="card-premium rounded-2xl p-5">
-        <div className="text-sm font-semibold mb-3">Posizioni aperte</div>
+      <div className="rounded-2xl p-5" style={SCHEDA}>
+        <div className="text-lg font-bold mb-3">Posizioni aperte</div>
         {d.posizioni.length ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -301,8 +344,8 @@ function Dettaglio({ libro }: { libro: LibroId }) {
       </div>
 
       {/* Storico */}
-      <div className="card-premium rounded-2xl p-5">
-        <div className="text-sm font-semibold mb-3">Storico operazioni chiuse</div>
+      <div className="rounded-2xl p-5" style={SCHEDA}>
+        <div className="text-lg font-bold mb-3">Storico operazioni chiuse</div>
         {d.chiuse.length ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -347,8 +390,8 @@ function Dettaglio({ libro }: { libro: LibroId }) {
 
       {/* Ultima decisione + copy dossier */}
       <div className="grid lg:grid-cols-2 gap-4">
-        <div className="card-premium rounded-2xl p-5">
-          <div className="text-sm font-semibold mb-2 flex items-center gap-2"><Bot className="w-4 h-4" /> Ultima decisione del modello</div>
+        <div className="rounded-2xl p-5" style={SCHEDA}>
+          <div className="text-lg font-bold mb-2 flex items-center gap-2"><Bot className="w-4 h-4" /> Ultima decisione del modello</div>
           {d.ultima_decisione ? (
             <div className="text-sm space-y-2">
               <div className="text-xs text-muted-foreground">{ora(d.ultima_decisione.ora)} · {d.ultima_decisione.modello ?? "—"}{d.ultima_decisione.regime ? ` · regime: ${d.ultima_decisione.regime}` : ""}</div>
@@ -362,8 +405,8 @@ function Dettaglio({ libro }: { libro: LibroId }) {
             </div>
           ) : <div className="text-sm text-muted-foreground">nessuna decisione registrata ancora</div>}
         </div>
-        <div className="card-premium rounded-2xl p-5">
-          <div className="text-sm font-semibold mb-2 flex items-center gap-2"><ShieldCheck className="w-4 h-4" /> Regole del libro</div>
+        <div className="rounded-2xl p-5" style={SCHEDA}>
+          <div className="text-lg font-bold mb-2 flex items-center gap-2"><ShieldCheck className="w-4 h-4" /> Regole del libro</div>
           {d.rischio ? (
             <ul className="text-sm text-muted-foreground space-y-1">
               <li>Rischio per operazione: <b className="text-foreground">{d.rischio.per_operazione_pct}%</b> del capitale · leva max <b className="text-foreground">{d.rischio.leva_max}x</b> · posizioni max <b className="text-foreground">{d.rischio.posizioni_max}</b></li>
@@ -406,8 +449,8 @@ export default function Finance() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-foreground flex items-center gap-2"><CandlestickChart className="w-5 h-5" /> Trading Lab</h2>
-          <p className="text-sm text-muted-foreground">Due agenti, due conti, due metodi. La domanda e' una sola: quello che fanno batte il non fare niente?</p>
+          <h2 className="text-2xl font-bold text-foreground flex items-center gap-2"><CandlestickChart className="w-6 h-6" /> Trading Lab</h2>
+          <p className="text-base text-muted-foreground">Due agenti, due conti, due metodi. La domanda e' una sola: quello che fanno batte il non fare niente?</p>
         </div>
         <Button variant="outline" size="sm" className="gap-2" onClick={aggiorna} disabled={pan.isFetching}>
           <RefreshCw className={`w-3.5 h-3.5 ${pan.isFetching ? "animate-spin" : ""}`} /> Rileggi dal VPS
