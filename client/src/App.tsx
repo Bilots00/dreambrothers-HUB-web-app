@@ -30,6 +30,7 @@ import AssetsLibrary from "./pages/AssetsLibrary";
 import Inspiration from "./pages/Inspiration";
 import CustomerCare from "./pages/CustomerCare";
 import Chargebacks from "./pages/Chargebacks";
+import Finance from "./pages/Finance";
 import SocialDrafts from "./pages/SocialDrafts";
 import SocialWatchlist from "./pages/SocialWatchlist";
 import SeoResearch from "./pages/SeoResearch";
@@ -109,6 +110,10 @@ function AppRouter() {
       <Route path="/care">{withLayout(CustomerCare)}</Route>
       <Route path="/care/chargebacks">{withLayout(Chargebacks)}</Route>
       <Route path="/care/urgent">{withLayout(CustomerCare)}</Route>
+
+      {/* FINANCE — fondo personale: i due agenti trader, letti dal VPS */}
+      <Route path="/finance">{withLayout(Finance)}</Route>
+      <Route path="/finance/:libro">{withLayout(Finance)}</Route>
 
       {/* META LIBRARY */}
       <Route path="/meta/library/inspiration">{withLayout(Inspiration)}</Route>

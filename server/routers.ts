@@ -4,6 +4,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { linkVideo } from "./videoFiles";
+import { leggiLibro, leggiTutti, sintesi, curvaUnita, etichettaCampione, statoCiclo, differenzaDalBenchmark, estremiTrade } from "./finance";
 import {
   getMetaAccountsByUserId, upsertMetaAccount, updateMetaAccountStatus,
   getCampaignsByUserId, getCampaignById, createCampaign, updateCampaign,
@@ -1773,6 +1774,28 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
   }),
 
   // ─── Chargeback Shopify ─────────────────────────────────────────────────────
+  // Finance: i due agenti trader del fondo personale (fuori dal Dream Team), letti
+  // dal VPS. Qui non si calcola e non si decide: si mostra quello che il ciclo ha scritto.
+  finance: router({
+    panoramica: protectedProcedure.input(z.object({ forza: z.boolean().default(false) }).optional()).query(async ({ input }) => {
+      const letture = await leggiTutti({ forza: input?.forza });
+      return { libri: letture.map(sintesi), letto_il: new Date().toISOString() };
+    }),
+    libro: protectedProcedure.input(z.object({ libro: z.enum(["principale", "intraday"]), forza: z.boolean().default(false) })).query(async ({ input }) => {
+      const l = await leggiLibro(input.libro, { forza: input.forza });
+      if (!l.ok) return { ok: false as const, libro: l.libro, motivo: l.motivo };
+      const d = l.dati;
+      return {
+        ok: true as const, libro: l.libro, letto_il: l.letto_il, dati: d,
+        curva: curvaUnita(d.equity_storia, d.benchmark_btc?.serie),
+        campione: etichettaCampione(d.metriche.operazioni),
+        ciclo: statoCiclo(d.heartbeat),
+        differenza_pct: differenzaDalBenchmark(d.ritorno_pct, d.benchmark_btc?.ritorno_pct),
+        estremi: estremiTrade(d.chiuse, d.capitale_iniziale),
+      };
+    }),
+  }),
+
   // Le contestazioni bancarie: Shopify le annuncia solo per mail all'indirizzo
   // proprietario dello store, che oggi e' una casella inaccessibile. Qui
   // vivono dentro l'app, con la scadenza sempre in vista.

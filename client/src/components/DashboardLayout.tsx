@@ -11,7 +11,7 @@ import {
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar, CheckCircle2,
   Newspaper, TrendingUp, Clapperboard, Moon, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck, Users,
-  Landmark, Timer, EarOff,
+  Landmark, Timer, EarOff, Wallet, CandlestickChart,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -72,6 +72,12 @@ const LIBRARY_ITEMS = [
   { icon: Images, label: "My Assets", path: "/meta/library/assets", description: "Creative generate (n8n / Drive)" },
 ];
 
+// Finance: il fondo personale. Sta nella stessa app per comodita' di Andrea, ma e'
+// un perimetro separato da DreamBrothers: i due trader NON sono nel Dream Team.
+const FINANCE_ITEMS = [
+  { icon: CandlestickChart, label: "Trading Lab", path: "/finance", description: "I due agenti trader, a confronto col non fare niente" },
+];
+
 // Pagine fuori dalla sidebar ma ancora raggiungibili da link interni
 // (Mission Control → /logs, Dashboard → /campaigns, ecc.): servono solo
 // per il titolo nell'header, non vengono renderizzate nei NavGroup.
@@ -83,7 +89,7 @@ const HIDDEN_ITEMS = [
 ];
 
 // Flat map for header lookup
-const ALL_ITEMS = [...META_ADS_ITEMS, ...VIDEO_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...SEO_ITEMS, ...CARE_ITEMS, ...CLAUDE_ITEMS, ...LIBRARY_ITEMS, ...HIDDEN_ITEMS];
+const ALL_ITEMS = [...META_ADS_ITEMS, ...VIDEO_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...SEO_ITEMS, ...CARE_ITEMS, ...CLAUDE_ITEMS, ...LIBRARY_ITEMS, ...FINANCE_ITEMS, ...HIDDEN_ITEMS];
 
 // ─── NavGroup component ───────────────────────────────────────────────────────
 function NavGroup({
@@ -356,6 +362,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             icon={Brain}
             color="oklch(0.72 0.15 40)"
             items={CLAUDE_ITEMS}
+            location={location}
+            navigate={navigate}
+            sidebarOpen={sidebarOpen}
+            defaultOpen={false}
+          />
+
+          {/* Finance — fondo personale, perimetro separato dal brand */}
+          <NavGroup
+            label="Finance"
+            icon={Wallet}
+            color="oklch(0.78 0.16 85)"
+            items={FINANCE_ITEMS}
             location={location}
             navigate={navigate}
             sidebarOpen={sidebarOpen}
