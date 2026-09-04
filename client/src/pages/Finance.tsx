@@ -1,12 +1,16 @@
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
 import { useLocation } from "wouter";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, CandlestickChart, ChevronDown, ChevronRight, Info, RefreshCw, ShieldCheck, Skull, Target, Trophy, Wallet,
+  Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, CandlestickChart, ChevronDown, ChevronRight, Info, Pause,
+  Pencil, RefreshCw, ShieldCheck, Skull, Target, Trophy, Wallet, X,
 } from "lucide-react";
 
 /**
@@ -33,6 +37,7 @@ const MUTO = "oklch(0.55 0.02 260)";
 
 const n = (x: number | null | undefined, d = 2) => (x == null || Number.isNaN(x) ? "—" : x.toFixed(d));
 const pct = (x: number | null | undefined, d = 2) => (x == null || Number.isNaN(x) ? "—" : `${x >= 0 ? "+" : ""}${x.toFixed(d)}%`);
+const pct2 = (x: number | null | undefined) => pct(typeof x === "number" ? x : null);
 const usd = (x: number | null | undefined) => (x == null || Number.isNaN(x) ? "—" : `${x.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`);
 const ora = (t: string | null | undefined) => (t ? new Date(t).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const giornoBreve = (t: string) => t.slice(5, 10).split("-").reverse().join("/");
@@ -108,24 +113,211 @@ const TooltipCurva = ({ active, payload, label }: { active?: boolean; payload?: 
 };
 
 /* ------------------------------------------------------------------ */
+/* Interruttore dell'automazione                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Spegnere ferma le DECISIONI, non la sorveglianza: stop e target restano al loro posto e
+ * le posizioni aperte continuano a chiudersi da sole. E' scritto nell'etichetta perche' e'
+ * la domanda che uno si fa col dito sopra l'interruttore.
+ */
+function Interruttore({ libro, acceso, dal, motivo }: { libro: LibroId; acceso: boolean; dal: string | null; motivo: string | null }) {
+  const utils = trpc.useUtils();
+  const [inCorso, setInCorso] = useState(false);
+  const m = trpc.finance.interruttore.useMutation({
+    onSuccess: async (_d, v) => {
+      toast.success(v.acceso ? "Automazione accesa" : "Automazione spenta", {
+        description: v.acceso ? "L'agente torna a decidere al prossimo giro." : "Nessuna nuova apertura. Stop e target restano attivi sulle posizioni aperte.",
+      });
+      await utils.finance.panoramica.invalidate();
+      await utils.finance.libro.invalidate();
+    },
+    onError: (e) => toast.error("Comando non riuscito", { description: e.message }),
+    onSettled: () => setInCorso(false),
+  });
+  return (
+    <div className="flex items-center gap-2" onClick={(e) => { e.stopPropagation(); }}>
+      <div className="text-right">
+        <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: acceso ? VERDE : "oklch(0.7 0.02 260)" }}>
+          {acceso ? "Attivo" : "In pausa"}
+        </div>
+        {!acceso && dal && <div className="text-[11px] text-muted-foreground">dal {ora(dal)}{motivo ? ` · ${motivo}` : ""}</div>}
+      </div>
+      <Switch
+        checked={acceso}
+        disabled={inCorso || m.isPending}
+        onCheckedChange={(v) => { setInCorso(true); m.mutate({ libro, acceso: v, motivo: v ? "riacceso dalla web app" : "spento dalla web app" }); }}
+        aria-label={acceso ? "Spegni l'automazione" : "Accendi l'automazione"}
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Obiettivo: il riquadro editabile                                    */
+/* ------------------------------------------------------------------ */
+
+function RiquadroObiettivo({ libro, obiettivo, progresso }: { libro: LibroId; obiettivo: any; progresso: any }) {
+  const utils = trpc.useUtils();
+  const [modifica, setModifica] = useState(false);
+  const [pct, setPct] = useState<string>(obiettivo?.ritorno_pct != null ? String(obiettivo.ritorno_pct) : "5");
+  const [giorni, setGiorni] = useState<string>(obiettivo?.orizzonte_giorni != null ? String(obiettivo.orizzonte_giorni) : "30");
+  useEffect(() => {
+    if (modifica) return;
+    if (obiettivo?.ritorno_pct != null) setPct(String(obiettivo.ritorno_pct));
+    if (obiettivo?.orizzonte_giorni != null) setGiorni(String(obiettivo.orizzonte_giorni));
+  }, [obiettivo?.ritorno_pct, obiettivo?.orizzonte_giorni, modifica]);
+
+  const m = trpc.finance.obiettivo.useMutation({
+    onSuccess: async () => {
+      toast.success("Obiettivo aggiornato", { description: "L'agente lo legge al prossimo giro e regola quanto essere selettivo." });
+      setModifica(false);
+      await utils.finance.panoramica.invalidate();
+      await utils.finance.libro.invalidate();
+    },
+    onError: (e) => toast.error("Obiettivo non salvato", { description: e.message }),
+  });
+
+  const salva = () => {
+    const r = Number(pct.replace(",", ".")), g = Number(giorni);
+    if (!Number.isFinite(r) || r < -50 || r > 100) return toast.error("Percentuale non valida", { description: "Ammessi valori fra -50 e +100." });
+    if (!Number.isInteger(g) || g < 1 || g > 365) return toast.error("Orizzonte non valido", { description: "Ammessi da 1 a 365 giorni." });
+    m.mutate({ libro, attivo: true, ritorno_pct: r, orizzonte_giorni: g });
+  };
+
+  const attivo = obiettivo?.attivo && progresso;
+  const coloreP = !attivo ? MUTO : progresso.passo === "avanti" ? VERDE : progresso.passo === "indietro" ? ROSSO : "oklch(0.72 0.18 75)";
+
+  return (
+    <div className="rounded-2xl p-5" style={SCHEDA}>
+      <div className="flex items-start justify-between mb-3">
+        <div className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Obiettivo</div>
+        <button onClick={() => setModifica(!modifica)} className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors"
+          style={{ background: "oklch(0.72 0.18 75 / 0.15)", border: "1px solid oklch(0.72 0.18 75 / 0.3)" }} aria-label="Modifica obiettivo">
+          {modifica ? <X className="w-4 h-4" style={{ color: BTC }} /> : <Pencil className="w-4 h-4" style={{ color: BTC }} />}
+        </button>
+      </div>
+
+      {modifica ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Input value={pct} onChange={(e) => setPct(e.target.value)} className="h-9 text-base tabular-nums" inputMode="decimal" aria-label="Percentuale obiettivo" />
+            <span className="text-sm text-muted-foreground shrink-0">% in</span>
+            <Input value={giorni} onChange={(e) => setGiorni(e.target.value)} className="h-9 w-20 text-base tabular-nums" inputMode="numeric" aria-label="Giorni" />
+            <span className="text-sm text-muted-foreground shrink-0">gg</span>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={salva} disabled={m.isPending}>Salva</Button>
+            {obiettivo?.attivo && (
+              <Button size="sm" variant="outline" disabled={m.isPending} onClick={() => m.mutate({ libro, attivo: false })}>Togli obiettivo</Button>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground">L'obiettivo cambia quanto l'agente e' selettivo, non quanto rischia per operazione: size, leva e stop restano cancelli del codice.</p>
+        </div>
+      ) : !attivo ? (
+        <>
+          <div className="text-3xl font-bold text-muted-foreground">nessuno</div>
+          <div className="text-sm mt-1.5 text-muted-foreground">tocca la matita per fissarne uno</div>
+        </>
+      ) : (
+        <>
+          <div className="text-3xl font-bold text-foreground tabular-nums">{usd(progresso.valore_obiettivo)}</div>
+          <div className="text-sm mt-1.5 font-medium" style={{ color: coloreP }}>
+            {pct2(obiettivo.ritorno_pct)} in {obiettivo.orizzonte_giorni} gg · {progresso.scaduto ? "SCADUTO" : progresso.passo.toUpperCase()}
+          </div>
+          <div className="mt-3 h-2 rounded-full overflow-hidden" style={{ background: "oklch(0.16 0.02 260)" }}>
+            <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(0, Math.min(100, progresso.completamento_pct ?? 0))}%`, background: coloreP }} />
+          </div>
+          <div className="flex justify-between text-[11px] text-muted-foreground mt-1.5">
+            <span>effettivo {pct2(progresso.effettivo_pct)}</span>
+            <span>atteso {pct2(progresso.atteso_pct)}</span>
+            <span>{progresso.giorni_rimasti.toFixed(0)} gg rimasti</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Verdetto                                                            */
+/* ------------------------------------------------------------------ */
+
+const MEDAGLIE = ["🥇", "🥈", "🥉"];
+
+function Verdetto({ v }: { v: any }) {
+  if (!v) return null;
+  const colore = (c: any, i: number) => (c.tipo === "benchmark" ? BTC : i === 0 ? VERDE : "oklch(0.65 0.2 265)");
+  return (
+    <div className="rounded-2xl p-5" style={SCHEDA}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div className="text-lg font-bold flex items-center gap-2"><Trophy className="w-5 h-5" style={{ color: BTC }} /> Il verdetto</div>
+        <span className="text-sm px-2.5 py-1 rounded-full" style={{ background: v.campione_sufficiente ? `${VERDE}18` : "oklch(0.72 0.18 75 / 0.15)", color: v.campione_sufficiente ? VERDE : "oklch(0.8 0.15 80)" }}>
+          {v.campione_sufficiente ? "campione utilizzabile" : "provvisorio"}
+        </span>
+      </div>
+
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(3, Math.max(1, v.classifica.length))}, minmax(0, 1fr))` }}>
+        {v.classifica.map((c: any, i: number) => (
+          <div key={c.chiave} className="rounded-xl p-4" style={{ background: "oklch(0.19 0.03 262)", border: `2px solid ${i === 0 ? colore(c, i) : "oklch(0.3 0.04 262)"}` }}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xl">{MEDAGLIE[i] ?? "•"}</span>
+              <span className="font-semibold text-foreground">{c.nome}</span>
+            </div>
+            <div className="text-2xl font-bold tabular-nums" style={{ color: colorePnl(c.ritorno_pct) }}>{pct2(c.ritorno_pct)}</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {c.equity != null ? usd(c.equity) : "—"}{c.operazioni != null ? ` · ${c.operazioni} operazioni` : " · nessuna operazione, nessuno sforzo"}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {v.esclusi.length > 0 && (
+        <div className="mt-3 space-y-1">
+          {v.esclusi.map((c: any) => (
+            <div key={c.chiave} className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Pause className="w-3.5 h-3.5 shrink-0" />
+              <span><b className="text-foreground">{c.nome}</b> fuori dal verdetto: {c.escluso_perche} (era a {pct2(c.ritorno_pct)})</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-sm text-muted-foreground mt-4">{v.nota}</p>
+      {v.batte_il_non_fare_niente === false && (
+        <p className="text-sm mt-1 font-medium" style={{ color: ROSSO }}>Nessuno dei due agenti sta battendo il buy &amp; hold: in questo momento il lavoro sta costando, non rendendo.</p>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Panoramica: i due libri fianco a fianco                            */
 /* ------------------------------------------------------------------ */
 
 function CartaLibro({ s, attivo, onClick }: { s: any; attivo: boolean; onClick: () => void }) {
   const meta = LIBRI[s.libro as LibroId];
+  const acceso = s.automazione?.acceso !== false;
+  // Non e' un <button>: dentro c'e' l'interruttore, e un bottone dentro un bottone e'
+  // HTML non valido (e su alcuni browser il click interno attiva anche quello esterno).
   return (
-    <button onClick={onClick} className="text-left w-full rounded-2xl p-5 transition-all" style={{
-      background: attivo ? "oklch(0.24 0.045 262)" : "oklch(0.2 0.03 262)",
-      border: `2px solid ${attivo ? meta.colore : "oklch(0.32 0.04 262)"}`,
-    }}>
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-lg font-bold text-foreground">{meta.nome}</div>
-          <div className="text-sm text-muted-foreground">{meta.sotto}</div>
+    <div role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+      className="text-left w-full rounded-2xl p-5 transition-all cursor-pointer" style={{
+        background: attivo ? "oklch(0.24 0.045 262)" : "oklch(0.2 0.03 262)",
+        border: `2px solid ${attivo ? meta.colore : "oklch(0.32 0.04 262)"}`,
+        opacity: acceso ? 1 : 0.75,
+      }}>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${meta.colore}20` }}>
+            <Bot className="w-4 h-4" style={{ color: meta.colore }} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-lg font-bold text-foreground">{meta.nome}</div>
+            <div className="text-sm text-muted-foreground">{meta.sotto}</div>
+          </div>
         </div>
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${meta.colore}20` }}>
-          <Bot className="w-4 h-4" style={{ color: meta.colore }} />
-        </div>
+        {s.ok && <Interruttore libro={s.libro} acceso={acceso} dal={s.automazione?.dal ?? null} motivo={s.automazione?.motivo ?? null} />}
       </div>
       {!s.ok ? (
         <div className="flex items-start gap-2 text-sm" style={{ color: ROSSO }}>
@@ -167,7 +359,7 @@ function CartaLibro({ s, attivo, onClick }: { s: any; attivo: boolean; onClick: 
           </div>
         </>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -234,8 +426,8 @@ function Dettaglio({ libro }: { libro: LibroId }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Riquadro label="Capitale iniziale" value={usd(d.capitale_iniziale)} sub="dichiarato, non il saldo del demo" color={MUTO} icon={Wallet} />
         <Riquadro label="Capitale attuale" value={usd(d.equity)} sub={`${pct(d.ritorno_pct)} dal via · giorno ${n(m.giorni_operativi, 0)}`} color={colorePnl(d.ritorno_pct)} icon={Activity} />
-        <Riquadro label="BTC buy & hold" value={d.benchmark_btc?.valore == null ? "—" : usd(d.benchmark_btc.valore)} sub={d.benchmark_btc?.ritorno_pct == null ? "benchmark non disponibile" : `${pct(d.benchmark_btc.ritorno_pct)} senza fare niente`} color={BTC} icon={Target} />
-        <Riquadro label="Vs non fare niente" value={differenza_pct == null ? "—" : `${differenza_pct >= 0 ? "+" : ""}${differenza_pct.toFixed(2)} pt`} sub={differenza_pct == null ? "serve il benchmark" : differenza_pct >= 0 ? "sopra il buy & hold" : "sotto il buy & hold: verde travestito"} color={colorePnl(differenza_pct)} icon={differenza_pct != null && differenza_pct >= 0 ? ArrowUp : ArrowDown} />
+        <RiquadroObiettivo libro={libro} obiettivo={d.obiettivo} progresso={d.progresso_obiettivo} />
+        <Riquadro label="BTC buy & hold" value={d.benchmark_btc?.valore == null ? "—" : usd(d.benchmark_btc.valore)} sub={d.benchmark_btc?.ritorno_pct == null ? "benchmark non disponibile" : `${pct(d.benchmark_btc.ritorno_pct)} senza fare niente${differenza_pct != null ? ` · sei ${differenza_pct >= 0 ? "+" : ""}${differenza_pct.toFixed(2)} pt` : ""}`} color={BTC} icon={Target} />
       </div>
 
       {/* Equity curve */}
@@ -464,6 +656,8 @@ export default function Finance() {
           {libri.map((s: any) => <CartaLibro key={s.libro} s={s} attivo={s.libro === libro} onClick={() => scegli(s.libro)} />)}
         </div>
       )}
+
+      <Verdetto v={pan.data?.verdetto} />
 
       <div className="rounded-2xl p-4 text-xs text-muted-foreground flex items-start gap-2" style={{ background: "oklch(0.72 0.18 75 / 0.07)", border: "1px solid oklch(0.72 0.18 75 / 0.2)" }}>
         <Trophy className="w-4 h-4 mt-0.5 shrink-0" style={{ color: BTC }} />

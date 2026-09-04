@@ -1,5 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { etichettaCampione, statoCiclo, differenzaDalBenchmark, curvaUnita, leggiLibro, estremiTrade } from "./finance";
+import { etichettaCampione, statoCiclo, differenzaDalBenchmark, curvaUnita, leggiLibro, estremiTrade, verdetto } from "./finance";
+
+/** Una lettura finta, ridotta a quello che il verdetto guarda davvero. */
+function lettura(libro: "principale" | "intraday", o: { ritorno: number; bench: number; op: number; acceso?: boolean; giorni?: number }) {
+  return {
+    ok: true as const, libro, letto_il: "", dati: {
+      ritorno_pct: o.ritorno, equity: 10000 * (1 + o.ritorno / 100),
+      benchmark_btc: { valore: 10000 * (1 + o.bench / 100), ritorno_pct: o.bench, serie: [] },
+      metriche: { operazioni: o.op, giorni_operativi: o.giorni ?? 10 },
+      automazione: { acceso: o.acceso ?? true, dal: null, motivo: o.acceso === false ? "spento a mano" : null },
+    },
+  } as any;
+}
+
+describe("verdetto", () => {
+  it("mette in classifica i due agenti e il buy & hold, dal migliore al peggiore", () => {
+    const v = verdetto([lettura("principale", { ritorno: 3, bench: 1, op: 20 }), lettura("intraday", { ritorno: 8, bench: 1, op: 25 })]);
+    expect(v.classifica.map((c) => c.chiave)).toEqual(["intraday", "principale", "btc"]);
+    expect(v.vincitore?.chiave).toBe("intraday");
+    expect(v.batte_il_non_fare_niente).toBe(true);
+  });
+
+  it("un agente SPENTO esce dalla gara ma resta visibile col motivo", () => {
+    // Confrontare una curva ferma con una che opera non misura niente: l'agente spento
+    // non e' il trader prudente, e' un trader assente.
+    const v = verdetto([lettura("principale", { ritorno: 30, bench: 1, op: 20, acceso: false }), lettura("intraday", { ritorno: 2, bench: 1, op: 25 })]);
+    expect(v.classifica.map((c) => c.chiave)).toEqual(["intraday", "btc"]);
+    expect(v.esclusi.map((c) => c.chiave)).toEqual(["principale"]);
+    expect(v.esclusi[0].escluso_perche).toMatch(/spenta/);
+    expect(v.vincitore?.chiave).toBe("intraday");
+  });
+
+  it("col buy & hold davanti a tutti, non finge che un agente stia vincendo", () => {
+    const v = verdetto([lettura("principale", { ritorno: -1, bench: 12, op: 40 }), lettura("intraday", { ritorno: 4, bench: 12, op: 40 })]);
+    expect(v.vincitore?.chiave).toBe("btc");
+    expect(v.batte_il_non_fare_niente).toBe(false);
+  });
+
+  it("spenti tutti, vince il non fare niente per abbandono", () => {
+    const v = verdetto([lettura("principale", { ritorno: 5, bench: 1, op: 20, acceso: false }), lettura("intraday", { ritorno: 9, bench: 1, op: 25, acceso: false })]);
+    expect(v.classifica.map((c) => c.chiave)).toEqual(["btc"]);
+    expect(v.nota).toMatch(/abbandono/);
+    expect(v.batte_il_non_fare_niente).toBeNull();
+  });
+
+  it("sotto 30 operazioni il verdetto si dichiara provvisorio", () => {
+    expect(verdetto([lettura("intraday", { ritorno: 20, bench: 1, op: 12 })]).campione_sufficiente).toBe(false);
+    expect(verdetto([lettura("intraday", { ritorno: 20, bench: 1, op: 12 })]).nota).toMatch(/rumore ordinato/);
+    expect(verdetto([lettura("intraday", { ritorno: 2, bench: 1, op: 55 })]).campione_sufficiente).toBe(true);
+  });
+
+  it("un libro che il VPS non ha saputo leggere non rompe il verdetto", () => {
+    const v = verdetto([{ ok: false, libro: "principale", motivo: "VPS irraggiungibile" } as any, lettura("intraday", { ritorno: 3, bench: 1, op: 40 })]);
+    expect(v.classifica.map((c) => c.chiave)).toEqual(["intraday", "btc"]);
+  });
+});
 
 describe("estremiTrade", () => {
   it("misura sul capitale del libro, non sul nozionale a leva", () => {

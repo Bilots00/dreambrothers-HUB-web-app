@@ -4,7 +4,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { linkVideo } from "./videoFiles";
-import { leggiLibro, leggiTutti, sintesi, curvaUnita, etichettaCampione, statoCiclo, differenzaDalBenchmark, estremiTrade } from "./finance";
+import { leggiLibro, leggiTutti, sintesi, curvaUnita, etichettaCampione, statoCiclo, differenzaDalBenchmark, estremiTrade, verdetto, inviaComando } from "./finance";
 import {
   getMetaAccountsByUserId, upsertMetaAccount, updateMetaAccountStatus,
   getCampaignsByUserId, getCampaignById, createCampaign, updateCampaign,
@@ -1779,8 +1779,37 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
   finance: router({
     panoramica: protectedProcedure.input(z.object({ forza: z.boolean().default(false) }).optional()).query(async ({ input }) => {
       const letture = await leggiTutti({ forza: input?.forza });
-      return { libri: letture.map(sintesi), letto_il: new Date().toISOString() };
+      return { libri: letture.map(sintesi), verdetto: verdetto(letture), letto_il: new Date().toISOString() };
     }),
+
+    // L'interruttore. Spegnere ferma le DECISIONI, non la sorveglianza: stop e target
+    // continuano a lavorare sulle posizioni gia' aperte.
+    interruttore: protectedProcedure
+      .input(z.object({ libro: z.enum(["principale", "intraday"]), acceso: z.boolean(), motivo: z.string().max(200).optional() }))
+      .mutation(async ({ input }) => {
+        const r = await inviaComando(input.libro, { azione: input.acceso ? "accendi" : "spegni", motivo: input.motivo });
+        if (!r.ok) throw new Error(r.motivo);
+        return r.esito;
+      }),
+
+    // L'obiettivo. Cambia quanto l'agente e' SELETTIVO, mai quanto rischia per operazione:
+    // i cancelli di size, leva e stop restano nel codice del risk manager.
+    obiettivo: protectedProcedure
+      .input(z.object({
+        libro: z.enum(["principale", "intraday"]),
+        attivo: z.boolean().default(true),
+        // Limiti volutamente stretti: un obiettivo del 500% al mese non e' ambizione,
+        // e' un'istruzione a saltare il conto. Sotto -50% non ha senso come obiettivo.
+        ritorno_pct: z.number().min(-50).max(100).optional(),
+        orizzonte_giorni: z.number().int().min(1).max(365).optional(),
+        nota: z.string().max(200).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        if (input.attivo && (input.ritorno_pct == null || input.orizzonte_giorni == null)) throw new Error("per attivare un obiettivo servono ritorno_pct e orizzonte_giorni");
+        const r = await inviaComando(input.libro, { obiettivo: { attivo: input.attivo, ritorno_pct: input.ritorno_pct, orizzonte_giorni: input.orizzonte_giorni, nota: input.nota } });
+        if (!r.ok) throw new Error(r.motivo);
+        return r.esito;
+      }),
     libro: protectedProcedure.input(z.object({ libro: z.enum(["principale", "intraday"]), forza: z.boolean().default(false) })).query(async ({ input }) => {
       const l = await leggiLibro(input.libro, { forza: input.forza });
       if (!l.ok) return { ok: false as const, libro: l.libro, motivo: l.motivo };
