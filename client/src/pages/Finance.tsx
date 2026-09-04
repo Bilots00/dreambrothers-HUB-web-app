@@ -160,13 +160,19 @@ function Interruttore({ libro, acceso, dal, motivo }: { libro: LibroId; acceso: 
 function RiquadroObiettivo({ libro, obiettivo, progresso }: { libro: LibroId; obiettivo: any; progresso: any }) {
   const utils = trpc.useUtils();
   const [modifica, setModifica] = useState(false);
-  const [pct, setPct] = useState<string>(obiettivo?.ritorno_pct != null ? String(obiettivo.ritorno_pct) : "5");
+  // Si puo' dire "voglio il 5%" o "voglio 500 dollari": dentro e' sempre una percentuale
+  // sull'equity di partenza, ma la forma con cui Andrea l'ha detto si conserva e si mostra.
+  const [modo, setModo] = useState<"pct" | "usd">(obiettivo?.tipo === "importo" ? "usd" : "pct");
+  const [pct, setPct] = useState<string>(obiettivo?.ritorno_pct != null ? String(Number(obiettivo.ritorno_pct).toFixed(2)) : "5");
+  const [importo, setImporto] = useState<string>(obiettivo?.importo != null ? String(obiettivo.importo) : "500");
   const [giorni, setGiorni] = useState<string>(obiettivo?.orizzonte_giorni != null ? String(obiettivo.orizzonte_giorni) : "30");
   useEffect(() => {
     if (modifica) return;
-    if (obiettivo?.ritorno_pct != null) setPct(String(obiettivo.ritorno_pct));
+    if (obiettivo?.tipo) setModo(obiettivo.tipo === "importo" ? "usd" : "pct");
+    if (obiettivo?.ritorno_pct != null) setPct(String(Number(obiettivo.ritorno_pct).toFixed(2)));
+    if (obiettivo?.importo != null) setImporto(String(obiettivo.importo));
     if (obiettivo?.orizzonte_giorni != null) setGiorni(String(obiettivo.orizzonte_giorni));
-  }, [obiettivo?.ritorno_pct, obiettivo?.orizzonte_giorni, modifica]);
+  }, [obiettivo?.tipo, obiettivo?.ritorno_pct, obiettivo?.importo, obiettivo?.orizzonte_giorni, modifica]);
 
   const m = trpc.finance.obiettivo.useMutation({
     onSuccess: async () => {
@@ -179,9 +185,15 @@ function RiquadroObiettivo({ libro, obiettivo, progresso }: { libro: LibroId; ob
   });
 
   const salva = () => {
-    const r = Number(pct.replace(",", ".")), g = Number(giorni);
-    if (!Number.isFinite(r) || r < -50 || r > 100) return toast.error("Percentuale non valida", { description: "Ammessi valori fra -50 e +100." });
+    const g = Number(giorni);
     if (!Number.isInteger(g) || g < 1 || g > 365) return toast.error("Orizzonte non valido", { description: "Ammessi da 1 a 365 giorni." });
+    if (modo === "usd") {
+      const i = Number(importo.replace(/\./g, "").replace(",", "."));
+      if (!Number.isFinite(i) || i < -100000 || i > 1000000) return toast.error("Importo non valido", { description: "Ammessi valori fra -100.000 e +1.000.000 dollari." });
+      return m.mutate({ libro, attivo: true, importo: i, orizzonte_giorni: g });
+    }
+    const r = Number(pct.replace(",", "."));
+    if (!Number.isFinite(r) || r < -50 || r > 100) return toast.error("Percentuale non valida", { description: "Ammessi valori fra -50 e +100." });
     m.mutate({ libro, attivo: true, ritorno_pct: r, orizzonte_giorni: g });
   };
 
@@ -200,9 +212,19 @@ function RiquadroObiettivo({ libro, obiettivo, progresso }: { libro: LibroId; ob
 
       {modifica ? (
         <div className="space-y-2">
+          <div className="flex items-center gap-1 rounded-lg p-1 w-fit" style={RIQUADRO}>
+            {(["pct", "usd"] as const).map((v) => (
+              <button key={v} onClick={() => setModo(v)} className="px-3 py-1 rounded-md text-sm font-medium"
+                style={modo === v ? { background: "oklch(0.65 0.2 265)", color: "white" } : { color: "oklch(0.7 0.02 260)" }}>
+                {v === "pct" ? "in %" : "in $"}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-2">
-            <Input value={pct} onChange={(e) => setPct(e.target.value)} className="h-9 text-base tabular-nums" inputMode="decimal" aria-label="Percentuale obiettivo" />
-            <span className="text-sm text-muted-foreground shrink-0">% in</span>
+            {modo === "usd"
+              ? <Input value={importo} onChange={(e) => setImporto(e.target.value)} className="h-9 text-base tabular-nums" inputMode="decimal" aria-label="Importo obiettivo in dollari" />
+              : <Input value={pct} onChange={(e) => setPct(e.target.value)} className="h-9 text-base tabular-nums" inputMode="decimal" aria-label="Percentuale obiettivo" />}
+            <span className="text-sm text-muted-foreground shrink-0">{modo === "usd" ? "$ in" : "% in"}</span>
             <Input value={giorni} onChange={(e) => setGiorni(e.target.value)} className="h-9 w-20 text-base tabular-nums" inputMode="numeric" aria-label="Giorni" />
             <span className="text-sm text-muted-foreground shrink-0">gg</span>
           </div>
@@ -223,13 +245,15 @@ function RiquadroObiettivo({ libro, obiettivo, progresso }: { libro: LibroId; ob
         <>
           <div className="text-3xl font-bold text-foreground tabular-nums">{usd(progresso.valore_obiettivo)}</div>
           <div className="text-sm mt-1.5 font-medium" style={{ color: coloreP }}>
-            {pct2(obiettivo.ritorno_pct)} in {obiettivo.orizzonte_giorni} gg · {progresso.scaduto ? "SCADUTO" : progresso.passo.toUpperCase()}
+            {obiettivo.tipo === "importo" && obiettivo.importo != null
+              ? `${obiettivo.importo >= 0 ? "+" : ""}${usd(obiettivo.importo)} (${pct2(obiettivo.ritorno_pct)})`
+              : pct2(obiettivo.ritorno_pct)} in {obiettivo.orizzonte_giorni} gg · {progresso.scaduto ? "SCADUTO" : progresso.passo.toUpperCase()}
           </div>
           <div className="mt-3 h-2 rounded-full overflow-hidden" style={{ background: "oklch(0.16 0.02 260)" }}>
             <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(0, Math.min(100, progresso.completamento_pct ?? 0))}%`, background: coloreP }} />
           </div>
           <div className="flex justify-between text-[11px] text-muted-foreground mt-1.5">
-            <span>effettivo {pct2(progresso.effettivo_pct)}</span>
+            <span>effettivo {obiettivo.tipo === "importo" ? usd(progresso.importo_effettivo) : pct2(progresso.effettivo_pct)}</span>
             <span>atteso {pct2(progresso.atteso_pct)}</span>
             <span>{progresso.giorni_rimasti.toFixed(0)} gg rimasti</span>
           </div>
@@ -657,14 +681,15 @@ export default function Finance() {
         </div>
       )}
 
-      <Verdetto v={pan.data?.verdetto} />
-
       <div className="rounded-2xl p-4 text-xs text-muted-foreground flex items-start gap-2" style={{ background: "oklch(0.72 0.18 75 / 0.07)", border: "1px solid oklch(0.72 0.18 75 / 0.2)" }}>
         <Trophy className="w-4 h-4 mt-0.5 shrink-0" style={{ color: BTC }} />
         <span>Un numero verde da solo non vuol dire niente. La domanda non e' mai "quanto ho guadagnato", e' "quanto ho guadagnato in piu' del non fare niente" — e prima di dire "funziona" servono decine di operazioni chiuse e almeno un mese storto.</span>
       </div>
 
       <Dettaglio libro={libro} />
+
+      {/* Il verdetto chiude la pagina, come nella dashboard del video: prima i fatti, poi la sentenza. */}
+      <Verdetto v={pan.data?.verdetto} />
     </div>
   );
 }

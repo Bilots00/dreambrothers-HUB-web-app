@@ -1801,12 +1801,15 @@ DELIVERABLE: mantieni il FORMATO/struttura che fa funzionare il contenuto (hook 
         // Limiti volutamente stretti: un obiettivo del 500% al mese non e' ambizione,
         // e' un'istruzione a saltare il conto. Sotto -50% non ha senso come obiettivo.
         ritorno_pct: z.number().min(-50).max(100).optional(),
+        // In alternativa alla percentuale: "voglio 500 dollari in 30 giorni". Il VPS lo
+        // converte in percentuale sull'equity di partenza e conserva com'e' stato detto.
+        importo: z.number().min(-100_000).max(1_000_000).optional(),
         orizzonte_giorni: z.number().int().min(1).max(365).optional(),
         nota: z.string().max(200).optional(),
       }))
       .mutation(async ({ input }) => {
-        if (input.attivo && (input.ritorno_pct == null || input.orizzonte_giorni == null)) throw new Error("per attivare un obiettivo servono ritorno_pct e orizzonte_giorni");
-        const r = await inviaComando(input.libro, { obiettivo: { attivo: input.attivo, ritorno_pct: input.ritorno_pct, orizzonte_giorni: input.orizzonte_giorni, nota: input.nota } });
+        if (input.attivo && ((input.ritorno_pct == null && input.importo == null) || input.orizzonte_giorni == null)) throw new Error("per attivare un obiettivo servono (ritorno_pct oppure importo) e orizzonte_giorni");
+        const r = await inviaComando(input.libro, { obiettivo: { attivo: input.attivo, ritorno_pct: input.ritorno_pct, importo: input.importo, orizzonte_giorni: input.orizzonte_giorni, nota: input.nota } });
         if (!r.ok) throw new Error(r.motivo);
         return r.esito;
       }),

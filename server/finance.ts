@@ -58,9 +58,9 @@ export type Istantanea = {
   broker: Record<string, unknown> | null;
   copia: unknown;
   automazione: { acceso: boolean; dal: string | null; motivo: string | null; da?: string } | null;
-  obiettivo: { attivo: boolean; ritorno_pct: number; orizzonte_giorni: number; equity_partenza: number; dal: string; nota: string | null } | null;
+  obiettivo: { attivo: boolean; tipo?: "pct" | "importo"; ritorno_pct: number; importo?: number | null; orizzonte_giorni: number; equity_partenza: number; dal: string; nota: string | null } | null;
   progresso_obiettivo: {
-    valore_obiettivo: number; ritorno_pct: number; orizzonte_giorni: number;
+    valore_obiettivo: number; tipo?: "pct" | "importo"; importo_obiettivo?: number; importo_effettivo?: number; ritorno_pct: number; orizzonte_giorni: number;
     giorni_passati: number; giorni_rimasti: number; atteso_pct: number; effettivo_pct: number;
     scarto_pct: number; completamento_pct: number | null; passo: "avanti" | "in linea" | "indietro";
     scaduto: boolean; dal: string;
@@ -214,7 +214,7 @@ export function verdetto(letture: LetturaLibro[]): {
 /* Comandi verso il VPS: accendi/spegni e obiettivo                     */
 /* ------------------------------------------------------------------ */
 
-export type Comando = { azione: "accendi" | "spegni"; motivo?: string } | { obiettivo: { attivo?: boolean; ritorno_pct?: number; orizzonte_giorni?: number; nota?: string } };
+export type Comando = { azione: "accendi" | "spegni"; motivo?: string } | { obiettivo: { attivo?: boolean; ritorno_pct?: number; importo?: number; orizzonte_giorni?: number; nota?: string } };
 
 /**
  * Scrive sul VPS. Il segreto dei comandi e' DIVERSO da quello di lettura ed esiste solo
