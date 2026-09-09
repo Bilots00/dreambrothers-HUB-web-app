@@ -130,9 +130,12 @@ async function rows<T = any>(q: any): Promise<T[]> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
   const res: any = await db.execute(q);
-  // mysql2 restituisce [rows, fields]; drizzle lo incarta a volte in { rows }.
-  const out = Array.isArray(res) ? res[0] : (res?.rows ?? res);
-  return Array.isArray(out) ? out : [];
+  // Two shapes come back from this driver, and this file got one of them wrong: sometimes
+  // [rows, fields], sometimes the bare rows array. Taking res[0] on the bare array returned
+  // the FIRST ROW instead of the rows, which is not an array, which became [] - and the app
+  // showed "no backup yet" over a backup it had just written. Same test index.ts uses.
+  const out = Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : (res?.rows ?? []);
+  return Array.isArray(out) ? out.filter((r: any) => r && typeof r === "object" && !Array.isArray(r)) : [];
 }
 
 export function registerFocusLockRoutes(app: Express) {
