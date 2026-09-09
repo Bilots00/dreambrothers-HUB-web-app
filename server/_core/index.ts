@@ -10,6 +10,7 @@ import { registerSocialRoutes } from "./socialRoutes";
 import { registerVideoRoutes } from "./videoRoutes";
 import { registerClaudeRoutes } from "./claudeRoutes";
 import { registerFocusLockRoutes } from "./focuslockRoutes";
+import { registerFocusLockFeedbackRoutes } from "./focuslockFeedback";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
@@ -652,6 +653,7 @@ async function startServer() {
   registerVideoRoutes(app);
   registerClaudeRoutes(app);
   registerFocusLockRoutes(app);
+  registerFocusLockFeedbackRoutes(app);
   registerWatchlistRoutes(app);
   registerImageProxy(app);
   registerResearchRoutes(app);
