@@ -95,17 +95,23 @@ function isIdentity(x: any): x is Identity { return x && typeof x.sub === "strin
 function stripForbidden(obj: any): any {
   if (!obj || typeof obj !== "object") return obj;
   for (const k of FORBIDDEN_KEYS) if (k in obj) delete obj[k];
+  if (obj.rules && typeof obj.rules === "object") for (const k of FORBIDDEN_KEYS) if (k in obj.rules) delete obj.rules[k];
   return obj;
 }
 
 function count(v: any): number { return Array.isArray(v) ? v.length : 0; }
 
 function summarize(b: any) {
-  const programs = count(b?.schedules);
-  let apps = count(b?.apps) + count(b?.quick?.apps);
-  let sites = count(b?.sites) + count(b?.quick?.sites);
-  let keywords = count(b?.keywords) + count(b?.quick?.keywords);
-  if (Array.isArray(b?.schedules)) for (const s of b.schedules) {
+  // The app's backup is {kind, format, createdAt, device, appVersion, rules:{...}}: the
+  // lists live under `rules`. Counting at the top level - as this did at first - showed
+  // "0 programmi" over a backup holding one, and matched the app's own Backup.summarize()
+  // on nothing. Top level is kept only as a fallback for a flat payload.
+  const r = (b && typeof b === "object" && b.rules && typeof b.rules === "object") ? b.rules : b;
+  const programs = count(r?.schedules);
+  let apps = count(r?.apps) + count(r?.quick?.apps);
+  let sites = count(r?.sites) + count(r?.quick?.sites);
+  let keywords = count(r?.keywords) + count(r?.quick?.keywords);
+  if (Array.isArray(r?.schedules)) for (const s of r.schedules) {
     apps += count(s?.apps); sites += count(s?.sites); keywords += count(s?.keywords);
   }
   return { programs, apps, sites, keywords };
