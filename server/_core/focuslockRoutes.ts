@@ -200,7 +200,12 @@ export function registerFocusLockRoutes(app: Express) {
     if (!backup || typeof backup !== "object") { res.status(400).json({ error: "backup object is required" }); return; }
     const payload = JSON.stringify(backup);
     if (payload.length > MAX_BACKUP_BYTES) { res.status(413).json({ error: "backup too large" }); return; }
-    const s = summarize(backup);
+    // The app knows its own format better than this file does: when it sends a summary, that
+    // is the one stored. The server's count is the fallback, not the authority.
+    const own = body.summary && typeof body.summary === "object" ? body.summary : null;
+    const s = own
+      ? { programs: Number(own.programs || 0), apps: Number(own.apps || 0), sites: Number(own.sites || 0), keywords: Number(own.keywords || 0) }
+      : summarize(backup);
     try {
       await ensureTable();
       await rows(sql`INSERT INTO focuslock_backups
