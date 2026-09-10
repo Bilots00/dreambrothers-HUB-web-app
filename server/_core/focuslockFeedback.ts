@@ -14,6 +14,29 @@ const WINDOW_MS = 10 * 60 * 1000;
 const MAX_PER_WINDOW = 5;
 const seen = new Map<string, number[]>();
 
+/* Il messaggio arriva anche per mail a info@dreambrothers.it: la riga in tabella nessuno la
+ * guardava. Il giro lo fa n8n (workflow "FocusLock · Feedback → mail a info@"): questo server
+ * gli passa il feedback appena salvato e non aspetta la risposta, perché una mail che non
+ * parte non deve far fallire l'invio dall'app. */
+const FEEDBACK_MAIL_WEBHOOK = process.env.FOCUSLOCK_FEEDBACK_WEBHOOK
+  || "https://primary-production-19a9c.up.railway.app/webhook/focuslock-feedback-7c1e9a4d";
+
+function relayByMail(payload: Record<string, unknown>): void {
+  if (!FEEDBACK_MAIL_WEBHOOK) return;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  fetch(FEEDBACK_MAIL_WEBHOOK, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: ctl.signal,
+  }).then((r) => {
+    if (!r.ok) console.warn("[focuslock] feedback mail relay answered", r.status);
+  }).catch((e) => {
+    console.warn("[focuslock] feedback mail relay failed:", e?.message || e);
+  }).finally(() => clearTimeout(timer));
+}
+
 let tableReady: Promise<void> | null = null;
 function ensureTable(): Promise<void> {
   if (!tableReady) {
@@ -70,10 +93,15 @@ export function registerFocusLockFeedbackRoutes(app: Express) {
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { res.status(400).json({ error: "Email non valida." }); return; }
     try {
       await ensureTable();
+      const appVersion = b.appVersion ? String(b.appVersion).slice(0, 32) : null;
+      const device = b.device ? String(b.device).slice(0, 120) : null;
+      const locale = b.locale ? String(b.locale).slice(0, 16) : null;
       await rows(sql`INSERT INTO focuslock_feedback (email, text, appVersion, device, locale, ip, createdAt)
-        VALUES (${email}, ${text.slice(0, MAX_TEXT)}, ${b.appVersion ? String(b.appVersion).slice(0, 32) : null},
-                ${b.device ? String(b.device).slice(0, 120) : null}, ${b.locale ? String(b.locale).slice(0, 16) : null}, ${ip}, NOW())`);
+        VALUES (${email}, ${text.slice(0, MAX_TEXT)}, ${appVersion}, ${device}, ${locale}, ${ip}, NOW())`);
+      const last = await rows(sql`SELECT MAX(id) AS id FROM focuslock_feedback WHERE ip = ${ip}`);
+      const id = last[0]?.id ?? null;
       res.json({ sent: true });
+      relayByMail({ id, email, text: text.slice(0, MAX_TEXT), appVersion, device, locale, ip });
     } catch (e: any) {
       res.status(500).json({ error: "db: " + (e?.message || String(e)) });
     }
