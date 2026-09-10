@@ -61,7 +61,7 @@ type Identity = { sub: string; email: string | null; name: string | null };
 
 /* Chiede a Google chi è. Una risposta 200 con aud giusto e email verificata è l'unico
  * modo di entrare. Ogni altro esito è un 401 con la ragione, mai un accesso parziale. */
-async function whoIs(req: Request): Promise<Identity | { error: string; status: number }> {
+export async function whoIs(req: Request): Promise<Identity | { error: string; status: number }> {
   const h = String(req.headers["authorization"] || "");
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (!m) return { error: "Missing Google ID token", status: 401 };
@@ -90,7 +90,7 @@ async function whoIs(req: Request): Promise<Identity | { error: string; status: 
   };
 }
 
-function isIdentity(x: any): x is Identity { return x && typeof x.sub === "string"; }
+export function isIdentity(x: any): x is Identity { return x && typeof x.sub === "string"; }
 
 function stripForbidden(obj: any): any {
   if (!obj || typeof obj !== "object") return obj;
@@ -132,7 +132,7 @@ function rowToMeta(r: any) {
   };
 }
 
-async function rows<T = any>(q: any): Promise<T[]> {
+export async function rows<T = any>(q: any): Promise<T[]> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
   const res: any = await db.execute(q);
