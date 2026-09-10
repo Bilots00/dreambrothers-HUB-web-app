@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0075E3">
+<title>FocusLock — Informativa sulla privacy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,700;1,800&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!--
+  THE original privacy policy. Not a copy of one.
+
+  This file is served three ways and must stay ONE text in all three: from the app bundle
+  (www/legal/), inside the app in the iframe of screen 's-ue-legal', and — once the pages are
+  published — at the public address Play requires, which is the same file uploaded to GitHub
+  Pages. The in-app duplicate that used to live inline in profile.js has been deleted for
+  exactly this reason.
+
+  No script, no shared stylesheet: it keeps working if the app shell changes underneath it,
+  and it renders identically outside the app.
+
+  Nothing below is aspirational. Every claim was checked against the code that is in this
+  build: FocusLockService.java (what the accessibility service reads and when), Rules.java
+  (what the text is compared with), AndroidManifest.xml (allowBackup, queries, permissions),
+  data_extraction_rules.xml / backup_rules.xml (what is excluded from backup) and js/ads.js
+  (AdMob, UMP, the Premium gate). If the code changes, this file changes with it.
+
+  ⚠️ The "‹ Torna a FocusLock" links that were here have been removed on purpose: inside the
+  in-app iframe they loaded the whole application into the frame, and on the published site
+  they would point at a page that does not exist there. The viewer has its own back button.
+-->
+<style>
+  :root{
+    --blue:#0075E3;--navy:#001E44;--red:#E63946;--ink:#0A1A2F;--muted:#4A5A72;
+    --faint:#8B99AC;--bg:#F4F9FF;--line:#DCE8F5;--soft:#E3F1FF;
+    --font-display:"Montserrat",system-ui,sans-serif;--font-body:"Poppins",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font-body);line-height:1.65;
+       padding:26px 20px calc(46px + env(safe-area-inset-bottom));}
+  main{max-width:680px;margin:0 auto}
+  h1{font:800 26px/1.2 var(--font-display);font-style:italic;color:var(--navy);margin-bottom:6px}
+  .upd{font:600 11.5px var(--font-body);color:var(--faint);margin-bottom:20px}
+  h2{font:700 16px var(--font-display);color:var(--navy);margin:26px 0 8px}
+  h3{font:700 13.5px var(--font-body);color:var(--navy);margin:16px 0 4px}
+  p,li{font:400 13.5px/1.7 var(--font-body);color:var(--ink)}
+  ul,ol{margin:8px 0 8px 20px}
+  li{margin-bottom:6px}
+  b{color:var(--navy)}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:#fff;
+       border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  .box{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;margin:14px 0}
+  .box.key{background:var(--soft);border-color:#BEDCFA}
+  .todo{background:#FFF7E6;border:1px solid #F0D7A0;border-radius:12px;padding:12px 14px;
+        font:600 12px/1.6 var(--font-body);color:#7A5300;margin:16px 0}
+  .todo b{color:#7A5300}
+  .todo ul{margin:6px 0 0 18px}
+  .todo li{font:600 12px/1.6 var(--font-body);color:#7A5300;margin-bottom:3px}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top;background:#fff}
+  th{background:#fff;font:700 12px var(--font-body);color:var(--navy)}
+  footer{margin-top:34px;border-top:1px solid var(--line);padding-top:16px;
+         font:400 11.5px/1.6 var(--font-body);color:var(--faint)}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<main>
+
+
+  <h1>Informativa sulla privacy</h1>
+  <div class="upd">FocusLock per Android (<code>com.dreambrothers.focuslock</code>) · versione del documento 1.2 — ultimo aggiornamento 9 settembre 2026</div>
+
+  <div class="box key">
+    <p><b>In una riga:</b> FocusLock funziona sul tuo telefono. Quello che il servizio di accessibilità legge per riconoscere un blocco viene confrontato in memoria e scartato subito dopo. L'unica cosa che può lasciare il telefono è il backup delle tue regole, e solo se lo chiedi tu accedendo con Google.</p>
+  </div>
+
+  <h2>1. Titolare del trattamento</h2>
+  <p>FocusLock è sviluppata e distribuita da <b>Andrea Bilotta</b>, che opera con il marchio
+  <b>DreamBrothers</b> (titolare del sito dream-brothers.com). Il titolare del trattamento dei
+  dati ai sensi del Regolamento (UE) 2016/679 è:</p>
+  <p><b>Andrea Bilotta</b><br>
+  Via Prima Strada 19<br>
+  20045 Lainate (MI) — Italia<br>
+  <a href="mailto:info@dreambrothers.it">info@dreambrothers.it</a></p>
+  <p>Per qualsiasi questione relativa a questa informativa, o per esercitare i diritti descritti
+  più avanti, puoi scrivere a <a href="mailto:info@dreambrothers.it">info@dreambrothers.it</a>.</p>
+
+  <h2>2. Che cosa fa l'app</h2>
+  <p>FocusLock blocca app, siti web e parole chiave che <b>tu</b> scegli, secondo regole che
+  <b>tu</b> scrivi: un orario, un limite di tempo, una lista. Per accorgersi che stai aprendo
+  qualcosa che hai deciso di bloccare, l'app deve poter sapere che cosa hai davanti in questo
+  momento. È l'unica ragione per cui usa il Servizio di accessibilità di Android.</p>
+
+  <h2>3. Il Servizio di accessibilità: che cosa legge davvero</h2>
+  <p>Quando attivi il servizio — e soltanto mentre è attivo — Android consegna a FocusLock gli
+  eventi dell'interfaccia. FocusLock ne ricava quattro informazioni, e nessun'altra:</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Dato</th><th>Quando viene letto</th><th>A cosa serve</th></tr>
+    <tr>
+      <td>Il <b>nome tecnico dell'app in primo piano</b> (per esempio
+        <code>com.instagram.android</code>)</td>
+      <td>A ogni cambio di schermata, per qualunque app.</td>
+      <td>Riconoscere che stai aprendo un'app della tua lista di blocco, e contare i minuti
+        quando hai impostato un limite di tempo.</td>
+    </tr>
+    <tr>
+      <td>L'<b>indirizzo del sito</b> mostrato nella barra degli indirizzi</td>
+      <td>Solo dentro un browser.</td>
+      <td>Riconoscere un sito o un dominio della tua lista di blocco.</td>
+    </tr>
+    <tr>
+      <td>Il <b>testo che digiti in una barra di ricerca</b> (nel browser, nell'app Google,
+        in YouTube)</td>
+      <td>Solo dentro un browser o dentro quelle app di ricerca e video.</td>
+      <td>Riconoscere una parola chiave che hai scelto di bloccare anche quando l'indirizzo
+        non la contiene.</td>
+    </tr>
+    <tr>
+      <td>Il <b>testo visibile sullo schermo</b>: i titoli dei risultati di ricerca e del video
+        in riproduzione</td>
+      <td>Solo dentro un browser, l'app Google o YouTube, e solo al cambio di schermata.</td>
+      <td>Riconoscere una parola chiave impostata con corrispondenza «Nel contenuto», e — se
+        hai attivato tu l'interruttore «Blocco dei siti porno» — il filtro per contenuti per
+        adulti. Se non hai né l'una né l'altro, quel testo non viene confrontato con nulla.</td>
+    </tr>
+  </table>
+  </div>
+
+  <h3>Come viene trattato</h3>
+  <ul>
+    <li>Il confronto avviene <b>sul dispositivo</b>, nel momento stesso in cui l'evento arriva,
+      contro le regole che hai scritto tu.</li>
+    <li>Il testo letto <b>non viene salvato</b>. Dentro FocusLock non esiste una cronologia dei
+      siti visitati, delle ricerche fatte o delle pagine lette: finito il confronto, quel testo
+      non esiste più da nessuna parte.</li>
+    <li>Non viene <b>trasmesso</b>: non parte alcuna richiesta di rete che lo contenga, né verso di noi né verso terzi.</li>
+    <li>Non viene <b>venduto</b>, ceduto, né usato per profilazione pubblicitaria. I dati letti
+      dall'accessibilità e il circuito pubblicitario sono due mondi che nel codice non si
+      toccano.</li>
+    <li>L'unica cosa che sopravvive al confronto è il <b>conteggio</b> dei blocchi — quanti oggi,
+      quanti in totale — senza il dettaglio di che cosa avevi provato ad aprire.</li>
+  </ul>
+  <p>Una precisazione onesta: Android non consente di ricevere gli eventi solo di alcune app.
+  Il servizio riceve il nome dell'app in primo piano per <b>tutte</b> le app, ed è FocusLock a
+  ignorare subito tutto ciò che non riguarda le tue regole. Il testo delle schermate, invece,
+  viene letto soltanto nei browser e nelle app di ricerca e video elencate sopra: in qualunque
+  altra app FocusLock si ferma al nome del pacchetto e non guarda oltre.</p>
+  <p>Puoi revocare il permesso in qualsiasi momento da <b>Impostazioni › Accessibilità ›
+  FocusLock</b>. Da quel momento è Android a smettere di consegnare all'app qualunque evento:
+  non è una scelta di FocusLock, è il sistema che chiude il rubinetto.</p>
+
+  <h2>4. Gli altri permessi</h2>
+
+  <h3>Accesso ai dati di utilizzo</h3>
+  <p>Serve a mostrarti il tempo di schermo reale e le app più usate. I dati arrivano dalle
+  statistiche che Android tiene già per conto proprio; FocusLock le legge, te le mostra e non le
+  invia a nessuno. Puoi revocarlo da Impostazioni › App › Accesso speciale › Accesso ai dati di
+  utilizzo.</p>
+
+  <h3>Accesso alle notifiche</h3>
+  <p>Serve a nascondere le notifiche delle app che hai bloccato mentre la protezione è attiva.
+  FocusLock guarda solo <b>quale app</b> ha inviato la notifica, per decidere se silenziarla:
+  titolo e contenuto non vengono letti, né conservati, né trasmessi.</p>
+
+  <h3>Mostra sopra le altre app</h3>
+  <p>Serve a disegnare la schermata di blocco sopra l'app che stai aprendo. Non raccoglie dati.
+  L'overlay non viene mai mostrato sopra le impostazioni di sistema o sopra le richieste di
+  permesso.</p>
+
+  <h3>Esclusione dall'ottimizzazione della batteria</h3>
+  <p>Serve a impedire che il sistema chiuda il motore di blocco dopo qualche ora. Non raccoglie
+  dati.</p>
+
+  <h3>Amministratore dispositivo (facoltativo)</h3>
+  <p>Se e solo se lo attivi tu, impedisce la disinstallazione dell'app mentre una sessione severa
+  è in corso. Non concede a FocusLock alcun altro controllo sul dispositivo e non legge nulla.
+  Puoi disattivarlo dal pulsante dedicato dentro l'app, oppure da Impostazioni › Sicurezza › App
+  di amministrazione del dispositivo.</p>
+
+  <h3>Posizione e rete Wi-Fi (solo per i programmi che le usano)</h3>
+  <p>Due tipi di programma si attivano in base a dove sei: <b>Wi-Fi</b> (quando il telefono è
+  connesso a una rete che hai scelto) e <b>Posizione</b> (quando ti trovi in un luogo che hai
+  salvato). Per leggere il nome della rete e la posizione Android richiede il permesso di
+  posizione, e per far scattare il blocco anche a schermo spento serve l'opzione «Consenti
+  sempre». Il permesso viene chiesto solo quando crei uno di questi programmi, mai
+  all'installazione. Le coordinate dei luoghi e i nomi delle reti restano nel telefono (e nel
+  backup del tuo account, se lo attivi tu); la posizione corrente viene confrontata sul
+  dispositivo e <b>non viene mai trasmessa</b> a DreamBrothers né a terzi. Se non usi questi
+  programmi, l'app non legge la posizione.</p>
+
+  <h3>Elenco delle app installate</h3>
+  <p>Per farti scegliere che cosa bloccare, e per scrivere sulla schermata di blocco il nome
+  leggibile dell'app invece del suo nome tecnico, FocusLock deve poter elencare due sole
+  categorie: le applicazioni con un'icona nel menu e i browser installati. Il permesso generale
+  <code>QUERY_ALL_PACKAGES</code> <b>non</b> viene richiesto: tutto ciò che non rientra in quelle
+  due categorie resta invisibile all'app. L'elenco non lascia il telefono.</p>
+
+  <h2>5. Che cosa viene salvato, e dove</h2>
+  <p>Tutto quello che FocusLock conserva sta nelle <b>SharedPreferences</b> dell'app, cioè
+  nell'area privata che Android le assegna sul telefono. Nient'altro, da nessuna parte:</p>
+  <div class="scroll">
+  <table>
+    <tr><th>Archivio</th><th>Che cosa contiene</th></tr>
+    <tr><td><code>focuslock_rules</code></td>
+        <td>Le tue regole: app bloccate, siti, parole chiave, programmi, giorni e orari,
+          eccezioni, opzioni di blocco.</td></tr>
+    <tr><td><code>focuslock_strict</code></td>
+        <td>Le impostazioni della Modalità severa: metodo di sblocco, scadenza della sessione e
+          il PIN, conservato <b>solo come impronta crittografica</b> (PBKDF2) e mai in
+          chiaro.</td></tr>
+    <tr><td><code>focuslock_stats</code></td>
+        <td>I contatori: quanti blocchi oggi e in totale, e i minuti d'uso già consumati sui
+          limiti di tempo che hai impostato.</td></tr>
+    <tr><td><code>focuslock_service</code></td>
+        <td>Lo stato del motore di blocco (attivo o no, ultimo avvio).</td></tr>
+    <tr><td><code>focuslock_discovery</code></td>
+        <td>Un dettaglio tecnico: l'identificativo interno della barra degli indirizzi di ogni
+          browser che hai usato, imparato una volta per non dover riesaminare la schermata a
+          ogni evento. Contiene nomi di campi dell'interfaccia, non indirizzi né testo.</td></tr>
+    <tr><td>Preferenze del browser interno dell'app</td>
+        <td>Le risposte date durante la configurazione iniziale, la scheda aperta l'ultima
+          volta, lo stato dell'abbonamento e la scelta sul consenso pubblicitario.</td></tr>
+  </table>
+  </div>
+  <p>Il <b>backup automatico di Android è disattivato</b> per tutta l'app: le regole non finiscono su Google Drive da sole. Esiste invece un backup <b>su tua richiesta</b>, descritto nella sezione «Backup sul tuo account e su file» in fondo a questa pagina.</p>
+  <p>Disinstallando FocusLock, tutto quanto sopra viene eliminato insieme all'app.</p>
+
+  <h2>6. Connessioni di rete</h2>
+  <p>Per completezza, ecco tutto ciò che l'app contatta. Non c'è altro, e in nessuno di questi
+  casi vengono trasmessi i dati letti dal servizio di accessibilità:</p>
+  <ul>
+    <li><b>Server di FocusLock</b> (ospitato su Railway): contattato <i>soltanto</i> quando accedi con Google e salvi, elenchi, ripristini o elimini un backup. Vedi la sezione «Backup sul tuo account e su file».</li>
+    <li><b>Google Fonts</b> (<code>fonts.googleapis.com</code>, <code>fonts.gstatic.com</code>):
+      l'app scarica i due caratteri tipografici con cui è scritta. Come ogni richiesta web,
+      questa espone a Google l'indirizzo IP del dispositivo. Senza rete l'app funziona lo
+      stesso, con i caratteri di sistema.</li>
+    <li><b>Google AdMob</b>: solo nella versione gratuita, e solo dopo il consenso. Vedi il
+      punto 8.</li>
+    <li><b>Google Play</b>: per l'acquisto e la verifica dell'abbonamento. Vedi il punto 9.</li>
+  </ul>
+
+  <h2>7. Account</h2>
+  <p>Puoi usare FocusLock senza alcun account. Se scegli «Continua con Google», l'app usa l'accesso Google del telefono per identificarti verso il nostro server di backup: riceviamo l'indirizzo email dell'account e un identificativo Google, mai la password. Servono a legare il backup a te e a nient'altro. Gli altri pulsanti di accesso (Facebook, Apple, email) non sono ancora collegati a un servizio: il nome che scrivi serve solo a personalizzare l'app.</p>
+
+  <h2>8. Pubblicità e identificativo pubblicitario</h2>
+  <p>La versione gratuita di FocusLock può mostrare annunci forniti da <b>Google AdMob</b>
+  (Google Ireland Limited). Quando gli annunci sono attivi, Google può trattare
+  l'<b>identificativo pubblicitario</b> del dispositivo (l'<i>Advertising ID</i> di Android) e
+  dati tecnici come il modello del telefono, la versione del sistema e il paese, per selezionare
+  gli annunci, misurarli e limitare la frequenza con cui li rivedi. Il trattamento è retto
+  dall'informativa di Google, consultabile su
+  <a href="https://policies.google.com/technologies/partner-sites">policies.google.com/technologies/partner-sites</a>.</p>
+  <p><b>Le tue scelte, tutte e tre reali:</b></p>
+  <ul>
+    <li>Nello Spazio economico europeo, in Svizzera e nel Regno Unito ti viene mostrato il
+      modulo di consenso <b>Google UMP</b> <i>prima</i> che qualunque annuncio venga caricato.
+      Se non acconsenti, gli annunci restano non personalizzati.</li>
+    <li>Puoi <b>cambiare idea in qualsiasi momento</b> dalla voce <b>«Impostazioni privacy»</b>
+      nella scheda Profilo dell'app: riapre lo stesso modulo, sempre, senza doverci scrivere.</li>
+    <li>Puoi azzerare o eliminare l'identificativo pubblicitario per tutte le app del telefono
+      da <b>Impostazioni › Google › Annunci</b> (su alcuni telefoni: Impostazioni › Privacy ›
+      Annunci).</li>
+  </ul>
+  <p>Con l'abbonamento <b>Premium</b> il componente pubblicitario non viene nemmeno
+  inizializzato: nessuna richiesta di rete verso AdMob, nessun identificativo condiviso,
+  nessun annuncio. Non è un annuncio nascosto, è codice che non parte.</p>
+  <p>I dati letti dal servizio di accessibilità <b>non</b> vengono mai usati per la pubblicità e
+  non vengono mai condivisi con il circuito pubblicitario.</p>
+
+  <h2>9. Acquisti</h2>
+  <p>Gli abbonamenti sono acquistati e gestiti da <b>Google Play</b>. FocusLock non vede né
+  riceve i dati della tua carta: la transazione avviene interamente nel sistema di pagamento di
+  Google, e all'app arriva soltanto la risposta «abbonamento attivo» o «non attivo».</p>
+
+  <h2>10. Conservazione</h2>
+  <p>I dati di configurazione elencati al punto 5 restano finché non li cancelli dall'app o non
+  disinstalli FocusLock. I dati letti dal servizio di accessibilità non vengono conservati
+  affatto: la loro durata è quella del confronto che li ha usati.</p>
+
+  <h2>11. Minori</h2>
+  <p>FocusLock è rivolta a un pubblico generale e non è pensata per bambini sotto i 13 anni. Non
+  raccogliamo consapevolmente dati di minori. FocusLock è uno strumento di autodisciplina: non è
+  un'app di controllo parentale e non consente di monitorare un'altra persona.</p>
+
+  <h2>12. I tuoi diritti</h2>
+  <p>Poiché i dati non lasciano il dispositivo e non esiste un archivio dalla nostra parte, il
+  controllo è direttamente tuo e immediato: puoi consultare, modificare ed eliminare tutto
+  dall'app stessa, esportare le tue liste, e revocare ogni permesso dalle impostazioni di
+  Android. Restano fermi i diritti previsti dagli articoli 15-22 del GDPR — accesso, rettifica,
+  cancellazione, limitazione, portabilità, opposizione — esercitabili scrivendo all'indirizzo
+  email indicato al punto 1. Hai inoltre diritto di proporre reclamo al Garante per la
+  protezione dei dati personali (<a href="https://www.garanteprivacy.it">garanteprivacy.it</a>).</p>
+
+  <h2>13. Modifiche a questa informativa</h2>
+  <p>Se questa informativa cambierà in modo sostanziale te lo diremo dentro l'app, e per il
+  servizio di accessibilità ti sarà richiesto di nuovo un consenso esplicito. La data in cima
+  alla pagina è sempre quella dell'ultima versione.</p>
+
+  <h2>14. Contatti</h2>
+  <p>Per domande, richieste di cancellazione o esercizio dei tuoi diritti:
+  <a href="mailto:info@dreambrothers.it">info@dreambrothers.it</a>. È lo stesso indirizzo pubblicato nella scheda
+  dell'app su Google Play.</p>
+
+  <h2>Backup sul tuo account e su file</h2>
+<p>Di norma i tuoi dati restano sul telefono. Puoi però scegliere tu di salvarne una copia:</p>
+<ul>
+  <li><b>Su file</b>: l'app genera un file <code>.json</code> con programmi, app, siti e parole
+  chiave, e te lo consegna tramite il menù di condivisione di Android. Dove finisca lo decidi tu.</li>
+  <li><b>Sul tuo account</b>: se accedi con Google, l'app pu&ograve; salvare lo stesso file sul <b>server di FocusLock</b>, legato al tuo account Google (identificato tramite un token firmato da Google, mai con una password). &Egrave; ci&ograve; che ti permette di ritrovare programmi e blocchi su un altro telefono o dopo una reinstallazione, semplicemente accedendo. Sul server restano: le regole (programmi, app, siti, parole chiave), il nome del modello del telefono, la versione dell'app e l'email dell'account. <b>Non</b> restano: la Modalit&agrave; severa, il suo PIN, le statistiche d'uso, la cronologia. Puoi eliminare il backup dalla schermata Backup in qualsiasi momento, e scollegare l'account.</li>
+</ul>
+<p>Entrambe le operazioni avvengono <b>solo su tua azione</b>: l'app non carica nulla da sola.
+Il backup non contiene la configurazione della Modalità severa né il suo PIN. Puoi eliminare il backup in qualsiasi momento dalla stessa schermata, o scollegare l'account.</p>
+<p>Il trasferimento verso il server avviene cifrato (HTTPS). Il server &egrave; gestito da DreamBrothers ed &egrave; ospitato su Railway.</p>
+
+
+
+
+</main>
+</body>
+</html>

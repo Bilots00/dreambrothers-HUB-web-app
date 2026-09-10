@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0075E3">
+<title>FocusLock — Condizioni d'uso</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,700;1,800&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!--
+  Static terms page, twin of privacy.html: same bundle, same no-dependency rule, opened either
+  directly or inside the SPA via openLegal('termini').
+
+  Two sections here exist because of the product, not because of boilerplate: the one on the
+  strict mode (the user must be told BEFORE buying that they may be unable to turn the app off
+  for a while) and the one on the absence of any guarantee that a block cannot be circumvented.
+-->
+<style>
+  :root{
+    --blue:#0075E3;--navy:#001E44;--red:#E63946;--ink:#0A1A2F;--muted:#4A5A72;
+    --faint:#8B99AC;--bg:#F4F9FF;--line:#DCE8F5;--soft:#E3F1FF;
+    --font-display:"Montserrat",system-ui,sans-serif;--font-body:"Poppins",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font-body);line-height:1.65;
+       padding:26px 20px calc(46px + env(safe-area-inset-bottom));}
+  main{max-width:680px;margin:0 auto}
+  .back{display:inline-block;font:700 12px var(--font-body);color:var(--blue);text-decoration:none;margin-bottom:18px}
+  h1{font:800 26px/1.2 var(--font-display);font-style:italic;color:var(--navy);margin-bottom:6px}
+  .upd{font:600 11.5px var(--font-body);color:var(--faint);margin-bottom:20px}
+  h2{font:700 16px var(--font-display);color:var(--navy);margin:26px 0 8px}
+  p,li{font:400 13.5px/1.7 var(--font-body);color:var(--ink)}
+  ul,ol{margin:8px 0 8px 20px}
+  li{margin-bottom:6px}
+  b{color:var(--navy)}
+  .box{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;margin:14px 0}
+  .box.warn{background:#FDECEC;border-color:#F5C2C6;color:#8C1D24}
+  .box.warn b{color:#8C1D24}
+  .todo{background:#FFF7E6;border:1px solid #F0D7A0;border-radius:12px;padding:12px 14px;
+        font:600 12px/1.6 var(--font-body);color:#7A5300;margin:16px 0}
+  footer{margin-top:34px;border-top:1px solid var(--line);padding-top:16px;
+         font:400 11.5px/1.6 var(--font-body);color:var(--faint)}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Condizioni d'uso</h1>
+  <div class="upd">FocusLock per Android · versione del documento 1.1 — 9 settembre 2026</div>
+
+  <h2>1. Chi siamo e cosa accetti</h2>
+  <p>FocusLock («l'app») è sviluppata da DreamBrothers («noi»). Installando o usando l'app accetti
+  queste condizioni. Se non le accetti, non usare l'app.</p>
+
+  <h2>2. A cosa serve l'app</h2>
+  <p>FocusLock è uno strumento di <b>autodisciplina digitale</b>: blocca app, siti e parole chiave
+  che scegli tu, secondo regole che imposti tu. Non è un dispositivo medico, non è una terapia e
+  non sostituisce il parere di un professionista. Se pensi di avere una dipendenza — da gioco
+  d'azzardo, contenuti per adulti, sostanze o altro — parlane con qualcuno che possa aiutarti
+  davvero: un'app è un supporto, non una cura.</p>
+
+  <h2>3. Nessuna garanzia di blocco assoluto</h2>
+  <div class="box warn">
+    <p><b>Va detto chiaramente.</b> Nessuna app di questo tipo può garantire che un blocco sia
+    impossibile da aggirare. Android consente sempre all'utente di revocare i permessi, disattivare
+    i servizi e disinstallare le applicazioni; alcuni produttori chiudono le app in background per
+    risparmiare batteria; alcune app e alcuni browser possono cambiare a ogni aggiornamento.
+    FocusLock rende il momento di debolezza <b>più lento e più difficile</b> — non lo rende
+    impossibile. Fornire l'app «così com'è», senza garanzia di risultato, fa parte del patto.</p>
+  </div>
+
+  <h2>4. Uso corretto</h2>
+  <p>Ti impegni a usare FocusLock solo sui dispositivi che ti appartengono o che sei autorizzato a
+  configurare, e <b>solo per te stesso</b>. È vietato usare l'app per sorvegliare, limitare o
+  controllare un'altra persona a sua insaputa. È vietato tentare di decompilare, modificare o
+  redistribuire l'app al di fuori di quanto consentito dalla legge.</p>
+
+  <h2>5. Permessi di sistema</h2>
+  <p>Per funzionare, l'app chiede il Servizio di accessibilità di Android e, facoltativamente,
+  altri permessi speciali. Ti vengono spiegati prima di essere richiesti, uno per uno, e sei
+  sempre tu a concederli dalle impostazioni del sistema. Puoi revocarli in qualsiasi momento: il
+  blocco smetterà di funzionare, ed è una tua scelta legittima. Il dettaglio di quali dati vengono
+  letti è nell'<a href="/pages/focuslock-privacy">Informativa sulla privacy</a>.</p>
+
+  <h2>6. Modalità severa: leggi prima di attivarla</h2>
+  <div class="box warn">
+    <p><b>La Modalità severa è progettata per non lasciarti uscire subito.</b> A seconda del metodo
+    di sblocco che scegli, potresti dover aspettare la scadenza di un timer, collegare il
+    caricabatterie, attendere un periodo di pausa o inserire un PIN che hai impostato tu. Se
+    dimentichi il PIN o cambi idea, potresti non riuscire a disattivare i blocchi <b>finché la
+    condizione che hai scelto non si verifica</b>. È esattamente ciò che la funzione promette di
+    fare, ed è per questo che ti viene mostrato un riepilogo prima di attivarla.</p>
+    <p>Restano comunque sempre disponibili le vie di uscita che Android garantisce: revocare il
+    servizio di accessibilità, disattivare l'amministratore dispositivo dalle impostazioni di
+    sicurezza, e disinstallare l'app.</p>
+  </div>
+  <p>L'attivazione dell'<b>amministratore dispositivo</b> (protezione dalla disinstallazione) è
+  sempre facoltativa, mai automatica, e all'interno dell'app trovi un pulsante dedicato per
+  disattivarla che funziona in ogni momento e a qualunque livello di severità.</p>
+
+  <h2>7. Abbonamenti, rinnovo e recesso</h2>
+  <ul>
+    <li>Le funzioni Premium sono offerte tramite <b>abbonamento</b>, acquistato e gestito da
+      Google Play con il metodo di pagamento associato al tuo account Google.</li>
+    <li>Se è prevista una <b>prova gratuita</b>, l'addebito parte al termine del periodo di prova,
+      salvo disdetta almeno 24 ore prima della scadenza.</li>
+    <li>L'abbonamento si <b>rinnova automaticamente</b> alla fine di ogni periodo, allo stesso
+      prezzo indicato al momento dell'acquisto, salvo disdetta almeno 24 ore prima della scadenza
+      del periodo in corso.</li>
+    <li>Puoi disdire in qualsiasi momento da <b>Google Play › Abbonamenti</b>. La disdetta ha
+      effetto alla fine del periodo già pagato: fino ad allora continui ad avere le funzioni
+      Premium.</li>
+    <li>Il prezzo esatto, la durata e le condizioni dell'eventuale sconto ti vengono mostrati
+      nella schermata di acquisto <b>prima</b> della conferma, e sono quelli che fanno fede.</li>
+    <li>I rimborsi seguono le regole di Google Play. Per gli acquisti effettuati nell'Unione
+      Europea, il diritto di recesso si esercita secondo le condizioni indicate da Google al
+      momento dell'acquisto.</li>
+  </ul>
+
+  <h2>8. Pubblicità</h2>
+  <p>La versione gratuita può mostrare annunci. La versione Premium non ne mostra alcuno e non
+  carica nemmeno il relativo componente. Vedi l'<a href="/pages/focuslock-privacy">Informativa sulla
+  privacy</a> per i dettagli sui dati trattati dal circuito pubblicitario.</p>
+
+  <h2>8-bis. Carte regalo</h2>
+  <p>Le carte regalo FocusLock Premium acquistate su dream-brothers.com danno diritto a un codice, inviato via email, che attiva il Premium sull'account in cui viene inserito, per la durata indicata al momento dell'acquisto. Un codice vale per un solo account e non è rimborsabile una volta attivato.</p>
+
+  <h2>9. Contenuti tuoi</h2>
+  <p>Le liste, le parole chiave e i messaggi personalizzati che scrivi restano tuoi e restano sul
+  tuo dispositivo. Non ne acquisiamo alcun diritto.</p>
+
+  <h2>10. Limitazione di responsabilità</h2>
+  <p>Nei limiti consentiti dalla legge, non rispondiamo di danni indiretti derivanti dall'uso o
+  dal mancato funzionamento dell'app — inclusi, a titolo di esempio, un blocco che non è scattato,
+  una notifica silenziata che avresti voluto vedere, o un blocco scattato in un momento
+  inopportuno. Nulla in queste condizioni limita i diritti inderogabili che la legge riconosce ai
+  consumatori.</p>
+
+  <h2>11. Sospensione e modifiche</h2>
+  <p>Possiamo aggiornare l'app e queste condizioni. Le modifiche sostanziali ti verranno
+  comunicate dentro l'app. Continuare a usarla dopo l'avviso vale come accettazione.</p>
+
+  <h2>12. Legge applicabile</h2>
+  <p>Si applica la legge italiana. Per i consumatori resta competente il foro del luogo di
+  residenza o domicilio.</p>
+
+  <h2>13. Contatti</h2>
+  <p>FocusLock è distribuita da <b>Andrea Bilotta</b> (marchio DreamBrothers), Via Prima Strada 19,
+  20045 Lainate (MI), Italia.</p>
+  <p>Assistenza: <a href="mailto:info@dreambrothers.it">info@dreambrothers.it</a>, lo stesso indirizzo pubblicato nella scheda dell'app su Google Play.</p>
+
+  
+
+</main>
+</body>
+</html>
