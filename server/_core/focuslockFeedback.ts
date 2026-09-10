@@ -65,7 +65,7 @@ export function registerFocusLockFeedbackRoutes(app: Express) {
     if (tooMany(ip)) { res.status(429).json({ error: "Troppi messaggi: riprova fra qualche minuto." }); return; }
     const b = req.body ?? {};
     const text = String(b.text || "").trim();
-    if (text.length < 5) { res.status(400).json({ error: "Scrivi almeno qualche parola." }); return; }
+    if (text.length < 3) { res.status(400).json({ error: "Scrivi almeno qualche parola." }); return; }
     const email = b.email ? String(b.email).trim().slice(0, 191) : null;
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { res.status(400).json({ error: "Email non valida." }); return; }
     try {
