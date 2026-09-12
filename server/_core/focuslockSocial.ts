@@ -36,7 +36,10 @@ function ensureTables(): Promise<void> {
         INDEX idx_xp (xp)
       )`);
       // columns added after the first release: MySQL has no IF NOT EXISTS for columns
-      for (const col of ["strictOn TINYINT NOT NULL DEFAULT 0", "bestFocusH INT NOT NULL DEFAULT 0", "bestStreak INT NOT NULL DEFAULT 0", "motto VARCHAR(191) NOT NULL DEFAULT ''"]) {
+      for (const col of ["strictOn TINYINT NOT NULL DEFAULT 0", "bestFocusH INT NOT NULL DEFAULT 0", "bestStreak INT NOT NULL DEFAULT 0", "motto VARCHAR(191) NOT NULL DEFAULT ''",
+        // l'obiettivo scelto nell'oracolo: e' la "categoria" della classifica, come i pesi
+        // nelle arti marziali — un consiglio vale se viene da chi sta correndo la tua stessa gara
+        "goal VARCHAR(24) NOT NULL DEFAULT ''", "decisions INT NOT NULL DEFAULT 0", "profile VARCHAR(16) NOT NULL DEFAULT ''"]) {
         try { await db.execute(sql.raw("ALTER TABLE focuslock_players ADD COLUMN " + col)); } catch { /* already there */ }
       }
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_friends (
@@ -68,7 +71,8 @@ function score7Of(p: { ffMin7: number; blocks7: number; streak: number }): numbe
 }
 function pub(r: any, me: string) {
   return { device: r.device, name: r.name, level: Number(r.level || 1), score7: Number(r.score7 || 0), xp: Number(r.xp || 0), streak: Number(r.streak || 0),
-    bestFocusH: Number(r.bestFocusH || 0), bestStreak: Number(r.bestStreak || 0), motto: String(r.motto || ""), me: r.device === me };
+    bestFocusH: Number(r.bestFocusH || 0), bestStreak: Number(r.bestStreak || 0), motto: String(r.motto || ""),
+    goal: String(r.goal || ""), decisions: Number(r.decisions || 0), profile: String(r.profile || ""), me: r.device === me };
 }
 
 /* How many phones have the app, and how many have strict mode on right now (heard from in
@@ -97,7 +101,10 @@ export function registerFocusLockSocialRoutes(app: Express) {
     if (!device) { res.status(400).json({ error: "device obbligatorio" }); return; }
     const p = { level: n(b.level, 10) || 1, xp: n(b.xp), streak: n(b.streak, 5000), ffMin7: n(b.ffMin7, 10080), blocks7: n(b.blocks7, 100000),
       strictOn: b.strictOn ? 1 : 0, bestFocusH: n(b.bestFocusH, 24), bestStreak: n(b.bestStreak, 5000),
-      motto: String(b.motto || "").trim().slice(0, 160) };
+      motto: String(b.motto || "").trim().slice(0, 160),
+      goal: String(b.goal || "").trim().slice(0, 24),
+      decisions: Math.max(0, Math.min(999999, Number(b.decisions) || 0)),
+      profile: String(b.profile || "").trim().slice(0, 16) };
     const score7 = score7Of(p);
     try {
       await ensureTables();
@@ -110,11 +117,11 @@ export function registerFocusLockSocialRoutes(app: Express) {
           if (!clash.length) c = cand;
         }
         if (!c) throw new Error("codice non generabile");
-        await rows(sql`INSERT INTO focuslock_players (device, name, code, level, xp, streak, ffMin7, blocks7, score7, strictOn, bestFocusH, bestStreak, motto, createdAt, updatedAt)
-          VALUES (${device}, ${name}, ${c}, ${p.level}, ${p.xp}, ${p.streak}, ${p.ffMin7}, ${p.blocks7}, ${score7}, ${p.strictOn}, ${p.bestFocusH}, ${p.bestStreak}, ${p.motto}, NOW(), NOW())`);
+        await rows(sql`INSERT INTO focuslock_players (device, name, code, level, xp, streak, ffMin7, blocks7, score7, strictOn, bestFocusH, bestStreak, motto, goal, decisions, profile, createdAt, updatedAt)
+          VALUES (${device}, ${name}, ${c}, ${p.level}, ${p.xp}, ${p.streak}, ${p.ffMin7}, ${p.blocks7}, ${score7}, ${p.strictOn}, ${p.bestFocusH}, ${p.bestStreak}, ${p.motto}, ${p.goal}, ${p.decisions}, ${p.profile}, NOW(), NOW())`);
       } else {
         await rows(sql`UPDATE focuslock_players SET name = ${name}, level = ${p.level}, xp = ${p.xp}, streak = ${p.streak}, ffMin7 = ${p.ffMin7}, blocks7 = ${p.blocks7}, score7 = ${score7},
-          strictOn = ${p.strictOn}, bestFocusH = ${p.bestFocusH}, bestStreak = ${p.bestStreak}, motto = ${p.motto}, updatedAt = NOW() WHERE device = ${device}`);
+          strictOn = ${p.strictOn}, bestFocusH = ${p.bestFocusH}, bestStreak = ${p.bestStreak}, motto = ${p.motto}, goal = ${p.goal}, decisions = ${p.decisions}, profile = ${p.profile}, updatedAt = NOW() WHERE device = ${device}`);
       }
       const above7 = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND score7 > ${score7}`);
       const aboveAll = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND xp > ${p.xp}`);
@@ -131,13 +138,31 @@ export function registerFocusLockSocialRoutes(app: Express) {
     const device = String(req.query.device || "").slice(0, 64);
     const scope = req.query.scope === "friends" ? "friends" : "global";
     const period = req.query.period === "all" ? "all" : "week";
+    // "goal" chiede la classifica di chi corre la stessa gara. Se e' quasi deserta non serve a
+    // niente confrontarsi, quindi sotto una certa soglia si ricade sulla classifica di tutti e
+    // lo si dice, invece di mostrare un podio di due persone.
+    const goal = String(req.query.goal || "").trim().slice(0, 24);
+    const MIN_PEERS = 5;
     try {
       await ensureTables();
       let list: any[];
+      let fellBack = false;
       if (scope === "friends") {
         list = period === "all"
           ? await rows(sql`SELECT p.* FROM focuslock_players p WHERE p.device = ${device} OR p.device IN (SELECT friend FROM focuslock_friends WHERE device = ${device}) ORDER BY p.xp DESC, p.updatedAt DESC LIMIT ${BOARD_MAX}`)
           : await rows(sql`SELECT p.* FROM focuslock_players p WHERE p.device = ${device} OR p.device IN (SELECT friend FROM focuslock_friends WHERE device = ${device}) ORDER BY p.score7 DESC, p.updatedAt DESC LIMIT ${BOARD_MAX}`);
+      } else if (goal) {
+        const n = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND goal = ${goal}`);
+        if (Number(n[0]?.k || 0) >= MIN_PEERS) {
+          list = period === "all"
+            ? await rows(sql`SELECT * FROM focuslock_players WHERE name <> '' AND goal = ${goal} ORDER BY xp DESC, updatedAt DESC LIMIT ${BOARD_MAX}`)
+            : await rows(sql`SELECT * FROM focuslock_players WHERE name <> '' AND goal = ${goal} ORDER BY score7 DESC, updatedAt DESC LIMIT ${BOARD_MAX}`);
+        } else {
+          list = period === "all"
+            ? await rows(sql`SELECT * FROM focuslock_players WHERE name <> '' ORDER BY xp DESC, updatedAt DESC LIMIT ${BOARD_MAX}`)
+            : await rows(sql`SELECT * FROM focuslock_players WHERE name <> '' ORDER BY score7 DESC, updatedAt DESC LIMIT ${BOARD_MAX}`);
+          fellBack = true;
+        }
       } else {
         list = period === "all"
           ? await rows(sql`SELECT * FROM focuslock_players WHERE name <> '' ORDER BY xp DESC, updatedAt DESC LIMIT ${BOARD_MAX}`)
@@ -153,14 +178,18 @@ export function registerFocusLockSocialRoutes(app: Express) {
           const val = Number(m[key] || 0);
           const above = scope === "friends"
             ? await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE ${sql.raw(key)} > ${val} AND device IN (SELECT friend FROM focuslock_friends WHERE device = ${device})`)
-            : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND ${sql.raw(key)} > ${val}`);
+            : (goal && !fellBack
+                ? await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND goal = ${goal} AND ${sql.raw(key)} > ${val}`)
+                : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND ${sql.raw(key)} > ${val}`));
           me = Object.assign(pub(m, device), { rank: Number(above[0]?.k || 0) + 1, code: m.code });
         }
       }
       const total = scope === "friends"
         ? await rows(sql`SELECT COUNT(*) + 1 AS k FROM focuslock_friends WHERE device = ${device}`)
-        : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> ''`);
-      res.json({ scope, period, rows: out, me, total: Number(total[0]?.k || 0) });
+        : (goal && !fellBack
+            ? await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND goal = ${goal}`)
+            : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> ''`));
+      res.json({ scope, period, goal: goal && !fellBack ? goal : "", fellBack, rows: out, me, total: Number(total[0]?.k || 0) });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "classifica non disponibile" });
     }
