@@ -36,7 +36,7 @@ function ensureTables(): Promise<void> {
         INDEX idx_xp (xp)
       )`);
       // columns added after the first release: MySQL has no IF NOT EXISTS for columns
-      for (const col of ["strictOn TINYINT NOT NULL DEFAULT 0", "bestFocusH INT NOT NULL DEFAULT 0", "bestStreak INT NOT NULL DEFAULT 0"]) {
+      for (const col of ["strictOn TINYINT NOT NULL DEFAULT 0", "bestFocusH INT NOT NULL DEFAULT 0", "bestStreak INT NOT NULL DEFAULT 0", "motto VARCHAR(191) NOT NULL DEFAULT ''"]) {
         try { await db.execute(sql.raw("ALTER TABLE focuslock_players ADD COLUMN " + col)); } catch { /* already there */ }
       }
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_friends (
@@ -68,7 +68,7 @@ function score7Of(p: { ffMin7: number; blocks7: number; streak: number }): numbe
 }
 function pub(r: any, me: string) {
   return { device: r.device, name: r.name, level: Number(r.level || 1), score7: Number(r.score7 || 0), xp: Number(r.xp || 0), streak: Number(r.streak || 0),
-    bestFocusH: Number(r.bestFocusH || 0), bestStreak: Number(r.bestStreak || 0), me: r.device === me };
+    bestFocusH: Number(r.bestFocusH || 0), bestStreak: Number(r.bestStreak || 0), motto: String(r.motto || ""), me: r.device === me };
 }
 
 /* How many phones have the app, and how many have strict mode on right now (heard from in
@@ -96,7 +96,8 @@ export function registerFocusLockSocialRoutes(app: Express) {
     const name = String(b.name || "").trim().slice(0, NAME_MAX);
     if (!device) { res.status(400).json({ error: "device obbligatorio" }); return; }
     const p = { level: n(b.level, 10) || 1, xp: n(b.xp), streak: n(b.streak, 5000), ffMin7: n(b.ffMin7, 10080), blocks7: n(b.blocks7, 100000),
-      strictOn: b.strictOn ? 1 : 0, bestFocusH: n(b.bestFocusH, 24), bestStreak: n(b.bestStreak, 5000) };
+      strictOn: b.strictOn ? 1 : 0, bestFocusH: n(b.bestFocusH, 24), bestStreak: n(b.bestStreak, 5000),
+      motto: String(b.motto || "").trim().slice(0, 160) };
     const score7 = score7Of(p);
     try {
       await ensureTables();
@@ -109,11 +110,11 @@ export function registerFocusLockSocialRoutes(app: Express) {
           if (!clash.length) c = cand;
         }
         if (!c) throw new Error("codice non generabile");
-        await rows(sql`INSERT INTO focuslock_players (device, name, code, level, xp, streak, ffMin7, blocks7, score7, strictOn, bestFocusH, bestStreak, createdAt, updatedAt)
-          VALUES (${device}, ${name}, ${c}, ${p.level}, ${p.xp}, ${p.streak}, ${p.ffMin7}, ${p.blocks7}, ${score7}, ${p.strictOn}, ${p.bestFocusH}, ${p.bestStreak}, NOW(), NOW())`);
+        await rows(sql`INSERT INTO focuslock_players (device, name, code, level, xp, streak, ffMin7, blocks7, score7, strictOn, bestFocusH, bestStreak, motto, createdAt, updatedAt)
+          VALUES (${device}, ${name}, ${c}, ${p.level}, ${p.xp}, ${p.streak}, ${p.ffMin7}, ${p.blocks7}, ${score7}, ${p.strictOn}, ${p.bestFocusH}, ${p.bestStreak}, ${p.motto}, NOW(), NOW())`);
       } else {
         await rows(sql`UPDATE focuslock_players SET name = ${name}, level = ${p.level}, xp = ${p.xp}, streak = ${p.streak}, ffMin7 = ${p.ffMin7}, blocks7 = ${p.blocks7}, score7 = ${score7},
-          strictOn = ${p.strictOn}, bestFocusH = ${p.bestFocusH}, bestStreak = ${p.bestStreak}, updatedAt = NOW() WHERE device = ${device}`);
+          strictOn = ${p.strictOn}, bestFocusH = ${p.bestFocusH}, bestStreak = ${p.bestStreak}, motto = ${p.motto}, updatedAt = NOW() WHERE device = ${device}`);
       }
       const above7 = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND score7 > ${score7}`);
       const aboveAll = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND xp > ${p.xp}`);
