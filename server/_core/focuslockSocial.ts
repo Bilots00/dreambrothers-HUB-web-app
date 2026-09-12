@@ -35,6 +35,10 @@ function ensureTables(): Promise<void> {
         INDEX idx_score7 (score7),
         INDEX idx_xp (xp)
       )`);
+      // columns added after the first release: MySQL has no IF NOT EXISTS for columns
+      for (const col of ["strictOn TINYINT NOT NULL DEFAULT 0", "bestFocusH INT NOT NULL DEFAULT 0", "bestStreak INT NOT NULL DEFAULT 0"]) {
+        try { await db.execute(sql.raw("ALTER TABLE focuslock_players ADD COLUMN " + col)); } catch { /* already there */ }
+      }
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_friends (
         device VARCHAR(64) NOT NULL,
         friend VARCHAR(64) NOT NULL,
@@ -63,17 +67,36 @@ function score7Of(p: { ffMin7: number; blocks7: number; streak: number }): numbe
   return p.ffMin7 * 2 + p.blocks7 + p.streak * 5;
 }
 function pub(r: any, me: string) {
-  return { device: r.device, name: r.name, level: Number(r.level || 1), score7: Number(r.score7 || 0), xp: Number(r.xp || 0), streak: Number(r.streak || 0), me: r.device === me };
+  return { device: r.device, name: r.name, level: Number(r.level || 1), score7: Number(r.score7 || 0), xp: Number(r.xp || 0), streak: Number(r.streak || 0),
+    bestFocusH: Number(r.bestFocusH || 0), bestStreak: Number(r.bestStreak || 0), me: r.device === me };
+}
+
+/* How many phones have the app, and how many have strict mode on right now (heard from in
+   the last twenty minutes). The number the Severa tab shows, like a meditation app's "people
+   meditating now". */
+async function liveCounts() {
+  const total = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players`);
+  const strictNow = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE strictOn = 1 AND updatedAt > (NOW() - INTERVAL 20 MINUTE)`);
+  const strictAny = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE strictOn = 1`);
+  return { installs: Number(total[0]?.k || 0), strictNow: Number(strictNow[0]?.k || 0), strictOn: Number(strictAny[0]?.k || 0) };
 }
 
 export function registerFocusLockSocialRoutes(app: Express) {
+  app.get("/api/focuslock/social/live", async (_req: Request, res: Response) => {
+    try { await ensureTables(); res.json(await liveCounts()); }
+    catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
+  });
+
   /* The player's numbers, in; their code and standing, out. */
   app.post("/api/focuslock/social/sync", async (req: Request, res: Response) => {
     const b = req.body || {};
     const device = String(b.device || "").slice(0, 64);
+    // A name is what puts a player on the board; without one the phone still counts as an
+    // install and, when its strict mode is on, as one of the people "in it right now".
     const name = String(b.name || "").trim().slice(0, NAME_MAX);
-    if (!device || !name) { res.status(400).json({ error: "device e nome obbligatori" }); return; }
-    const p = { level: n(b.level, 10) || 1, xp: n(b.xp), streak: n(b.streak, 5000), ffMin7: n(b.ffMin7, 10080), blocks7: n(b.blocks7, 100000) };
+    if (!device) { res.status(400).json({ error: "device obbligatorio" }); return; }
+    const p = { level: n(b.level, 10) || 1, xp: n(b.xp), streak: n(b.streak, 5000), ffMin7: n(b.ffMin7, 10080), blocks7: n(b.blocks7, 100000),
+      strictOn: b.strictOn ? 1 : 0, bestFocusH: n(b.bestFocusH, 24), bestStreak: n(b.bestStreak, 5000) };
     const score7 = score7Of(p);
     try {
       await ensureTables();
@@ -86,15 +109,17 @@ export function registerFocusLockSocialRoutes(app: Express) {
           if (!clash.length) c = cand;
         }
         if (!c) throw new Error("codice non generabile");
-        await rows(sql`INSERT INTO focuslock_players (device, name, code, level, xp, streak, ffMin7, blocks7, score7, createdAt, updatedAt)
-          VALUES (${device}, ${name}, ${c}, ${p.level}, ${p.xp}, ${p.streak}, ${p.ffMin7}, ${p.blocks7}, ${score7}, NOW(), NOW())`);
+        await rows(sql`INSERT INTO focuslock_players (device, name, code, level, xp, streak, ffMin7, blocks7, score7, strictOn, bestFocusH, bestStreak, createdAt, updatedAt)
+          VALUES (${device}, ${name}, ${c}, ${p.level}, ${p.xp}, ${p.streak}, ${p.ffMin7}, ${p.blocks7}, ${score7}, ${p.strictOn}, ${p.bestFocusH}, ${p.bestStreak}, NOW(), NOW())`);
       } else {
-        await rows(sql`UPDATE focuslock_players SET name = ${name}, level = ${p.level}, xp = ${p.xp}, streak = ${p.streak}, ffMin7 = ${p.ffMin7}, blocks7 = ${p.blocks7}, score7 = ${score7}, updatedAt = NOW() WHERE device = ${device}`);
+        await rows(sql`UPDATE focuslock_players SET name = ${name}, level = ${p.level}, xp = ${p.xp}, streak = ${p.streak}, ffMin7 = ${p.ffMin7}, blocks7 = ${p.blocks7}, score7 = ${score7},
+          strictOn = ${p.strictOn}, bestFocusH = ${p.bestFocusH}, bestStreak = ${p.bestStreak}, updatedAt = NOW() WHERE device = ${device}`);
       }
-      const above7 = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE score7 > ${score7}`);
-      const aboveAll = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE xp > ${p.xp}`);
-      const total = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players`);
-      res.json({ ok: true, code: c, score7, rank7: Number(above7[0]?.k || 0) + 1, rankAll: Number(aboveAll[0]?.k || 0) + 1, players: Number(total[0]?.k || 0) });
+      const above7 = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND score7 > ${score7}`);
+      const aboveAll = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND xp > ${p.xp}`);
+      const total = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> ''`);
+      const live = await liveCounts();
+      res.json({ ok: true, code: c, score7, rank7: Number(above7[0]?.k || 0) + 1, rankAll: Number(aboveAll[0]?.k || 0) + 1, players: Number(total[0]?.k || 0), live });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "sync fallito" });
     }
@@ -114,8 +139,8 @@ export function registerFocusLockSocialRoutes(app: Express) {
           : await rows(sql`SELECT p.* FROM focuslock_players p WHERE p.device = ${device} OR p.device IN (SELECT friend FROM focuslock_friends WHERE device = ${device}) ORDER BY p.score7 DESC, p.updatedAt DESC LIMIT ${BOARD_MAX}`);
       } else {
         list = period === "all"
-          ? await rows(sql`SELECT * FROM focuslock_players ORDER BY xp DESC, updatedAt DESC LIMIT ${BOARD_MAX}`)
-          : await rows(sql`SELECT * FROM focuslock_players ORDER BY score7 DESC, updatedAt DESC LIMIT ${BOARD_MAX}`);
+          ? await rows(sql`SELECT * FROM focuslock_players WHERE name <> '' ORDER BY xp DESC, updatedAt DESC LIMIT ${BOARD_MAX}`)
+          : await rows(sql`SELECT * FROM focuslock_players WHERE name <> '' ORDER BY score7 DESC, updatedAt DESC LIMIT ${BOARD_MAX}`);
       }
       const out = list.map((r) => pub(r, device));
       let me: any = null;
@@ -127,13 +152,13 @@ export function registerFocusLockSocialRoutes(app: Express) {
           const val = Number(m[key] || 0);
           const above = scope === "friends"
             ? await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE ${sql.raw(key)} > ${val} AND device IN (SELECT friend FROM focuslock_friends WHERE device = ${device})`)
-            : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE ${sql.raw(key)} > ${val}`);
+            : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND ${sql.raw(key)} > ${val}`);
           me = Object.assign(pub(m, device), { rank: Number(above[0]?.k || 0) + 1, code: m.code });
         }
       }
       const total = scope === "friends"
         ? await rows(sql`SELECT COUNT(*) + 1 AS k FROM focuslock_friends WHERE device = ${device}`)
-        : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players`);
+        : await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> ''`);
       res.json({ scope, period, rows: out, me, total: Number(total[0]?.k || 0) });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "classifica non disponibile" });
