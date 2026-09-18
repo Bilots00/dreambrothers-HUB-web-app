@@ -10,6 +10,8 @@ import {
   getCsConversationsForUser,
   deleteCsConversation,
 } from "../db";
+import { classifica, estraiDalModuloShopify, testoNotifica } from "../careClienti";
+import { avvisaSuTelegram } from "../shopifyChargebacks";
 
 // The local Claude agent is considered "online" if it pinged the heartbeat within this window.
 const LOCAL_AGENT_ONLINE_MS = 120_000;
@@ -49,21 +51,51 @@ export function registerCareRoutes(app: Express) {
         res.status(400).json({ error: "customerHandle and text are required" });
         return;
       }
+      const canale = typeof channel === "string" && channel ? channel : "whatsapp";
+
+      // Le mail del modulo contatti arrivano DA mailer@shopify.com: senza questa
+      // riattribuzione ogni cliente che scrive dal sito finisce nella stessa
+      // conversazione intestata "Shopify", indistinguibile dalle notifiche di
+      // sistema. E' il motivo per cui il reso di Naomi (#1263) sarebbe stato
+      // invisibile anche se fosse entrato.
+      const modulo = estraiDalModuloShopify(String(text));
+      const nome = modulo?.nome ?? customerName ?? null;
+      const handle = modulo ? modulo.email : String(customerHandle);
+      const corpo = modulo
+        ? `${modulo.categoria ? `[${modulo.categoria}] ` : ""}${modulo.corpo}`
+        : String(text);
+
       const conversationId = await upsertCsConversation({
         userId: OWNER_USER_ID,
-        channel: typeof channel === "string" && channel ? channel : "whatsapp",
-        customerName: customerName ?? null,
-        customerHandle: String(customerHandle),
+        channel: canale,
+        customerName: nome,
+        customerHandle: handle,
         channelUrl: channelUrl ?? null,
       });
       const messageId = await insertCsMessage({
         conversationId,
         direction: "in",
         sender: "customer",
-        text: String(text),
+        text: corpo,
         status: "new",
       });
-      res.json({ success: true, conversationId, messageId });
+
+      // La notifica sta QUI e non dentro n8n di proposito: e' l'unico punto da
+      // cui passano tutti i canali, e regge anche quando un workflow muore. Fino
+      // al 18/09/2026 questa rotta scriveva a database e basta, quindi i
+      // messaggi entravano in silenzio e nessuno li vedeva.
+      const verdetto = classifica({ channel: canale, handle, nome, testo: corpo });
+      if (verdetto.cliente) {
+        // Un guasto di Telegram non deve far fallire l'ingest: il messaggio e'
+        // gia' salvato, e perderlo per colpa di una notifica sarebbe peggio.
+        avvisaSuTelegram(
+          testoNotifica({ channel: canale, handle, nome, testo: corpo, conversationId }),
+        ).catch((err) => console.warn("[care/ingest] notifica non partita:", err));
+      } else {
+        console.log(`[care/ingest] non notificato (${verdetto.motivo}): ${handle}`);
+      }
+
+      res.json({ success: true, conversationId, messageId, notificato: verdetto.cliente, motivo: verdetto.motivo });
     } catch (err) {
       console.warn("[care/ingest] error:", err);
       res.status(500).json({ error: "ingest failed" });

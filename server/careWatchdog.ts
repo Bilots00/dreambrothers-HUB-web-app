@@ -38,9 +38,17 @@ export type Canale = {
   workflowId?: string;
 };
 
+/**
+ * Gli id vanno tenuti allineati a mano ai workflow VIVI.
+ *
+ * Fino al 18/09/2026 qui c'erano h0HCZNFuq5mHKpj1 (email, IMAP morto dal 29
+ * giugno) e tWTxka4DRaKSkQ27 (WhatsApp, trigger Meta perso): il cane da guardia
+ * sorvegliava due workflow che non alimentavano piu' niente, mentre i due che
+ * lavoravano davvero non li guardava nessuno.
+ */
 export const CANALI: Canale[] = [
-  { chiave: "email", etichetta: "Email", soglieOre: 72, workflowId: "h0HCZNFuq5mHKpj1" },
-  { chiave: "whatsapp", etichetta: "WhatsApp", soglieOre: 168, workflowId: "tWTxka4DRaKSkQ27" },
+  { chiave: "email", etichetta: "Email", soglieOre: 72, workflowId: "DPfqaBTN0WXvjEPi" },
+  { chiave: "whatsapp", etichetta: "WhatsApp", soglieOre: 168, workflowId: "sjeSkS7Eh7jTZ1Iv" },
 ];
 
 export type StatoCanale = {
@@ -50,9 +58,20 @@ export type StatoCanale = {
   oreDiSilenzio: number | null;
   soglieOre: number;
   workflowAttivo: boolean | null;
+  /** Quante delle ultime esecuzioni sono fallite di fila. `null` = non lo sappiamo. */
+  erroriConsecutivi: number | null;
   inAllarme: boolean;
   motivo: string;
 };
+
+/**
+ * Quante esecuzioni fallite di fila bastano per gridare.
+ *
+ * Il workflow mail gira ogni 2 minuti: tre di fila sono sei minuti, abbastanza
+ * per escludere un singolo intoppo di rete e abbastanza poco da accorgersene
+ * mentre la giornata e' ancora utile.
+ */
+const ERRORI_PER_ALLARME = 3;
 
 /* ------------------------------------------------------------------ */
 /* n8n                                                                 */
@@ -79,6 +98,43 @@ export async function workflowAttivo(workflowId: string): Promise<boolean | null
     return typeof j?.active === "boolean" ? j.active : null;
   } catch (err) {
     console.warn(`[watchdog] n8n non raggiungibile per ${workflowId}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Quante delle ultime esecuzioni sono fallite, contando dalla piu' recente
+ * all'indietro e fermandosi al primo successo.
+ *
+ * Serve perche' "attivo" non vuol dire "funzionante", ed e' esattamente il buco
+ * che ci e' costato il caso #1263: il 16 settembre alle 09:32 la credenziale
+ * Gmail e' scaduta, il workflow e' rimasto attivo e ha fallito 2.826 volte di
+ * fila. Il cane da guardia guardava solo il silenzio, con soglia 72 ore, quindi
+ * avrebbe abbaiato il 19. Nel frattempo una cliente ha aspettato due giorni.
+ *
+ * Ritorna `null` se non lo sappiamo: niente API key, n8n irraggiungibile, o
+ * nessuna esecuzione recente (normale per un webhook a cui non scrive nessuno).
+ */
+export async function erroriConsecutivi(workflowId: string, quante = 10): Promise<number | null> {
+  const base = process.env.N8N_BASE_URL;
+  const key = process.env.N8N_API_KEY;
+  if (!base || !key) return null;
+  try {
+    const url = `${base.replace(/\/+$/, "")}/api/v1/executions?workflowId=${encodeURIComponent(workflowId)}&limit=${quante}`;
+    const r = await fetch(url, { headers: { "X-N8N-API-KEY": key, accept: "application/json" } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const righe: Array<{ status?: string; finished?: boolean }> = Array.isArray(j?.data) ? j.data : [];
+    if (!righe.length) return null;
+    let n = 0;
+    for (const e of righe) {
+      const fallita = e.status === "error" || e.status === "crashed";
+      if (!fallita) break;
+      n += 1;
+    }
+    return n;
+  } catch (err) {
+    console.warn(`[watchdog] esecuzioni non leggibili per ${workflowId}:`, err);
     return null;
   }
 }
@@ -125,7 +181,16 @@ export function valuta(
   canale: Pick<Canale, "chiave" | "etichetta" | "soglieOre">,
   oreDiSilenzio: number | null,
   workflowAttivoOra: boolean | null,
+  erroriDiFila: number | null = null,
 ): { inAllarme: boolean; motivo: string } {
+  // Per primo il segnale piu' certo e piu' veloce: il workflow gira e fallisce.
+  // Un canale che sbaglia da sei minuti e' rotto adesso, non fra tre giorni.
+  if (erroriDiFila !== null && erroriDiFila >= ERRORI_PER_ALLARME) {
+    return {
+      inAllarme: true,
+      motivo: `il workflow gira ma fallisce: ${erroriDiFila} esecuzioni fallite di fila`,
+    };
+  }
   if (workflowAttivoOra === false) {
     return { inAllarme: true, motivo: "il workflow n8n che alimenta questo canale e' spento" };
   }
@@ -153,7 +218,8 @@ export async function controllaCanali(userId = OWNER_USER_ID): Promise<StatoCana
     const ultimo = ultimi[canale.chiave] ?? null;
     const oreDiSilenzio = ultimo ? (adesso - ultimo.getTime()) / 3_600_000 : null;
     const attivo = canale.workflowId ? await workflowAttivo(canale.workflowId) : null;
-    const { inAllarme, motivo } = valuta(canale, oreDiSilenzio, attivo);
+    const errori = canale.workflowId ? await erroriConsecutivi(canale.workflowId) : null;
+    const { inAllarme, motivo } = valuta(canale, oreDiSilenzio, attivo, errori);
     stati.push({
       chiave: canale.chiave,
       etichetta: canale.etichetta,
@@ -161,6 +227,7 @@ export async function controllaCanali(userId = OWNER_USER_ID): Promise<StatoCana
       oreDiSilenzio: oreDiSilenzio === null ? null : Math.round(oreDiSilenzio),
       soglieOre: canale.soglieOre,
       workflowAttivo: attivo,
+      erroriConsecutivi: errori,
       inAllarme,
       motivo,
     });

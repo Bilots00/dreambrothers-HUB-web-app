@@ -42,4 +42,34 @@ describe("valuta (cuore del cane da guardia)", () => {
     expect(r.inAllarme).toBe(true);
     expect(r.motivo).toMatch(/mai ricevuto/);
   });
+
+  it("suona quando il workflow gira ma fallisce, anche col canale appena vivo", () => {
+    // E' il caso #1263 del 16/09/2026: credenziale Gmail scaduta alle 09:32, il
+    // workflow resta ATTIVO e fallisce 2.826 volte di fila. Guardando solo lo
+    // stato e il silenzio (soglia 72 ore) l'allarme sarebbe arrivato il 19,
+    // mentre una cliente aspettava gia' da due giorni.
+    const r = valuta(email, 1, true, 3);
+    expect(r.inAllarme).toBe(true);
+    expect(r.motivo).toMatch(/fallisce/);
+    expect(r.motivo).toMatch(/3/);
+  });
+
+  it("NON suona per un singolo intoppo di rete", () => {
+    // Una o due esecuzioni fallite capitano: n8n riavvia, la rete perde un colpo.
+    expect(valuta(email, 1, true, 1).inAllarme).toBe(false);
+    expect(valuta(email, 1, true, 2).inAllarme).toBe(false);
+  });
+
+  it("zero errori, o errori ignoti, non fanno rumore", () => {
+    // `null` significa "non lo sappiamo": tipico di un webhook a cui nessuno
+    // scrive. Trattarlo come guasto riempirebbe il telefono di falsi allarmi.
+    expect(valuta(email, 1, true, 0).inAllarme).toBe(false);
+    expect(valuta(email, 1, true, null).inAllarme).toBe(false);
+  });
+
+  it("gli errori battono il silenzio nel motivo", () => {
+    // Se il canale tace da giorni ED e' in errore, il motivo utile e' l'errore:
+    // dice cosa riparare, il silenzio dice solo che qualcosa non va.
+    expect(valuta(email, 24 * 10, true, 5).motivo).toMatch(/fallisce/);
+  });
 });
