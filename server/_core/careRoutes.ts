@@ -84,7 +84,13 @@ export function registerCareRoutes(app: Express) {
       // cui passano tutti i canali, e regge anche quando un workflow muore. Fino
       // al 18/09/2026 questa rotta scriveva a database e basta, quindi i
       // messaggi entravano in silenzio e nessuno li vedeva.
-      const verdetto = classifica({ channel: canale, handle, nome, testo: corpo });
+      const verdetto = classifica({
+        channel: canale,
+        handle,
+        nome,
+        testo: corpo,
+        daModuloContatti: Boolean(modulo),
+      });
       if (verdetto.cliente) {
         // Un guasto di Telegram non deve far fallire l'ingest: il messaggio e'
         // gia' salvato, e perderlo per colpa di una notifica sarebbe peggio.

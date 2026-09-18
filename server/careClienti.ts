@@ -28,6 +28,17 @@ export type MessaggioInCare = {
   handle: string;
   nome?: string | null;
   testo: string;
+  /**
+   * Il chiamante ha gia' riconosciuto un modulo contatti e passa il corpo
+   * estratto invece del testo originale.
+   *
+   * Serve perche' dopo l'estrazione il marcatore ("Email:", "Body:") non c'e'
+   * piu' nel testo, quindi `estraiDalModuloShopify` qui dentro non lo
+   * riconoscerebbe e la precedenza sulla lista nera non scatterebbe. Trovato in
+   * produzione il 18/09/2026: la classificazione tornava "mittente umano non in
+   * lista nera", cioe' il risultato giusto per il motivo sbagliato.
+   */
+  daModuloContatti?: boolean;
 };
 
 export type Verdetto = {
@@ -164,7 +175,7 @@ export function classifica(m: MessaggioInCare): Verdetto {
 
   // Prima di ogni esclusione: e' un modulo contatti? Arriva da shopify.com, che
   // e' in lista nera, ma dentro c'e' una persona che aspetta una risposta.
-  if (estraiDalModuloShopify(testo)) {
+  if (m.daModuloContatti || estraiDalModuloShopify(testo)) {
     return { cliente: true, motivo: "modulo contatti del negozio" };
   }
 

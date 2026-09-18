@@ -52,6 +52,33 @@ describe("classifica", () => {
     expect(v.motivo).toMatch(/modulo contatti/);
   });
 
+  it("il flag daModuloContatti vale anche quando il marcatore e' gia' stato tolto", () => {
+    // Il percorso reale estrae il corpo PRIMA di classificare, quindi il testo
+    // non contiene piu' "Email:"/"Body:". Senza il flag la precedenza non
+    // scattava e la classificazione tornava giusta per il motivo sbagliato:
+    // trovato in produzione il 18/09/2026, non dai test unitari.
+    const v = classifica({
+      channel: "email",
+      handle: "cliente@dominioinlistanera.example",
+      testo: "[Returns & Refunds] Vorrei restituire la felpa, ordine #1263.",
+      daModuloContatti: true,
+    });
+    expect(v.cliente).toBe(true);
+    expect(v.motivo).toMatch(/modulo contatti/);
+  });
+
+  it("il flag batte anche una frase che sembra un pitch", () => {
+    // Un cliente vero puo' scrivere parole che somigliano a un'offerta: se la
+    // richiesta arriva dal modulo contatti del negozio, e' un cliente e basta.
+    const v = classifica({
+      channel: "email",
+      handle: "tizio@gmail.com",
+      testo: "I came across your store and my order never arrived",
+      daModuloContatti: true,
+    });
+    expect(v.cliente).toBe(true);
+  });
+
   it("riconosce una mail scritta a mano da una cliente", () => {
     const v = classifica({
       channel: "email",
