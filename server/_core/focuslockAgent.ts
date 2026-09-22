@@ -36,6 +36,13 @@ const LEGGIBILI = ["fl:pc-usage", "fl:agent-in", "fl:jordan"] as const;
 /** La riga dove Jordan deposita quello che ha capito. La legge l'app, con il token dell'utente. */
 const SLOT_VERDETTO = "fl:jordan";
 
+/* L'ARBITRO ESTERNO. Un altro agente — Claude che lavora con Andrea al computer — segna un
+ * punto al vecchio te quando gli viene chiesto di aggiungere qualcosa che non sta nella rotta.
+ * Non è un verdetto (che ogni sera si riscrive da capo): è un REGISTRO, e ogni chiamata
+ * aggiunge una riga. L'app lo legge, applica le righe che non ha ancora visto, e basta. */
+const SLOT_ARBITRO = "fl:arbitro";
+const MAX_EVENTI_ARBITRO = 60;
+
 const MAX_VERDETTO_BYTES = 64 * 1024;
 
 function checkSecret(req: Request, res: Response): boolean {
@@ -143,6 +150,40 @@ export function registerFocusLockAgentRoutes(app: Express) {
         VALUES (${sub}, ${email}, ${SLOT_VERDETTO}, ${"Jordan"}, ${null}, 0, 0, 0, 0, ${payload}, NOW(), NOW())
         ON DUPLICATE KEY UPDATE payload = VALUES(payload), updatedAt = NOW()`);
       res.json({ saved: true });
+    } catch (e: any) {
+      res.status(500).json({ error: "db: " + (e?.message || String(e)) });
+    }
+  });
+
+  /* IL PUNTO DELL'ARBITRO ESTERNO.
+   * Body: { email, id, motivo, testo? }. Si APPENDE alla riga fl:arbitro (ultimi 60 eventi):
+   * un registro, non uno stato, così due punti nello stesso minuto restano due punti e l'app
+   * li applica uno per uno, per id. */
+  app.post("/api/focuslock/agent/punto", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    const email = emailAmmessa(req, res);
+    if (!email) return;
+    const body = req.body ?? {};
+    const id = String(body.id || "").trim().slice(0, 40);
+    const motivo = String(body.motivo || "").trim().slice(0, 200);
+    const testo = String(body.testo || "").trim().slice(0, 240);
+    if (!id || !motivo) { res.status(400).json({ error: "id and motivo are required" }); return; }
+    try {
+      const chi = await rows(sql`SELECT googleSub FROM focuslock_backups
+        WHERE LOWER(email) = ${email} ORDER BY updatedAt DESC LIMIT 1`);
+      const sub = chi.length ? String(chi[0].googleSub) : "";
+      if (!sub) { res.status(404).json({ error: "no account with that email" }); return; }
+      const cur = await rows(sql`SELECT payload FROM focuslock_backups
+        WHERE LOWER(email) = ${email} AND deviceId = ${SLOT_ARBITRO} LIMIT 1`);
+      const vecchio = (cur.length ? parse(cur[0].payload) : null) as { eventi?: unknown[] } | null;
+      const eventi = Array.isArray(vecchio?.eventi) ? vecchio!.eventi!.slice(-(MAX_EVENTI_ARBITRO - 1)) : [];
+      if (!eventi.some((e: any) => e && e.id === id)) eventi.push({ id, at: Date.now(), motivo, testo, chi: "old" });
+      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi });
+      await rows(sql`INSERT INTO focuslock_backups
+          (googleSub, email, deviceId, deviceName, appVersion, programs, apps, sites, keywords, payload, createdAt, updatedAt)
+        VALUES (${sub}, ${email}, ${SLOT_ARBITRO}, ${"Arbitro"}, ${null}, 0, 0, 0, 0, ${payload}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE payload = VALUES(payload), updatedAt = NOW()`);
+      res.json({ saved: true, eventi: eventi.length });
     } catch (e: any) {
       res.status(500).json({ error: "db: " + (e?.message || String(e)) });
     }
