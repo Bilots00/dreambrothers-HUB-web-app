@@ -71,10 +71,10 @@
 
 
   <h1>Informativa sulla privacy</h1>
-  <div class="upd">FocusLock per Android (<code>com.dreambrothers.focuslock</code>) · versione del documento 1.2 — ultimo aggiornamento 9 settembre 2026</div>
+  <div class="upd">FocusLock per Android (<code>com.dreambrothers.focuslock</code>) · versione del documento 1.3 — ultimo aggiornamento 23 settembre 2026</div>
 
   <div class="box key">
-    <p><b>In una riga:</b> FocusLock funziona sul tuo telefono. Quello che il servizio di accessibilità legge per riconoscere un blocco viene confrontato in memoria e scartato subito dopo. L'unica cosa che può lasciare il telefono è il backup delle tue regole, e solo se lo chiedi tu accedendo con Google.</p>
+    <p><b>In una riga:</b> FocusLock funziona sul tuo telefono. Quello che il servizio di accessibilità legge per riconoscere un blocco viene confrontato in memoria e scartato subito dopo. Dal telefono possono uscire solo due cose, e solo se accedi con Google: il backup delle tue regole e il riepilogo della giornata che il telefono condivide con il tuo computer. I dati di Health Connect non vengono mai venduti né usati per la pubblicità.</p>
   </div>
 
   <h2>1. Titolare del trattamento</h2>
@@ -199,6 +199,36 @@
   <code>QUERY_ALL_PACKAGES</code> <b>non</b> viene richiesto: tutto ciò che non rientra in quelle
   due categorie resta invisibile all'app. L'elenco non lascia il telefono.</p>
 
+  <h3>Health Connect: passi e allenamenti (facoltativo)</h3>
+  <p>Se lo attivi tu dalla pagina «Passi di oggi», FocusLock chiede a <b>Health Connect</b> il
+  permesso di <b>leggere</b> due soli tipi di dati: i <b>passi</b> (<code>READ_STEPS</code>) e le
+  <b>sessioni di allenamento</b> con tipo e durata (<code>READ_EXERCISE</code>). Non scrive nulla
+  in Health Connect e non chiede altri dati di salute.</p>
+  <ul>
+    <li><b>A cosa servono:</b> a mostrarti i passi della giornata ora per ora e a calcolare la
+      <b>riserva di dopamina</b>: una camminata senza telefono o un allenamento alzano il punteggio.</li>
+    <li><b>Dove restano:</b> sul telefono. Se hai collegato l'account Google, il riepilogo della
+      giornata che il telefono manda al tuo computer può contenere voci come «Camminata senza
+      telefono · 25 min · 2.625 passi» (vedi «Sincronizzazione fra telefono e computer»).</li>
+    <li><b>Cosa non succede mai:</b> i dati di Health Connect non vengono venduti, non vengono
+      usati per la pubblicità né per profilarti, non vengono ceduti a terzi e non vengono usati
+      per valutare affidabilità creditizia, assicurativa o lavorativa.</li>
+    <li>L'uso dei dati ricevuti da Health Connect rispetta la
+      <a href="https://support.google.com/googleplay/android-developer/answer/12991134">Health Connect Permissions policy</a>
+      di Google, compresi i requisiti di <i>Limited Use</i>.</li>
+    <li>Puoi revocare il permesso quando vuoi dall'app Health Connect (o da Impostazioni ›
+      Sicurezza e privacy › Health Connect). Da quel momento FocusLock non legge più nulla.</li>
+  </ul>
+  <p>Sui telefoni senza Health Connect, e solo se concedi il permesso «Attività fisica», l'app
+  usa il <b>contapassi del telefono</b>: registra quanti passi fai in ogni minuto, li tiene sul
+  dispositivo per tre giorni e poi li cancella.</p>
+
+  <h3>Registro delle notifiche e app installate di recente</h3>
+  <p>Per capire se rispondi alle notifiche d'istinto, FocusLock tiene per 48 ore l'<b>ora</b> di
+  ogni notifica e il <b>nome tecnico dell'app</b> che l'ha inviata (mai titolo o testo).
+  Guarda inoltre la data di installazione delle app con un'icona nel menu, per riconoscere
+  un'app nuova installata durante le ore che hai pianificato. Tutto resta sul telefono.</p>
+
   <h2>5. Che cosa viene salvato, e dove</h2>
   <p>Tutto quello che FocusLock conserva sta nelle <b>SharedPreferences</b> dell'app, cioè
   nell'area privata che Android le assegna sul telefono. Nient'altro, da nessuna parte:</p>
@@ -221,6 +251,10 @@
         <td>Un dettaglio tecnico: l'identificativo interno della barra degli indirizzi di ogni
           browser che hai usato, imparato una volta per non dover riesaminare la schermata a
           ogni evento. Contiene nomi di campi dell'interfaccia, non indirizzi né testo.</td></tr>
+    <tr><td><code>focuslock_passi</code></td>
+        <td>I passi minuto per minuto letti dal contapassi del telefono, per tre giorni.</td></tr>
+    <tr><td><code>focuslock_notiflog</code></td>
+        <td>Ora e app di provenienza delle notifiche, per 48 ore. Nessun testo.</td></tr>
     <tr><td>Preferenze del browser interno dell'app</td>
         <td>Le risposte date durante la configurazione iniziale, la scheda aperta l'ultima
           volta e la scelta sul consenso pubblicitario.</td></tr>
@@ -233,7 +267,7 @@
   <p>Per completezza, ecco tutto ciò che l'app contatta. Non c'è altro, e in nessuno di questi
   casi vengono trasmessi i dati letti dal servizio di accessibilità:</p>
   <ul>
-    <li><b>Server di FocusLock</b> (ospitato su Railway): contattato <i>soltanto</i> quando accedi con Google e salvi, elenchi, ripristini o elimini un backup. Vedi la sezione «Backup sul tuo account e su file».</li>
+    <li><b>Server di FocusLock</b> (ospitato su Railway): contattato <i>soltanto</i> se accedi con Google, per il backup e per la sincronizzazione fra il tuo telefono e il tuo computer. Vedi le sezioni «Backup sul tuo account e su file» e «Sincronizzazione fra telefono e computer».</li>
     <li><b>Google Fonts</b> (<code>fonts.googleapis.com</code>, <code>fonts.gstatic.com</code>):
       l'app scarica i due caratteri tipografici con cui è scritta. Come ogni richiesta web,
       questa espone a Google l'indirizzo IP del dispositivo. Senza rete l'app funziona lo
@@ -315,6 +349,18 @@
 <p>Entrambe le operazioni avvengono <b>solo su tua azione</b>: l'app non carica nulla da sola.
 Il backup non contiene la configurazione della Modalità severa né il suo PIN. Puoi eliminare il backup in qualsiasi momento dalla stessa schermata, o scollegare l'account.</p>
 <p>Il trasferimento verso il server avviene cifrato (HTTPS). Il server &egrave; gestito da DreamBrothers ed &egrave; ospitato su Railway.</p>
+
+  <h2>Sincronizzazione fra telefono e computer</h2>
+<p>Se usi FocusLock anche sul computer e hai collegato lo stesso account Google, i due
+dispositivi si scambiano, attraverso il server di FocusLock, il <b>riepilogo della giornata</b>:
+tempo di schermo, quali app e siti hai usato e a che ora (nome dell'app o del sito, inizio e
+durata, mai il contenuto), l'ora in cui ti sei svegliato, le attività che hai spuntato, il
+calcolo della riserva di dopamina con le sue voci (per esempio una camminata o una sessione di
+concentrazione). Serve a mostrarti su entrambi i dispositivi gli stessi numeri.</p>
+<p>Questi dati restano legati al tuo account, non vengono venduti, non vengono usati per la
+pubblicità e non vengono condivisi con terzi. Ogni dispositivo sostituisce il proprio
+riepilogo invece di accumularli. Se esci dall'account, la sincronizzazione si ferma; per far
+cancellare i riepiloghi dal server scrivi a <a href="mailto:info@dreambrothers.it">info@dreambrothers.it</a>.</p>
 
 
 
