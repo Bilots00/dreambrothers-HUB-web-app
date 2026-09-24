@@ -177,13 +177,48 @@ export function registerFocusLockAgentRoutes(app: Express) {
         WHERE LOWER(email) = ${email} AND deviceId = ${SLOT_ARBITRO} LIMIT 1`);
       const vecchio = (cur.length ? parse(cur[0].payload) : null) as { eventi?: unknown[] } | null;
       const eventi = Array.isArray(vecchio?.eventi) ? vecchio!.eventi!.slice(-(MAX_EVENTI_ARBITRO - 1)) : [];
-      if (!eventi.some((e: any) => e && e.id === id)) eventi.push({ id, at: Date.now(), motivo, testo, chi: "old" });
-      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi });
+      const sessione = String(body.sessione || "").trim().slice(0, 40);
+      if (!eventi.some((e: any) => e && e.id === id)) eventi.push({ id, at: Date.now(), motivo, testo, chi: "old", sessione });
+      const durate = Array.isArray((vecchio as any)?.durate) ? (vecchio as any).durate.slice(-200) : [];
+      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi, durate });
       await rows(sql`INSERT INTO focuslock_backups
           (googleSub, email, deviceId, deviceName, appVersion, programs, apps, sites, keywords, payload, createdAt, updatedAt)
         VALUES (${sub}, ${email}, ${SLOT_ARBITRO}, ${"Arbitro"}, ${null}, 0, 0, 0, 0, ${payload}, NOW(), NOW())
         ON DUPLICATE KEY UPDATE payload = VALUES(payload), updatedAt = NOW()`);
       res.json({ saved: true, eventi: eventi.length });
+    } catch (e: any) {
+      res.status(500).json({ error: "db: " + (e?.message || String(e)) });
+    }
+  });
+
+  /* QUANTO È DURATA UNA RICHIESTA. L'hook di Claude sul computer misura dal messaggio alla fine
+   * della risposta: { email, sessione, inizio, minuti }. Si appende alla stessa riga fl:arbitro
+   * (ultime 200); è l'app ad associare la durata alla deviazione della stessa sessione, perché il
+   * giudizio sul VPS arriva un minuto dopo e l'ordine non è garantito. */
+  app.post("/api/focuslock/agent/durata", async (req: Request, res: Response) => {
+    if (!checkSecret(req, res)) return;
+    const email = emailAmmessa(req, res);
+    if (!email) return;
+    const body = req.body ?? {};
+    const sessione = String(body.sessione || "").trim().slice(0, 40);
+    const inizio = Number(body.inizio || 0);
+    const minuti = Math.max(0, Math.min(600, Number(body.minuti || 0)));
+    if (!sessione || !inizio || !minuti) { res.status(400).json({ error: "sessione, inizio and minuti are required" }); return; }
+    try {
+      const chi = await rows(sql`SELECT googleSub FROM focuslock_backups WHERE LOWER(email) = ${email} ORDER BY updatedAt DESC LIMIT 1`);
+      const sub = chi.length ? String(chi[0].googleSub) : "";
+      if (!sub) { res.status(404).json({ error: "no account with that email" }); return; }
+      const cur = await rows(sql`SELECT payload FROM focuslock_backups WHERE LOWER(email) = ${email} AND deviceId = ${SLOT_ARBITRO} LIMIT 1`);
+      const vecchio = (cur.length ? parse(cur[0].payload) : null) as any;
+      const eventi = Array.isArray(vecchio?.eventi) ? vecchio.eventi : [];
+      const durate = Array.isArray(vecchio?.durate) ? vecchio.durate.slice(-199) : [];
+      durate.push({ sessione, inizio, minuti: Math.round(minuti * 10) / 10 });
+      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi, durate });
+      await rows(sql`INSERT INTO focuslock_backups
+          (googleSub, email, deviceId, deviceName, appVersion, programs, apps, sites, keywords, payload, createdAt, updatedAt)
+        VALUES (${sub}, ${email}, ${SLOT_ARBITRO}, ${"Arbitro"}, ${null}, 0, 0, 0, 0, ${payload}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE payload = VALUES(payload), updatedAt = NOW()`);
+      res.json({ saved: true, durate: durate.length });
     } catch (e: any) {
       res.status(500).json({ error: "db: " + (e?.message || String(e)) });
     }
