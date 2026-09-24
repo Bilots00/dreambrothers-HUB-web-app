@@ -180,7 +180,8 @@ export function registerFocusLockAgentRoutes(app: Express) {
       const sessione = String(body.sessione || "").trim().slice(0, 40);
       if (!eventi.some((e: any) => e && e.id === id)) eventi.push({ id, at: Date.now(), motivo, testo, chi: "old", sessione });
       const durate = Array.isArray((vecchio as any)?.durate) ? (vecchio as any).durate.slice(-200) : [];
-      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi, durate });
+      const annullati = Array.isArray((vecchio as any)?.annullati) ? (vecchio as any).annullati.slice(-100) : [];
+      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi, durate, annullati });
       await rows(sql`INSERT INTO focuslock_backups
           (googleSub, email, deviceId, deviceName, appVersion, programs, apps, sites, keywords, payload, createdAt, updatedAt)
         VALUES (${sub}, ${email}, ${SLOT_ARBITRO}, ${"Arbitro"}, ${null}, 0, 0, 0, 0, ${payload}, NOW(), NOW())
@@ -213,7 +214,8 @@ export function registerFocusLockAgentRoutes(app: Express) {
       const eventi = Array.isArray(vecchio?.eventi) ? vecchio.eventi : [];
       const durate = Array.isArray(vecchio?.durate) ? vecchio.durate.slice(-199) : [];
       durate.push({ sessione, inizio, minuti: Math.round(minuti * 10) / 10 });
-      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi, durate });
+      const annullati = Array.isArray((vecchio as any)?.annullati) ? (vecchio as any).annullati.slice(-100) : [];
+      const payload = JSON.stringify({ kind: "focuslock-arbitro", v: 1, at: Date.now(), eventi, durate, annullati });
       await rows(sql`INSERT INTO focuslock_backups
           (googleSub, email, deviceId, deviceName, appVersion, programs, apps, sites, keywords, payload, createdAt, updatedAt)
         VALUES (${sub}, ${email}, ${SLOT_ARBITRO}, ${"Arbitro"}, ${null}, 0, 0, 0, 0, ${payload}, NOW(), NOW())
