@@ -12,6 +12,7 @@ import { registerClaudeRoutes } from "./claudeRoutes";
 import { registerFocusLockRoutes } from "./focuslockRoutes";
 import { registerFocusLockFeedbackRoutes } from "./focuslockFeedback";
 import { registerFocusLockAgentRoutes } from "./focuslockAgent";
+import { registerFocusLockChatRoutes } from "./focuslockChat";
 import { registerFocusLockPartnerRoutes } from "./focuslockPartners";
 import { registerFocusLockQuoteRoutes } from "./focuslockQuotes";
 import { registerFocusLockBackgroundRoutes } from "./focuslockBackgrounds";
@@ -661,6 +662,7 @@ async function startServer() {
   registerFocusLockRoutes(app);
   registerFocusLockFeedbackRoutes(app);
   registerFocusLockAgentRoutes(app);
+  registerFocusLockChatRoutes(app);
   registerFocusLockPartnerRoutes(app);
   registerFocusLockQuoteRoutes(app);
   registerFocusLockBackgroundRoutes(app);
