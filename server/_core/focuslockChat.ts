@@ -123,12 +123,13 @@ const PERSONA = [
 ].join("\n");
 
 /* IL FORNITORE. Di serie Claude (chiave AGENT_LLM_KEY, API a consumo di Anthropic), con DUE modelli:
- *  · la ROADMAP (il piano: la prima volta e ogni ricalcolo) con Claude Opus 5.5, effort "high":
- *    $4 / $20 per milione di token; una roadmap (≈ 8.000 token in, ≈ 6.000 out col ragionamento)
- *    costa ≈ $0,15. È il prodotto: qui non si risparmia.
- *  · la CHAT di tutti i giorni con Claude Sonnet 5, effort "low": $2 / $10 per milione;
- *    un messaggio (≈ 5.000 in, ≈ 800 out) costa ≈ $0,018, meno con la cache della persona.
- * Una roadmap scala AGENT_CREDITI_ROADMAP crediti (di serie 5), un messaggio 1.
+ *  · il PIANO — la roadmap (la prima volta e ogni ricalcolo) e «scomponi in passi» — con Claude
+ *    Opus 5.5, effort "high": $4 / $20 per milione di token; una roadmap (≈ 8.000 token in,
+ *    ≈ 6.000 out col ragionamento) costa ≈ $0,15, una scomposizione ≈ $0,05. È il prodotto.
+ *  · la CHAT di tutti i giorni con Claude Haiku 4.5: $1 / $5 per milione; un messaggio
+ *    (≈ 5.000 in, ≈ 800 out) costa ≈ $0,009, meno con la cache della persona.
+ * Crediti: roadmap AGENT_CREDITI_ROADMAP (di serie 5), scomposizione AGENT_CREDITI_SCOMPONI (2),
+ * messaggio 1.
  * Gemini resta come alternativa economica con AGENT_LLM_PROVIDER=gemini e AGENT_GEMINI_KEY (un
  * nome suo, così una chiave gratuita messa per altro non si accende qui per sbaglio: il piano
  * gratuito di Gemini in UE non ammette uso commerciale e usa i dati per addestrare). */
@@ -145,22 +146,28 @@ function claude(): Anthropic {
   if (!CLAUDE) CLAUDE = new Anthropic({ apiKey: String(process.env.AGENT_LLM_KEY) });
   return CLAUDE;
 }
+const CREDITI_SCOMPONI = Math.max(1, Math.floor(Number(process.env.AGENT_CREDITI_SCOMPONI || 2)));
+/** «Scomponi in passi» arriva dall'app con questo prefisso: la riga da scomporre segue. */
+const PREFISSO_SCOMPONI = "[scomponi] ";
+const ISTRUZIONE_SCOMPONI = "Scomponi questa task in 3-5 micro-passi concreti, nell'ordine in cui si fanno, ognuno con un verbo all'inizio e i minuti fra parentesi, tarati sul suo tempo reale. Una riga di commento al massimo, poi SOLO il blocco ```json {\"scomponi\": {\"passi\": [\"…\"]}} ```.";
 /** È una richiesta di roadmap? La prima conversazione, o una domanda sul piano. */
 function eRoadmap(testo: string, primo: boolean): boolean {
   return primo || /roadmap|ricalcol|piano|orizzont|itinerar|rifai la strada/i.test(testo);
 }
 
-/** Una chiamata al modello: messaggi alternati user/assistant, la persona come istruzione di sistema. */
-async function chiamaModello(messaggi: { role: string; content: string }[], roadmap = false): Promise<string> {
+/** Una chiamata al modello: messaggi alternati user/assistant, la persona come istruzione di sistema.
+ *  `piano` = roadmap o scomposizione (Opus 5.5); altrimenti chat (Haiku 4.5). */
+async function chiamaModello(messaggi: { role: string; content: string }[], piano = false): Promise<string> {
   const f = fornitore();
   if (f === "anthropic") {
-    const r = await claude().messages.create({
-      model: roadmap ? (process.env.AGENT_ROADMAP_MODEL || "claude-opus-5-5") : (process.env.AGENT_CHAT_MODEL || "claude-sonnet-5"),
-      max_tokens: roadmap ? 16000 : 4000,
-      output_config: { effort: roadmap ? "high" : "low" },
-      system: [{ type: "text", text: PERSONA, cache_control: { type: "ephemeral" } }],
-      messages: messaggi.map((m) => ({ role: m.role === "assistant" ? "assistant" as const : "user" as const, content: m.content })),
-    });
+    const msgs = messaggi.map((m) => ({ role: m.role === "assistant" ? "assistant" as const : "user" as const, content: m.content }));
+    const system = [{ type: "text" as const, text: PERSONA, cache_control: { type: "ephemeral" as const } }];
+    /* Haiku 4.5 non accetta `effort`: il parametro va solo al modello del piano */
+    const r = piano
+      ? await claude().messages.create({ model: process.env.AGENT_ROADMAP_MODEL || "claude-opus-5-5", max_tokens: 16000,
+          output_config: { effort: "high" }, system, messages: msgs })
+      : await claude().messages.create({ model: process.env.AGENT_CHAT_MODEL || "claude-haiku-4-5", max_tokens: 2000,
+          system, messages: msgs });
     if (r.stop_reason === "refusal") throw new Error("claude: rifiuto " + JSON.stringify(r.stop_details || null).slice(0, 200));
     const testo = r.content.filter((b) => b.type === "text").map((b) => (b.type === "text" ? b.text : "")).join("\n").trim();
     if (!testo) throw new Error("claude: risposta vuota (" + r.stop_reason + ")");
@@ -231,8 +238,9 @@ async function rispondiACrediti(id: number): Promise<void> {
   await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'lavoro' WHERE id = ${id}`);
   await saldo(sub, m.email ?? null);
   const precedenti = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'out' AND stato IN ('fatto', 'daconsegnare')`);
-  const roadmap = eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
-  const costo = roadmap ? CREDITI_ROADMAP : 1;
+  const scomponi = String(m.testo || "").startsWith(PREFISSO_SCOMPONI);
+  const roadmap = !scomponi && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
+  const costo = scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : 1);
   if (!(await scala(sub, costo))) {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'crediti' WHERE id = ${id}`);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out",
@@ -242,7 +250,8 @@ async function rispondiACrediti(id: number): Promise<void> {
   try {
     const prof = await rows(sql`SELECT nome, brief FROM focuslock_agent_profilo WHERE googleSub = ${sub} LIMIT 1`);
     const storico = (await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
-      WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') ORDER BY id DESC LIMIT 12`)).reverse();
+      WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%'
+        AND (azioni IS NULL OR azioni NOT LIKE '%"scomponi"%') ORDER BY id DESC LIMIT 12`)).reverse();
     const nome = prof[0]?.nome || "Genio";
     const messaggi: { role: string; content: string }[] = [];
     for (const s of storico) {
@@ -252,10 +261,13 @@ async function rispondiACrediti(id: number): Promise<void> {
       else messaggi.push({ role: ruolo, content: testo });
     }
     while (messaggi.length && messaggi[0].role === "assistant") messaggi.shift();
-    const domanda = `Ti chiami ${nome}. Oggi è ${new Date().toISOString().slice(0, 10)}. Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\nMESSAGGIO:\n${String(m.testo)}`;
+    const richiesta = scomponi
+      ? "TASK DA SCOMPORRE: «" + String(m.testo).slice(PREFISSO_SCOMPONI.length) + "»\n\n" + ISTRUZIONE_SCOMPONI
+      : String(m.testo);
+    const domanda = `Ti chiami ${nome}. Oggi è ${new Date().toISOString().slice(0, 10)}. Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\nMESSAGGIO:\n${richiesta}`;
     if (messaggi.length && messaggi[messaggi.length - 1].role === "user") messaggi[messaggi.length - 1].content += "\n\n" + domanda;
     else messaggi.push({ role: "user", content: domanda });
-    const testo = await chiamaModello(messaggi, roadmap);
+    const testo = await chiamaModello(messaggi, roadmap || scomponi);
     const t = tagliaPiano(testo);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out", t.testo, t.azioni, id, consegna);
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
@@ -370,7 +382,7 @@ export function registerFocusLockChatRoutes(app: Express) {
       const attesa = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_agent_msgs
         WHERE googleSub = ${who.sub} AND direzione = 'in' AND stato IN ('attesa', 'lavoro')`);
       res.json({
-        messaggi: lista.map((m: any) => ({ id: Number(m.id), canale: m.canale, direzione: m.direzione, testo: m.testo,
+        messaggi: lista.map((m: any) => ({ id: Number(m.id), inReplyTo: m.inReplyTo ? Number(m.inReplyTo) : null, canale: m.canale, direzione: m.direzione, testo: m.testo,
           azioni: parse(m.azioni), stato: m.stato, at: m.createdAt ? new Date(m.createdAt).getTime() : 0 })),
         inAttesa: Number(attesa[0]?.n || 0) > 0,
       });
