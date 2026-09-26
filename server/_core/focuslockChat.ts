@@ -149,6 +149,19 @@ function claude(): Anthropic {
 const CREDITI_SCOMPONI = Math.max(1, Math.floor(Number(process.env.AGENT_CREDITI_SCOMPONI || 2)));
 /** «Scomponi in passi» arriva dall'app con questo prefisso: la riga da scomporre segue. */
 const PREFISSO_SCOMPONI = "[scomponi] ";
+/* La lettera dell'Io Futuro: la versione della persona che ha gia' raggiunto la sua
+ * destinazione le scrive due righe dopo un passo vero (una sessione, una cosa fatta, un
+ * traguardo della serie). Opus, perche' deve imitare il SUO modo di scrivere: l'app la
+ * chiede solo quando ci sono abbastanza messaggi suoi da cui imparare. */
+const PREFISSO_IOFUTURO = "[iofuturo] ";
+const CREDITI_IOFUTURO = Math.max(1, Math.floor(Number(process.env.AGENT_CREDITI_IOFUTURO || 2)));
+const ISTRUZIONE_IOFUTURO = [
+  "Adesso NON sei l'agente: sei l'IO FUTURO di questa persona, cioe' lei stessa nel giorno in cui ha gia' raggiunto la destinazione scritta nel brief. Le scrivi una lettera cortissima (da 2 a 4 frasi, massimo 280 caratteri) in prima persona, come chi c'e' gia' arrivato e si volta a guardare questo momento preciso.",
+  "SCRIVI COME SCRIVE LEI: stesse parole, stesso ritmo, stessa lunghezza delle frasi, le sue espressioni ricorrenti, la sua punteggiatura, le sue maiuscole, i suoi emoji se li usa (guarda i suoi messaggi qui sotto e copiane la voce, non il contenuto). Deve sembrare un messaggio che si e' scritta da sola.",
+  "VIETATO: la forma «non e' X, e' Y», i trattini lunghi, le frasi da poster motivazionale, le promesse sul futuro. Cita il passo che ha appena fatto e, se ce l'hai, un consiglio concreto che solo chi e' gia' arrivato puo' darle.",
+  "Chiudi con il testo di un pulsante di 1-3 parole, nel suo modo di parlare, con cui lei risponde alla lettera.",
+  "Rispondi SOLO con il blocco ```json {\"iofuturo\": {\"testo\": \"…\", \"bottone\": \"…\"}} ``` e niente altro."
+].join(" ");
 const ISTRUZIONE_SCOMPONI = "Scomponi questa task in 3-5 micro-passi concreti, nell'ordine in cui si fanno, ognuno con un verbo all'inizio e i minuti fra parentesi, tarati sul suo tempo reale. Una riga di commento al massimo, poi SOLO il blocco ```json {\"scomponi\": {\"passi\": [\"…\"]}} ```.";
 /** È una richiesta di roadmap? La prima conversazione, o una domanda sul piano. */
 function eRoadmap(testo: string, primo: boolean): boolean {
@@ -239,8 +252,9 @@ async function rispondiACrediti(id: number): Promise<void> {
   await saldo(sub, m.email ?? null);
   const precedenti = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'out' AND stato IN ('fatto', 'daconsegnare')`);
   const scomponi = String(m.testo || "").startsWith(PREFISSO_SCOMPONI);
-  const roadmap = !scomponi && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
-  const costo = scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : 1);
+  const iofuturo = String(m.testo || "").startsWith(PREFISSO_IOFUTURO);
+  const roadmap = !scomponi && !iofuturo && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
+  const costo = iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : 1));
   if (!(await scala(sub, costo))) {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'crediti' WHERE id = ${id}`);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out",
@@ -250,8 +264,10 @@ async function rispondiACrediti(id: number): Promise<void> {
   try {
     const prof = await rows(sql`SELECT nome, brief FROM focuslock_agent_profilo WHERE googleSub = ${sub} LIMIT 1`);
     const storico = (await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
-      WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%'
-        AND (azioni IS NULL OR azioni NOT LIKE '%"scomponi"%') ORDER BY id DESC LIMIT 12`)).reverse();
+      WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%' AND testo NOT LIKE '[iofuturo]%'
+        AND (azioni IS NULL OR (azioni NOT LIKE '%"scomponi"%' AND azioni NOT LIKE '%"iofuturo"%')) ORDER BY id DESC LIMIT 12`)).reverse();
+    /* la voce dell'utente: i suoi ultimi messaggi veri, per la lettera dell'Io Futuro */
+    const suoi = iofuturo ? (await rows(sql`SELECT testo FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'in' AND testo NOT LIKE '[%' ORDER BY id DESC LIMIT 20`)).reverse() : [];
     const nome = prof[0]?.nome || "Genio";
     const messaggi: { role: string; content: string }[] = [];
     for (const s of storico) {
@@ -263,11 +279,15 @@ async function rispondiACrediti(id: number): Promise<void> {
     while (messaggi.length && messaggi[0].role === "assistant") messaggi.shift();
     const richiesta = scomponi
       ? "TASK DA SCOMPORRE: «" + String(m.testo).slice(PREFISSO_SCOMPONI.length) + "»\n\n" + ISTRUZIONE_SCOMPONI
-      : String(m.testo);
+      : iofuturo
+        ? "IL PASSO CHE HA APPENA FATTO: " + String(m.testo).slice(PREFISSO_IOFUTURO.length)
+          + "\n\nCOME SCRIVE LEI (i suoi messaggi, dal piu' vecchio):\n" + (suoi.length ? suoi.map((s: any) => "- " + String(s.testo || "").slice(0, 400)).join("\n") : "(nessuno)")
+          + "\n\n" + ISTRUZIONE_IOFUTURO
+        : String(m.testo);
     const domanda = `Ti chiami ${nome}. Oggi è ${new Date().toISOString().slice(0, 10)}. Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\nMESSAGGIO:\n${richiesta}`;
     if (messaggi.length && messaggi[messaggi.length - 1].role === "user") messaggi[messaggi.length - 1].content += "\n\n" + domanda;
     else messaggi.push({ role: "user", content: domanda });
-    const testo = await chiamaModello(messaggi, roadmap || scomponi);
+    const testo = await chiamaModello(messaggi, roadmap || scomponi || iofuturo);
     const t = tagliaPiano(testo);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out", t.testo, t.azioni, id, consegna);
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);

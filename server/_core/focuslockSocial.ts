@@ -48,6 +48,15 @@ function ensureTables(): Promise<void> {
         createdAt TIMESTAMP NULL,
         PRIMARY KEY (device, friend)
       )`);
+      /* Il diario di viaggio: le pagine che l'app scrive da sola (traguardi, sessioni, passi
+         della rotta, lettere dell'Io Futuro). Sta qui solo se la persona lo rende pubblico, e
+         lo sfogliano solo i suoi amici. Niente foto: restano sul telefono. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_diari (
+        device VARCHAR(64) PRIMARY KEY,
+        pubblico TINYINT NOT NULL DEFAULT 0,
+        pagine MEDIUMTEXT,
+        updatedAt TIMESTAMP NULL
+      )`);
     })().catch((e) => { tableReady = null; throw e; });
   }
   return tableReady;
@@ -211,6 +220,49 @@ export function registerFocusLockSocialRoutes(app: Express) {
       res.json({ ok: true, friend: { device: f[0].device, name: f[0].name } });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "amico non aggiunto" });
+    }
+  });
+
+  /* Il diario di viaggio: si pubblica (o si ritira) e si legge, solo fra amici. */
+  app.post("/api/focuslock/social/diario", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    const pubblico = b.pubblico ? 1 : 0;
+    let pagine = "[]";
+    try {
+      const arr = Array.isArray(b.pagine) ? b.pagine.slice(0, 300) : [];
+      pagine = JSON.stringify(arr.map((p: any) => ({
+        id: String(p?.id || "").slice(0, 40), tipo: String(p?.tipo || "").slice(0, 24), t: Number(p?.t) || 0,
+        titolo: String(p?.titolo || "").slice(0, 120), testo: String(p?.testo || "").slice(0, 1200),
+        nota: String(p?.nota || "").slice(0, 200), ico: String(p?.ico || "").slice(0, 8),
+      })));
+      if (pagine.length > 900_000) pagine = pagine.slice(0, 900_000);
+    } catch { pagine = "[]"; }
+    try {
+      await ensureTables();
+      await rows(sql`INSERT INTO focuslock_diari (device, pubblico, pagine, updatedAt) VALUES (${device}, ${pubblico}, ${pubblico ? pagine : ""}, NOW())
+        ON DUPLICATE KEY UPDATE pubblico = VALUES(pubblico), pagine = VALUES(pagine), updatedAt = NOW()`);
+      res.json({ ok: true, pubblico: !!pubblico });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "diario non salvato" });
+    }
+  });
+  app.get("/api/focuslock/social/diario", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    const of = String(req.query.of || "").slice(0, 64);
+    if (!device || !of) { res.status(400).json({ error: "parametri mancanti" }); return; }
+    try {
+      await ensureTables();
+      const amici = await rows(sql`SELECT 1 AS k FROM focuslock_friends WHERE device = ${device} AND friend = ${of} LIMIT 1`);
+      if (!amici.length && device !== of) { res.status(403).json({ error: "non siete amici" }); return; }
+      const d = await rows(sql`SELECT d.pubblico, d.pagine, d.updatedAt, p.name FROM focuslock_diari d JOIN focuslock_players p ON p.device = d.device WHERE d.device = ${of} LIMIT 1`);
+      if (!d[0] || !Number(d[0].pubblico)) { res.json({ pubblico: false, pagine: [] }); return; }
+      let pagine: any[] = [];
+      try { pagine = JSON.parse(String(d[0].pagine || "[]")); } catch { pagine = []; }
+      res.json({ pubblico: true, nome: String(d[0].name || ""), pagine, updatedAt: d[0].updatedAt });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "diario non disponibile" });
     }
   });
 
