@@ -44,7 +44,7 @@ export function ensureTables(): Promise<void> {
         "goal VARCHAR(24) NOT NULL DEFAULT ''", "decisions INT NOT NULL DEFAULT 0", "profile VARCHAR(16) NOT NULL DEFAULT ''",
         // la pagina Amici del 27/09/2026: soprannome per la lega, pass ospite a un codice solo,
         // gli aggregati che gli amici vedono (e solo quelli), i punti della lega, le sfide attive
-        "nick VARCHAR(24) NOT NULL DEFAULT ''", "premiumUntil DATETIME NULL", "ffStreak INT NOT NULL DEFAULT 0",
+        "nick VARCHAR(24) NOT NULL DEFAULT ''", "categoria VARCHAR(24) NOT NULL DEFAULT ''", "premiumUntil DATETIME NULL", "ffStreak INT NOT NULL DEFAULT 0",
         "neo INT NOT NULL DEFAULT 0", "old INT NOT NULL DEFAULT 0", "prevScore7 INT NOT NULL DEFAULT 0",
         "legaPunti INT NOT NULL DEFAULT 0", "legaSettimana VARCHAR(10) NOT NULL DEFAULT ''", "legaOptIn TINYINT NOT NULL DEFAULT 0",
         "tier VARCHAR(12) NOT NULL DEFAULT 'bronzo'", "sfide TEXT NULL"]) {

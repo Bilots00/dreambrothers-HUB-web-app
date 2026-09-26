@@ -145,12 +145,15 @@ async function chiudiSettimane(): Promise<void> {
 }
 
 /* ---- l'iscrizione a una lega della settimana ---- */
-async function assegnaLega(device: string, goal: string, tier: string, nick: string, settimana: string): Promise<number> {
+const CATEGORIE = ["studenti", "imprenditori", "lavoratori", "creator", "sportivi"];
+async function assegnaLega(device: string, goal: string, tier: string, nick: string, settimana: string, categoria: string): Promise<number> {
   const gia = await rows(sql`SELECT legaId FROM focuslock_lega_membri WHERE settimana = ${settimana} AND device = ${device}`);
   if (gia[0]) return Number(gia[0].legaId);
-  /* la categoria del Genio, se ha abbastanza gente questa settimana; altrimenti la lega generale */
-  let g = goal || "*";
-  if (g !== "*") {
+  /* la categoria scelta dall'utente (Studenti, Imprenditori...): la lega resta dentro la categoria,
+     e sotto i cinque e' «in formazione». Senza categoria vale la vecchia regola: l'obiettivo del
+     Genio se ha abbastanza gente, altrimenti la lega generale. */
+  let g = categoria && CATEGORIE.indexOf(categoria) >= 0 ? categoria : (goal || "*");
+  if (!categoria && g !== "*") {
     const pool = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE legaOptIn = 1 AND goal = ${g} AND updatedAt > (NOW() - INTERVAL 14 DAY)`);
     if (Number(pool[0]?.k || 0) < LEGA_MIN) g = "*";
   }
@@ -320,11 +323,12 @@ export function registerFocusLockArenaRoutes(app: Express) {
     const b = req.body || {};
     const device = String(b.device || "").slice(0, 64);
     const nick = String(b.nick || "").trim().slice(0, 24);
+    const categoria = CATEGORIE.indexOf(String(b.categoria || "")) >= 0 ? String(b.categoria) : "";
     const optIn = b.optIn === undefined ? true : !!b.optIn;
     if (!device) { res.status(400).json({ error: "device mancante" }); return; }
     try {
       await ensureArena();
-      await rows(sql`UPDATE focuslock_players SET legaOptIn = ${optIn ? 1 : 0}, nick = ${nick} WHERE device = ${device}`);
+      await rows(sql`UPDATE focuslock_players SET legaOptIn = ${optIn ? 1 : 0}, nick = ${nick}, categoria = ${categoria} WHERE device = ${device}`);
       res.json({ ok: true, optIn });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "iscrizione non riuscita" });
@@ -336,7 +340,7 @@ export function registerFocusLockArenaRoutes(app: Express) {
     try {
       await ensureArena();
       await chiudiSettimane();
-      const me = (await rows(sql`SELECT device, name, nick, goal, tier, legaOptIn FROM focuslock_players WHERE device = ${device}`))[0];
+      const me = (await rows(sql`SELECT device, name, nick, goal, tier, legaOptIn, categoria FROM focuslock_players WHERE device = ${device}`))[0];
       if (!me) { res.json({ optIn: false, giocatore: false }); return; }
       const settimana = settimanaCorrente();
       /* il risultato della settimana scorsa, finche' non e' stato visto */
@@ -344,13 +348,13 @@ export function registerFocusLockArenaRoutes(app: Express) {
         FROM focuslock_lega_membri m WHERE m.device = ${device} AND m.settimana < ${settimana} AND m.esito <> '' ORDER BY m.settimana DESC LIMIT 1`);
       const risultato = prec[0] && !Number(prec[0].visto) ? { settimana: String(prec[0].settimana), esito: String(prec[0].esito), posizione: Number(prec[0].posizione), punti: Number(prec[0].punti), tierPrima: String(prec[0].tier), tierOra: String(me.tier || "bronzo"), n: Number(prec[0].n) } : null;
       if (!Number(me.legaOptIn)) { res.json({ optIn: true && false, giocatore: true, tier: String(me.tier || "bronzo"), fine: fineSettimana(), risultato }); return; }
-      const legaId = await assegnaLega(device, String(me.goal || ""), String(me.tier || "bronzo"), String(me.nick || ""), settimana);
+      const legaId = await assegnaLega(device, String(me.goal || ""), String(me.tier || "bronzo"), String(me.nick || ""), settimana, String(me.categoria || ""));
       const lega = (await rows(sql`SELECT id, goal, tier FROM focuslock_leghe WHERE id = ${legaId}`))[0];
       const membri = await rows(sql`SELECT m.device, m.nick, m.punti, p.name, p.updatedAt FROM focuslock_lega_membri m JOIN focuslock_players p ON p.device = m.device WHERE m.legaId = ${legaId} ORDER BY m.punti DESC, m.device ASC`);
       const out = membri.map((m, i) => ({ device: String(m.device), nome: nomeDi(m), punti: Number(m.punti || 0), posizione: i + 1, me: String(m.device) === device }));
       const mio = out.filter((x) => x.me)[0] || null;
       res.json({ optIn: true, giocatore: true, settimana, fine: fineSettimana(), tier: String(lega?.tier || me.tier || "bronzo"), goal: String(lega?.goal || "*"),
-        stato: out.length < LEGA_MIN ? "formazione" : "ok", minimo: LEGA_MIN, membri: out, mio, risultato });
+        categoria: String(me.categoria || ""), stato: out.length < LEGA_MIN ? "formazione" : "ok", minimo: LEGA_MIN, membri: out, mio, risultato });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "lega non disponibile" });
     }
