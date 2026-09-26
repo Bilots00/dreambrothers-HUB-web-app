@@ -13,9 +13,11 @@ import { getDb } from "../db";
 
 const NAME_MAX = 24;
 const BOARD_MAX = 50;
+/* i giorni di Premium che il pass ospite regala a chi invita e a chi entra */
+export const PASS_GIORNI = Math.max(1, Math.floor(Number(process.env.FOCUSLOCK_PASS_GIORNI || 14)));
 
 let tableReady: Promise<void> | null = null;
-function ensureTables(): Promise<void> {
+export function ensureTables(): Promise<void> {
   if (!tableReady) {
     tableReady = (async () => {
       const db = await getDb();
@@ -39,7 +41,13 @@ function ensureTables(): Promise<void> {
       for (const col of ["strictOn TINYINT NOT NULL DEFAULT 0", "bestFocusH INT NOT NULL DEFAULT 0", "bestStreak INT NOT NULL DEFAULT 0", "motto VARCHAR(191) NOT NULL DEFAULT ''",
         // l'obiettivo scelto nell'oracolo: e' la "categoria" della classifica, come i pesi
         // nelle arti marziali — un consiglio vale se viene da chi sta correndo la tua stessa gara
-        "goal VARCHAR(24) NOT NULL DEFAULT ''", "decisions INT NOT NULL DEFAULT 0", "profile VARCHAR(16) NOT NULL DEFAULT ''"]) {
+        "goal VARCHAR(24) NOT NULL DEFAULT ''", "decisions INT NOT NULL DEFAULT 0", "profile VARCHAR(16) NOT NULL DEFAULT ''",
+        // la pagina Amici del 27/09/2026: soprannome per la lega, pass ospite a un codice solo,
+        // gli aggregati che gli amici vedono (e solo quelli), i punti della lega, le sfide attive
+        "nick VARCHAR(24) NOT NULL DEFAULT ''", "premiumUntil DATETIME NULL", "ffStreak INT NOT NULL DEFAULT 0",
+        "neo INT NOT NULL DEFAULT 0", "old INT NOT NULL DEFAULT 0", "prevScore7 INT NOT NULL DEFAULT 0",
+        "legaPunti INT NOT NULL DEFAULT 0", "legaSettimana VARCHAR(10) NOT NULL DEFAULT ''", "legaOptIn TINYINT NOT NULL DEFAULT 0",
+        "tier VARCHAR(12) NOT NULL DEFAULT 'bronzo'", "sfide TEXT NULL"]) {
         try { await db.execute(sql.raw("ALTER TABLE focuslock_players ADD COLUMN " + col)); } catch { /* already there */ }
       }
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_friends (
@@ -51,6 +59,14 @@ function ensureTables(): Promise<void> {
       /* Il diario di viaggio: le pagine che l'app scrive da sola (traguardi, sessioni, passi
          della rotta, lettere dell'Io Futuro). Sta qui solo se la persona lo rende pubblico, e
          lo sfogliano solo i suoi amici. Niente foto: restano sul telefono. */
+      /* Il pass ospite a un codice solo: chi aggiunge un amico col codice regala 14 giorni a
+         tutti e due, una volta per coppia. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_pass_grants (
+        device VARCHAR(64) NOT NULL,
+        friend VARCHAR(64) NOT NULL,
+        createdAt TIMESTAMP NULL,
+        PRIMARY KEY (device, friend)
+      )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_diari (
         device VARCHAR(64) PRIMARY KEY,
         pubblico TINYINT NOT NULL DEFAULT 0,
@@ -61,7 +77,7 @@ function ensureTables(): Promise<void> {
   }
   return tableReady;
 }
-async function rows(q: any): Promise<any[]> {
+export async function rows(q: any): Promise<any[]> {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
   const res: any = await db.execute(q);
@@ -113,7 +129,11 @@ export function registerFocusLockSocialRoutes(app: Express) {
       motto: String(b.motto || "").trim().slice(0, 160),
       goal: String(b.goal || "").trim().slice(0, 24),
       decisions: Math.max(0, Math.min(999999, Number(b.decisions) || 0)),
-      profile: String(b.profile || "").trim().slice(0, 16) };
+      profile: String(b.profile || "").trim().slice(0, 16),
+      nick: String(b.nick || "").trim().slice(0, 24),
+      ffStreak: n(b.ffStreak, 5000), neo: n(b.neo, 100000), old: n(b.old, 100000), prevScore7: n(b.prevScore7, 10000000),
+      legaPunti: n(b.legaPunti, 100000), legaSettimana: String(b.legaSettimana || "").slice(0, 10),
+      sfide: Array.isArray(b.sfide) ? JSON.stringify(b.sfide.slice(0, 20).map((s: any) => ({ id: String(s?.id || "").slice(0, 40), stato: String(s?.stato || "").slice(0, 12) }))) : null };
     const score7 = score7Of(p);
     try {
       await ensureTables();
@@ -132,11 +152,28 @@ export function registerFocusLockSocialRoutes(app: Express) {
         await rows(sql`UPDATE focuslock_players SET name = ${name}, level = ${p.level}, xp = ${p.xp}, streak = ${p.streak}, ffMin7 = ${p.ffMin7}, blocks7 = ${p.blocks7}, score7 = ${score7},
           strictOn = ${p.strictOn}, bestFocusH = ${p.bestFocusH}, bestStreak = ${p.bestStreak}, motto = ${p.motto}, goal = ${p.goal}, decisions = ${p.decisions}, profile = ${p.profile}, updatedAt = NOW() WHERE device = ${device}`);
       }
+      /* gli aggregati sociali e i punti della lega: colonne aggiunte dopo, si aggiornano a parte */
+      try {
+        await rows(sql`UPDATE focuslock_players SET nick = ${p.nick}, ffStreak = ${p.ffStreak}, neo = ${p.neo}, old = ${p.old}, prevScore7 = ${p.prevScore7},
+          legaPunti = ${p.legaPunti}, legaSettimana = ${p.legaSettimana}, sfide = ${p.sfide} WHERE device = ${device}`);
+        if (p.legaSettimana) await rows(sql`UPDATE focuslock_lega_membri SET punti = ${p.legaPunti}, nick = ${p.nick} WHERE settimana = ${p.legaSettimana} AND device = ${device}`);
+        if (p.sfide) {
+          const lista = JSON.parse(p.sfide) as { id: string; stato: string }[];
+          for (const s of lista) if (s.id) await rows(sql`INSERT INTO focuslock_sfide (device, sfidaId, stato, createdAt, updatedAt) VALUES (${device}, ${s.id}, ${s.stato || "attiva"}, NOW(), NOW()) ON DUPLICATE KEY UPDATE stato = VALUES(stato), updatedAt = NOW()`);
+        }
+      } catch (e: any) { console.warn("[social] aggregati:", e?.message || e); }
       const above7 = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND score7 > ${score7}`);
       const aboveAll = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> '' AND xp > ${p.xp}`);
       const total = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE name <> ''`);
       const live = await liveCounts();
-      res.json({ ok: true, code: c, score7, rank7: Number(above7[0]?.k || 0) + 1, rankAll: Number(aboveAll[0]?.k || 0) + 1, players: Number(total[0]?.k || 0), live });
+      let extra: any = {};
+      try {
+        const me = await rows(sql`SELECT premiumUntil, nick, tier, legaOptIn FROM focuslock_players WHERE device = ${device}`);
+        const reaz = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_reazioni WHERE a = ${device} AND createdAt > (NOW() - INTERVAL 7 DAY)`);
+        extra = { premiumUntil: me[0]?.premiumUntil ? new Date(me[0].premiumUntil).toISOString() : null, nick: String(me[0]?.nick || ""), tier: String(me[0]?.tier || "bronzo"),
+          legaOptIn: !!Number(me[0]?.legaOptIn || 0), reazioni7: Number(reaz[0]?.k || 0) };
+      } catch { /* colonne non ancora pronte */ }
+      res.json(Object.assign({ ok: true, code: c, score7, rank7: Number(above7[0]?.k || 0) + 1, rankAll: Number(aboveAll[0]?.k || 0) + 1, players: Number(total[0]?.k || 0), live }, extra));
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "sync fallito" });
     }
@@ -217,7 +254,25 @@ export function registerFocusLockSocialRoutes(app: Express) {
       if (f[0].device === device) { res.status(400).json({ error: "è il tuo codice" }); return; }
       await rows(sql`INSERT IGNORE INTO focuslock_friends (device, friend, createdAt) VALUES (${device}, ${f[0].device}, NOW())`);
       await rows(sql`INSERT IGNORE INTO focuslock_friends (device, friend, createdAt) VALUES (${f[0].device}, ${device}, NOW())`);
-      res.json({ ok: true, friend: { device: f[0].device, name: f[0].name } });
+      /* IL PASS OSPITE, UNA VOLTA PER COPPIA. Chi entra con il codice di un amico regala
+         quattordici giorni di Premium a tutti e due. Il proprio codice e' escluso sopra; la
+         tabella dei grant ferma la seconda volta. */
+      let premiumUntil: string | null = null;
+      let pass = false;
+      try {
+        const a = device < f[0].device ? device : f[0].device, bb = device < f[0].device ? f[0].device : device;
+        const gia = await rows(sql`SELECT 1 AS k FROM focuslock_pass_grants WHERE device = ${a} AND friend = ${bb} LIMIT 1`);
+        if (!gia.length) {
+          await rows(sql`INSERT IGNORE INTO focuslock_pass_grants (device, friend, createdAt) VALUES (${a}, ${bb}, NOW())`);
+          for (const d of [device, f[0].device]) {
+            await rows(sql`UPDATE focuslock_players SET premiumUntil = DATE_ADD(GREATEST(COALESCE(premiumUntil, NOW()), NOW()), INTERVAL ${PASS_GIORNI} DAY) WHERE device = ${d}`);
+          }
+          pass = true;
+        }
+        const me = await rows(sql`SELECT premiumUntil FROM focuslock_players WHERE device = ${device}`);
+        premiumUntil = me[0]?.premiumUntil ? new Date(me[0].premiumUntil).toISOString() : null;
+      } catch (e: any) { console.warn("[social] pass:", e?.message || e); }
+      res.json({ ok: true, friend: { device: f[0].device, name: f[0].name }, pass, passDays: PASS_GIORNI, premiumUntil });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "amico non aggiunto" });
     }
