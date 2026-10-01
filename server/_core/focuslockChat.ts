@@ -162,6 +162,17 @@ const ISTRUZIONE_IOFUTURO = [
   "Chiudi con il testo di un pulsante di 1-3 parole, nel suo modo di parlare, con cui lei risponde alla lettera.",
   "Rispondi SOLO con il blocco ```json {\"iofuturo\": {\"testo\": \"…\", \"bottone\": \"…\"}} ``` e niente altro."
 ].join(" ");
+/* IL CONTROLLO DELL'UMORE (app 0.9.181): una conversazione A PARTE, dedicata solo a come sta
+ * la persona oggi. I messaggi arrivano con questo prefisso, le risposte escono con
+ * azioni.umore = true: la chat principale non li vede e la chat dell'umore vede solo loro. */
+const PREFISSO_UMORE = "[umore] ";
+const ISTRUZIONE_UMORE = [
+  "Adesso sei il suo IO FUTURO dentro al controllo quotidiano dell'umore: una conversazione separata, dedicata solo a come si sente oggi.",
+  "Rispondi in 2-3 frasi brevi e calde, in italiano semplice, come un amico che la conosce bene. Riconosci quello che ti ha detto (il voto, cosa ha influito, il carico di lavoro) senza ripeterlo parola per parola.",
+  "Se la giornata e' storta o il carico e' spesso troppo pesante, niente prediche e niente consigli generici: al massimo UN gesto piccolo e concreto per stasera o domani mattina. Se e' una bella giornata, aiutala a capire cosa l'ha resa tale, cosi' puo' ripeterlo.",
+  "Al massimo UNA domanda, alla fine. VIETATO: la forma «non e' X, e' Y», i trattini lunghi, le frasi da poster motivazionale, la parola «rotta», proporre acquisti."
+].join(" ");
+function eUmore(testo: unknown): boolean { return String(testo || "").startsWith(PREFISSO_UMORE); }
 const ISTRUZIONE_SCOMPONI = "Scomponi questa task in 3-5 micro-passi concreti, nell'ordine in cui si fanno, ognuno con un verbo all'inizio e i minuti fra parentesi, tarati sul suo tempo reale. Una riga di commento al massimo, poi SOLO il blocco ```json {\"scomponi\": {\"passi\": [\"…\"]}} ```.";
 /** È una richiesta di roadmap? La prima conversazione, o una domanda sul piano. */
 function eRoadmap(testo: string, primo: boolean): boolean {
@@ -253,7 +264,8 @@ async function rispondiACrediti(id: number): Promise<void> {
   const precedenti = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'out' AND stato IN ('fatto', 'daconsegnare')`);
   const scomponi = String(m.testo || "").startsWith(PREFISSO_SCOMPONI);
   const iofuturo = String(m.testo || "").startsWith(PREFISSO_IOFUTURO);
-  const roadmap = !scomponi && !iofuturo && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
+  const umore = eUmore(m.testo);
+  const roadmap = !scomponi && !iofuturo && !umore && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
   const costo = iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : 1));
   if (!(await scala(sub, costo))) {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'crediti' WHERE id = ${id}`);
@@ -263,16 +275,22 @@ async function rispondiACrediti(id: number): Promise<void> {
   }
   try {
     const prof = await rows(sql`SELECT nome, brief FROM focuslock_agent_profilo WHERE googleSub = ${sub} LIMIT 1`);
-    const storico = (await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
-      WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%' AND testo NOT LIKE '[iofuturo]%'
-        AND (azioni IS NULL OR (azioni NOT LIKE '%"scomponi"%' AND azioni NOT LIKE '%"iofuturo"%')) ORDER BY id DESC LIMIT 12`)).reverse();
+    /* due conversazioni: quella dell'umore vede solo se stessa (ultimi 14 giorni), quella
+     * principale non vede mai l'umore */
+    const storico = (umore
+      ? await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
+          WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND createdAt >= (NOW() - INTERVAL 14 DAY)
+            AND ((direzione = 'in' AND testo LIKE '[umore]%') OR (direzione = 'out' AND azioni LIKE '%"umore"%')) ORDER BY id DESC LIMIT 12`)
+      : await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
+          WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%' AND testo NOT LIKE '[iofuturo]%' AND testo NOT LIKE '[umore]%'
+            AND (azioni IS NULL OR (azioni NOT LIKE '%"scomponi"%' AND azioni NOT LIKE '%"iofuturo"%' AND azioni NOT LIKE '%"umore"%')) ORDER BY id DESC LIMIT 12`)).reverse();
     /* la voce dell'utente: i suoi ultimi messaggi veri, per la lettera dell'Io Futuro */
     const suoi = iofuturo ? (await rows(sql`SELECT testo FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'in' AND testo NOT LIKE '[%' ORDER BY id DESC LIMIT 20`)).reverse() : [];
     const nome = prof[0]?.nome || "Genio";
     const messaggi: { role: string; content: string }[] = [];
     for (const s of storico) {
       const ruolo = s.direzione === "in" ? "user" : "assistant";
-      const testo = String(s.testo || "").slice(0, 1500);
+      const testo = String(s.testo || "").replace(PREFISSO_UMORE, "").slice(0, 1500);
       if (messaggi.length && messaggi[messaggi.length - 1].role === ruolo) messaggi[messaggi.length - 1].content += "\n" + testo;
       else messaggi.push({ role: ruolo, content: testo });
     }
@@ -283,13 +301,15 @@ async function rispondiACrediti(id: number): Promise<void> {
         ? "IL PASSO CHE HA APPENA FATTO: " + String(m.testo).slice(PREFISSO_IOFUTURO.length)
           + "\n\nCOME SCRIVE LEI (i suoi messaggi, dal piu' vecchio):\n" + (suoi.length ? suoi.map((s: any) => "- " + String(s.testo || "").slice(0, 400)).join("\n") : "(nessuno)")
           + "\n\n" + ISTRUZIONE_IOFUTURO
-        : String(m.testo);
+        : umore
+          ? "CONTROLLO DELL'UMORE DI OGGI: " + String(m.testo).slice(PREFISSO_UMORE.length) + "\n\n" + ISTRUZIONE_UMORE
+          : String(m.testo);
     const domanda = `Ti chiami ${nome}. Oggi è ${new Date().toISOString().slice(0, 10)}. Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\nMESSAGGIO:\n${richiesta}`;
     if (messaggi.length && messaggi[messaggi.length - 1].role === "user") messaggi[messaggi.length - 1].content += "\n\n" + domanda;
     else messaggi.push({ role: "user", content: domanda });
     const testo = await chiamaModello(messaggi, roadmap || scomponi || iofuturo);
-    const t = tagliaPiano(testo);
-    await inserisci(sub, m.email ?? null, m.canale as Canale, "out", t.testo, t.azioni, id, consegna);
+    const t = umore ? { testo: testo.trim(), azioni: { umore: true } } : tagliaPiano(testo);
+    await inserisci(sub, m.email ?? null, m.canale as Canale, "out", t.testo, t.azioni, id, umore ? "fatto" : consegna);
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
     if (m.canale === "whatsapp") {
       const link = await rows(sql`SELECT esterno FROM focuslock_agent_links WHERE googleSub = ${sub} AND canale = 'whatsapp' AND collegatoAt IS NOT NULL LIMIT 1`);
@@ -476,11 +496,17 @@ export function registerFocusLockChatRoutes(app: Express) {
       for (const m of lista) {
         await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'lavoro' WHERE id = ${m.id} AND stato = 'attesa'`);
         const prof = await rows(sql`SELECT nome, brief FROM focuslock_agent_profilo WHERE googleSub = ${m.googleSub} LIMIT 1`);
-        const storico = await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
-          WHERE googleSub = ${m.googleSub} AND id < ${m.id} AND stato <> 'errore' ORDER BY id DESC LIMIT 12`);
+        const storico = eUmore(m.testo)
+          ? await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
+              WHERE googleSub = ${m.googleSub} AND id < ${m.id} AND stato <> 'errore' AND createdAt >= (NOW() - INTERVAL 14 DAY)
+                AND ((direzione = 'in' AND testo LIKE '[umore]%') OR (direzione = 'out' AND azioni LIKE '%"umore"%')) ORDER BY id DESC LIMIT 12`)
+          : await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
+              WHERE googleSub = ${m.googleSub} AND id < ${m.id} AND stato <> 'errore' AND testo NOT LIKE '[umore]%'
+                AND (azioni IS NULL OR azioni NOT LIKE '%"umore"%') ORDER BY id DESC LIMIT 12`);
         const link = await rows(sql`SELECT esterno FROM focuslock_agent_links
           WHERE googleSub = ${m.googleSub} AND canale = ${m.canale} AND collegatoAt IS NOT NULL LIMIT 1`);
-        out.push({ id: Number(m.id), canale: m.canale, testo: m.testo, email: m.email,
+        out.push({ id: Number(m.id), canale: m.canale, email: m.email,
+          testo: eUmore(m.testo) ? "CONTROLLO DELL'UMORE DI OGGI: " + String(m.testo).slice(PREFISSO_UMORE.length) + "\n\n" + ISTRUZIONE_UMORE : m.testo,
           nome: prof[0]?.nome || "Genio", brief: prof[0]?.brief || "",
           storico: storico.reverse().map((s: any) => ({ direzione: s.direzione, testo: s.testo })),
           esterno: link[0]?.esterno || null });
@@ -511,10 +537,11 @@ export function registerFocusLockChatRoutes(app: Express) {
     if (!id || !testo) { res.status(400).json({ error: "id and testo are required" }); return; }
     try {
       await ensureTables();
-      const orig = await rows(sql`SELECT googleSub, email, canale FROM focuslock_agent_msgs WHERE id = ${id} AND direzione = 'in' LIMIT 1`);
+      const orig = await rows(sql`SELECT googleSub, email, canale, testo FROM focuslock_agent_msgs WHERE id = ${id} AND direzione = 'in' LIMIT 1`);
       if (!orig.length) { res.status(404).json({ error: "message not found" }); return; }
       const o = orig[0];
-      const azioni = body.azioni && typeof body.azioni === "object" ? body.azioni : null;
+      let azioni = body.azioni && typeof body.azioni === "object" ? body.azioni : null;
+      if (eUmore(o.testo)) azioni = { ...(azioni || {}), umore: true };
       const outId = await inserisci(String(o.googleSub), o.email ?? null, o.canale as Canale, "out", testo, azioni, id, "fatto");
       await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
       let consegnato = false;
