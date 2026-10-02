@@ -266,11 +266,15 @@ async function appresi(d: Dominio): Promise<any> {
   if (c && Date.now() - c.at < 10 * 60000) return c.body;
   await ensureTables();
   const out: Record<string, Record<string, number[]>> = {};
+  /* QUANTE VOLTE OGNI ENTITA' E' STATA LA RISPOSTA: e' il «a chi pensa la gente» di Akinator.
+   * L'app lo usa per alzare la probabilita' di partenza di chi esce piu' spesso. */
+  const volte: Record<string, number> = {};
   const vinte = await rows(sql`SELECT entita, risposte FROM focuslock_genio_partite
     WHERE dominio = ${d} AND entita IS NOT NULL AND esito IN ('vinto', 'insegnato') ORDER BY id DESC LIMIT 20000`);
   for (const r of vinte) {
     let ris: any = null; try { ris = JSON.parse(String(r.risposte || "{}")); } catch { }
     contaRisposte(out[String(r.entita)] = out[String(r.entita)] || {}, ris);
+    volte[String(r.entita)] = (volte[String(r.entita)] || 0) + 1;
   }
   /* LE ENTITA' NUOVE: almeno due telefoni diversi, e una pagina di Wikipedia */
   const gruppi = await rows(sql`SELECT norma, MAX(nome) AS nome, MAX(wiki) AS wiki, COUNT(DISTINCT dev) AS devs
@@ -297,7 +301,7 @@ async function appresi(d: Dominio): Promise<any> {
     nuove.push({ id: "w_" + nm.replace(/ /g, "_").slice(0, 60), n: String(v.nome || nm), d: String(v.descrizione || ""), w: String(v.wiki || ""),
                  img: String(v.img || ""), cr: String(v.cr || ""), pop: 2, conteggi });
   }
-  const body = { ok: true, dominio: d, appresi: out, nuove, partite: vinte.length };
+  const body = { ok: true, dominio: d, appresi: out, volte, nuove, partite: vinte.length };
   CACHE_APPRESI.set(d, { at: Date.now(), body });
   return body;
 }
