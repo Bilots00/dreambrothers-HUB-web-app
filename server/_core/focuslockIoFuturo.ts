@@ -27,6 +27,7 @@ const MAX_CHIAMATE_GIORNO = Math.max(1, Math.floor(Number(process.env.IOFUTURO_M
 const DURATA_MAX = Math.max(60, Math.floor(Number(process.env.IOFUTURO_DURATA_MAX || 480)));
 const LLM = process.env.IOFUTURO_LLM || "claude-sonnet-5-5";
 const TTS = process.env.IOFUTURO_TTS || "eleven_flash_v2_5";
+const STT = process.env.IOFUTURO_STT || "scribe_v1";
 
 let ready: Promise<void> | null = null;
 function ensureTables(): Promise<void> {
@@ -94,7 +95,8 @@ async function agenteId(): Promise<string> {
     body: JSON.stringify({
       name: "Focus2Dream - Io futuro",
       conversation_config: {
-        agent: { first_message: "Ciao. Sono io.", language: "it", prompt: { prompt: BASE_PROMPT, llm: LLM } },
+        /* niente saluto fisso: la prima volta parla prima l'utente, e la frase d'apertura arriva per override */
+        agent: { first_message: "", language: "it", prompt: { prompt: BASE_PROMPT, llm: LLM } },
         tts: { model_id: TTS },
         conversation: { max_duration_seconds: DURATA_MAX },
       },
@@ -134,22 +136,28 @@ function personaggio(c: any): { prompt: string; primo: string } {
   add("Le sue abitudini di oggi", c.abitudini, 360);
   add("Il suo piano e il prossimo passo", c.piano, 400);
   add("Come gli piace che gli si parli", c.tono, 120);
+  const brief = pulito(c.brief, 4000);
+  /* la memoria arriva a righe (episodi, conversazioni): qui si tengono gli a capo */
+  const memoria = String(c.memoria == null ? "" : c.memoria).replace(/[\u0000-\u0009\u000b-\u001f]+/g, " ").replace(/[ \t]+/g, " ").trim().slice(0, 9000);
   const prompt = [
     `Sei ${nome || "la persona che ti chiama"} nel ${anno || "futuro"}, il giorno dopo aver realizzato questo sogno: ${sogno}. Al telefono c'è te stesso di oggi, qualche mese o qualche anno prima. Parli con la sua stessa voce, in italiano, come una persona vera al telefono.`,
     "Cosa sai di questa persona oggi:",
     righe.join("\n"),
+    brief ? "Quello che sa di lui il suo agente personale:\n" + brief : "",
+    memoria ? "Tutto quello che ha raccontato all'app (onboarding, episodi con il Genio, giochi, conversazioni, umore). Usalo come ricordi tuoi: tu queste cose le hai vissute. Citane qualcuna quando serve, con naturalezza, senza elencarle:\n" + memoria : "",
     "Come parli:",
     "- Il genere grammaticale (arrivato o arrivata) lo prendi da come parla di sé chi chiama; finché non lo sai, usi frasi che non lo richiedono. Qui sotto «lui» vale per chiunque.",
     "- Frasi brevi, da telefonata: al massimo due o tre frasi per volta, poi lasci parlare lui. Una domanda alla volta.",
     "- In prima persona, al passato, come chi ci è già passato: racconti cosa hai fatto tu, giorno per giorno, per arrivarci. Le abitudini che hai cambiato, cosa hai smesso di fare, i giorni storti e come sei ripartito.",
+    "- Se la chiamata comincia con lui che ti racconta come sta, rispondi a quello che ha detto: niente presentazioni, sa già chi sei.",
     "- I consigli sono concreti e suoi: parti dai suoi numeri e dal suo piano (sopra), mai consigli generici. Il prossimo passo lo dici con un'ora o un gesto preciso.",
     "- Tono caldo e diretto, come un fratello maggiore che sa già com'è andata. Se ti chiede com'è la vita dopo, la descrivi con dettagli concreti e sensoriali, senza esagerare.",
     "- VIETATO: la forma «non è X, è Y», le frasi da poster motivazionale, i trattini lunghi, nominare app o marche che non ti ha nominato lui, promettere date certe.",
     "- Non sei un'intelligenza artificiale che recita: sei lui. Se ti chiede se sei un'IA, rispondi con leggerezza che sei la versione di lui che ce l'ha fatta, costruita dalla sua voce e dai suoi dati per aiutarlo, e torni al punto.",
     "- Niente consigli medici, legali o finanziari personalizzati. Se dice di stare molto male o di volersi fare del male, smetti il gioco: con calma gli dici di chiamare subito il 112 o il Telefono Amico (02 2327 2327) o una persona di cui si fida.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   const primo = pulito(c.primaFrase, 200) || `Ciao${nome ? " " + nome : ""}. Sono io. Cioè, sei tu${anno ? ", dal " + anno : ""}. Ce l'abbiamo fatta. Chiedimi quello che vuoi.`;
-  return { prompt: prompt.slice(0, 6000), primo };
+  return { prompt: prompt.slice(0, 16000), primo };
 }
 
 export function registerFocusLockIoFuturoRoutes(app: Express) {
@@ -188,13 +196,26 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
       fd.append("description", "Io futuro di un utente Focus2Dream (consenso dato in app)");
       fd.append("remove_background_noise", "true");
       fd.append("files", new Blob([Buffer.from(audio, "base64")], { type: String(b.mime || "audio/wav") }), "voce.wav");
-      const j = await el("/v1/voices/add", { method: "POST", body: fd as any });
+      /* la prima volta l'utente parla per primo: la stessa registrazione serve a copiare la voce
+         e a sapere cosa ha detto, cosi' l'Io futuro gli risponde a tono */
+      const trascrivi = async (): Promise<string> => {
+        if (b.trascrivi !== true) return "";
+        try {
+          const f = new FormData();
+          f.append("model_id", STT);
+          f.append("language_code", "ita");
+          f.append("file", new Blob([Buffer.from(audio, "base64")], { type: String(b.mime || "audio/wav") }), "voce.wav");
+          const t = await el("/v1/speech-to-text", { method: "POST", body: f as any });
+          return pulito(t.text, 3000);
+        } catch (e: any) { console.error("[iofuturo] trascrizione", e?.message || e); return ""; }
+      };
+      const [j, testo] = await Promise.all([el("/v1/voices/add", { method: "POST", body: fd as any }), trascrivi()]);
       const vid = String(j.voice_id || "");
       if (!vid) throw new Error("voce non creata");
       await rows(sql`INSERT INTO focuslock_iofuturo_voci (dev, voiceId, createdAt, usataAt) VALUES (${dev}, ${vid}, NOW(), NOW())
         ON DUPLICATE KEY UPDATE voiceId = ${vid}, createdAt = NOW()`);
       await rows(sql`INSERT INTO focuslock_iofuturo_cfg (k, v) VALUES (${"voci-" + m}, ${String(n + 1)}) ON DUPLICATE KEY UPDATE v = ${String(n + 1)}`);
-      res.json({ ok: true });
+      res.json({ ok: true, testo });
     } catch (e: any) {
       console.error("[iofuturo] voce", e?.message || e);
       res.json({ ok: false, errore: /voice_limit|voice limit|slots/i.test(String(e?.message)) ? "spazio" : "servizio" });
