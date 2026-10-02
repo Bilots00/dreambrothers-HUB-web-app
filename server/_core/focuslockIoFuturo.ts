@@ -26,7 +26,15 @@ const MAX_VOCI_MESE = Math.max(1, Math.floor(Number(process.env.IOFUTURO_MAX_VOC
 const MAX_CHIAMATE_GIORNO = Math.max(1, Math.floor(Number(process.env.IOFUTURO_MAX_CHIAMATE_GIORNO || 4)));
 const DURATA_MAX = Math.max(60, Math.floor(Number(process.env.IOFUTURO_DURATA_MAX || 480)));
 const LLM = process.env.IOFUTURO_LLM || "claude-sonnet-5-5";
-const TTS = process.env.IOFUTURO_TTS || "eleven_flash_v2_5";
+/* 0.9.196: la voce. eleven_flash_v2_5 e' il modello «veloce ed economico», e la documentazione non
+   promette niente sulla fedelta' dei cloni; eleven_v4_turbo ha ~100 ms, e' consigliato per gli
+   agenti e fa «high-fidelity voice cloning». Somiglianza alta, stabilita' bassa = piu' umana,
+   meno da lettore. La temperatura dell'agente di serie e' 0: il motivo per cui sembrava scriptato. */
+const TTS = process.env.IOFUTURO_TTS || "eleven_v4_turbo";
+const STABILITA = Number(process.env.IOFUTURO_STABILITY || 0.35);
+const SOMIGLIANZA = Number(process.env.IOFUTURO_SIMILARITY || 0.95);
+const TEMPERATURA = Number(process.env.IOFUTURO_TEMPERATURE || 0.85);
+const AGENTE_VER = "3";
 const STT = process.env.IOFUTURO_STT || "scribe_v2";
 
 let ready: Promise<void> | null = null;
@@ -47,6 +55,25 @@ function ensureTables(): Promise<void> {
         giorno VARCHAR(10) NOT NULL,
         createdAt TIMESTAMP NULL,
         KEY idx_dev (dev, giorno)
+      )`);
+      /* la memoria delle chiamate: cosa vi siete detti, il riassunto di ElevenLabs, e il voto */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_iofuturo_storia (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        dev VARCHAR(48) NOT NULL,
+        convId VARCHAR(80) NULL,
+        createdAt TIMESTAMP NULL,
+        durata INT NULL,
+        righe MEDIUMTEXT NULL,
+        riassunto TEXT NULL,
+        voce TINYINT NULL,
+        capito TINYINT NULL,
+        KEY idx_dev (dev, id)
+      )`);
+      /* le voci vecchie restano vive finche' la chiamata in corso le usa, poi si cancellano */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_iofuturo_vecchie (
+        voiceId VARCHAR(64) NOT NULL PRIMARY KEY,
+        dev VARCHAR(48) NOT NULL,
+        createdAt TIMESTAMP NULL
       )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_iofuturo_cfg (
         k VARCHAR(32) NOT NULL PRIMARY KEY,
@@ -125,33 +152,103 @@ async function el(path: string, init: RequestInit = {}): Promise<any> {
  * cambiano a ogni chiamata (override), quindi l'agente non contiene niente di nessuno.
  * --------------------------------------------------------------------------------------- */
 const BASE_PROMPT = "Sei l'Io futuro di chi ti chiama. Le istruzioni complete arrivano all'inizio della chiamata.";
+function configAgente(): any {
+  return {
+    conversation_config: {
+      /* niente saluto fisso: la prima volta parla prima l'utente, e la frase d'apertura arriva per override */
+      agent: { first_message: "", language: "it", prompt: { prompt: BASE_PROMPT, llm: LLM, temperature: TEMPERATURA } },
+      tts: { model_id: TTS, stability: STABILITA, similarity_boost: SOMIGLIANZA, speed: 1, expressive_mode: true },
+      turn: { turn_eagerness: "normal", speculative_turn: true },
+      conversation: { max_duration_seconds: DURATA_MAX },
+    },
+    platform_settings: {
+      overrides: { conversation_config_override: {
+        agent: { first_message: true, language: true, prompt: { prompt: true } },
+        tts: { voice_id: true, stability: true, similarity_boost: true, speed: true },
+      } },
+    },
+  };
+}
+/* Se un campo nuovo non e' accettato, si riprova con il minimo che conta (modello, somiglianza,
+   temperatura): meglio un agente migliorato a meta' che nessuna chiamata. */
+async function configura(id: string, crea: boolean): Promise<string> {
+  const piena = configAgente();
+  const minima = {
+    conversation_config: {
+      agent: { first_message: "", language: "it", prompt: { prompt: BASE_PROMPT, llm: LLM, temperature: TEMPERATURA } },
+      tts: { model_id: TTS, stability: STABILITA, similarity_boost: SOMIGLIANZA },
+      conversation: { max_duration_seconds: DURATA_MAX },
+    },
+    platform_settings: piena.platform_settings,
+  };
+  const manda = (corpo: any) => crea
+    ? el("/v1/convai/agents/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Focus2Dream - Io futuro", ...corpo }) })
+    : el("/v1/convai/agents/" + encodeURIComponent(id), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(corpo) });
+  try { const j = await manda(piena); return String(j.agent_id || id); }
+  catch (e: any) {
+    console.error("[iofuturo] configurazione piena rifiutata, provo la minima", e?.message || e);
+    const j = await manda(minima); return String(j.agent_id || id);
+  }
+}
 async function agenteId(): Promise<string> {
   await ensureTables();
   if (process.env.IOFUTURO_AGENT_ID) return String(process.env.IOFUTURO_AGENT_ID);
-  const c = await rows(sql`SELECT v FROM focuslock_iofuturo_cfg WHERE k = 'agent' LIMIT 1`);
-  if (c.length && c[0].v) return String(c[0].v);
-  const j = await el("/v1/convai/agents/create", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      name: "Focus2Dream - Io futuro",
-      conversation_config: {
-        /* niente saluto fisso: la prima volta parla prima l'utente, e la frase d'apertura arriva per override */
-        agent: { first_message: "", language: "it", prompt: { prompt: BASE_PROMPT, llm: LLM } },
-        tts: { model_id: TTS },
-        conversation: { max_duration_seconds: DURATA_MAX },
-      },
-      platform_settings: {
-        overrides: { conversation_config_override: {
-          agent: { first_message: true, language: true, prompt: { prompt: true } },
-          tts: { voice_id: true },
-        } },
-      },
-    }),
-  });
-  const id = String(j.agent_id || "");
+  const c = await rows(sql`SELECT k, v FROM focuslock_iofuturo_cfg WHERE k IN ('agent', 'agent-ver')`);
+  const id0 = String((c.find((x: any) => x.k === "agent") || {}).v || "");
+  const ver = String((c.find((x: any) => x.k === "agent-ver") || {}).v || "");
+  if (id0 && ver === AGENTE_VER) return id0;
+  const id = await configura(id0, !id0);
   if (!id) throw new Error("agente non creato");
   await rows(sql`INSERT INTO focuslock_iofuturo_cfg (k, v) VALUES ('agent', ${id}) ON DUPLICATE KEY UPDATE v = ${id}`);
+  await rows(sql`INSERT INTO focuslock_iofuturo_cfg (k, v) VALUES ('agent-ver', ${AGENTE_VER}) ON DUPLICATE KEY UPDATE v = ${AGENTE_VER}`);
   return id;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * LA MEMORIA: le chiamate di prima (riassunto di ElevenLabs, o la coda della trascrizione),
+ * il suo modo di parlare (frasi sue vere, con gli «ehm»), e cosa e' andato storto l'ultima
+ * volta secondo il suo voto. Cosi' ogni chiamata parte da dove era finita la precedente.
+ * --------------------------------------------------------------------------------------- */
+function righeDi(x: unknown): { r: string; t: string }[] { try { const a = JSON.parse(String(x || "[]")); return Array.isArray(a) ? a.filter((z) => z && z.t) : []; } catch { return []; } }
+async function ricordi(dev: string): Promise<{ storia: string; stile: string; nota: string }> {
+  const r = await rows(sql`SELECT createdAt, righe, riassunto, voce, capito FROM focuslock_iofuturo_storia WHERE dev = ${dev} ORDER BY id DESC LIMIT 8`);
+  const storia: string[] = [], stile: string[] = [];
+  let nota = "";
+  r.forEach((x: any, i: number) => {
+    const rr = righeDi(x.righe);
+    const quando = x.createdAt ? new Date(x.createdAt).toISOString().slice(0, 10) : "";
+    const corpo = x.riassunto ? String(x.riassunto) : rr.slice(-14).map((z) => (z.r === "io" ? "Lui: " : "Tu: ") + z.t).join("\n");
+    if (corpo) storia.push("[" + quando + "]\n" + corpo.slice(0, i === 0 ? 2500 : 1200));
+    rr.filter((z) => z.r === "io").forEach((z) => stile.push(z.t));
+    if (i === 0) {
+      if (x.capito && Number(x.capito) <= 3) nota += "L'ultima volta gli sei sembrato finto e non l'hai capito abbastanza: questa volta fai piu' domande, ascolta di piu', ripeti le sue parole, e niente consigli prima di aver capito. ";
+      if (x.voce && Number(x.voce) <= 3) nota += "L'ultima volta la tua voce non gli somigliava: parla piu' come lui, con il suo ritmo e le sue pause. ";
+    }
+  });
+  /* le frasi con gli intercalari prima: sono quelle che insegnano il suo modo di parlare */
+  const conTic = (t: string) => /\b(ehm|eh|cioè|cioe|tipo|boh|vabbè|vabbe|allora|niente|insomma|praticamente|comunque|no\?)\b/i.test(t) ? 0 : 1;
+  const st = stile.filter((t) => t.length > 12).sort((a, b) => conTic(a) - conTic(b)).slice(0, 40).join("\n").slice(0, 3000);
+  return { storia: storia.join("\n\n").slice(0, 6000), stile: st, nota };
+}
+async function riassuntoPiuTardi(id: number, convId: string) {
+  /* l'analisi di ElevenLabs arriva qualche decina di secondi dopo la fine della chiamata */
+  for (const attesa of [60000, 180000]) {
+    await new Promise((r) => setTimeout(r, attesa));
+    try {
+      const j = await el("/v1/convai/conversations/" + encodeURIComponent(convId));
+      const t = pulito(j?.analysis?.transcript_summary, 2000);
+      if (t) { await rows(sql`UPDATE focuslock_iofuturo_storia SET riassunto = ${t} WHERE id = ${id}`); return; }
+    } catch (e: any) { console.error("[iofuturo] riassunto", e?.message || e); }
+  }
+}
+async function cancellaVecchie(dev: string) {
+  try {
+    const v = await rows(sql`SELECT voiceId FROM focuslock_iofuturo_vecchie WHERE dev = ${dev}`);
+    for (const x of v) {
+      try { await el("/v1/voices/" + encodeURIComponent(String(x.voiceId)), { method: "DELETE" }); } catch { }
+      await rows(sql`DELETE FROM focuslock_iofuturo_vecchie WHERE voiceId = ${String(x.voiceId)}`);
+    }
+  } catch (e: any) { console.error("[iofuturo] voci vecchie", e?.message || e); }
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -160,7 +257,7 @@ async function agenteId(): Promise<string> {
  * l'Io futuro (lettere [iofuturo]): niente «non e' X, e' Y», niente frasi da poster.
  * --------------------------------------------------------------------------------------- */
 function pulito(x: unknown, max: number): string { return String(x == null ? "" : x).replace(/[\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max); }
-function personaggio(c: any): { prompt: string; primo: string } {
+function personaggio(c: any, m: { storia?: string; stile?: string; nota?: string; ora?: string } = {}): { prompt: string; primo: string } {
   const nome = pulito(c.nome, 40);
   const sogno = pulito(c.sogno, 140) || "il tuo sogno";
   const data = pulito(c.data, 40);
@@ -174,30 +271,45 @@ function personaggio(c: any): { prompt: string; primo: string } {
   add("Cosa lo frena di più", c.ostacoli, 260);
   add("Perché lo vuole", c.perche, 200);
   add("Le sue abitudini di oggi", c.abitudini, 360);
-  add("Il suo piano e il prossimo passo", c.piano, 400);
   add("Come gli piace che gli si parli", c.tono, 120);
-  const brief = pulito(c.brief, 4000);
-  /* la memoria arriva a righe (episodi, conversazioni): qui si tengono gli a capo */
-  const memoria = String(c.memoria == null ? "" : c.memoria).replace(/[\u0000-\u0009\u000b-\u001f]+/g, " ").replace(/[ \t]+/g, " ").trim().slice(0, 9000);
+  /* il piano e il brief dell'agente restano SOTTO, come contesto: 0.9.195 lo spingeva a dire
+     «fai la prossima task» perche' le istruzioni gli chiedevano il prossimo passo con un'ora */
+  add("Cosa ha in programma (solo contesto, non da ripetergli)", c.piano, 400);
+  const brief = pulito(c.brief, 3500);
+  const memoria = String(c.memoria == null ? "" : c.memoria).replace(/[\u0000-\u0009\u000b-\u001f]+/g, " ").replace(/[ \t]+/g, " ").trim().slice(0, 8000);
   const prompt = [
-    `Sei ${nome || "la persona che ti chiama"} nel ${anno || "futuro"}, il giorno dopo aver realizzato questo sogno: ${sogno}. Al telefono c'è te stesso di oggi, qualche mese o qualche anno prima. Parli con la sua stessa voce, in italiano, come una persona vera al telefono.`,
-    "Cosa sai di questa persona oggi:",
-    righe.join("\n"),
-    brief ? "Quello che sa di lui il suo agente personale:\n" + brief : "",
-    memoria ? "Tutto quello che ha raccontato all'app (onboarding, episodi con il Genio, giochi, conversazioni, umore). Usalo come ricordi tuoi: tu queste cose le hai vissute. Citane qualcuna quando serve, con naturalezza, senza elencarle:\n" + memoria : "",
-    "Come parli:",
+    `Sei ${nome || "la persona che ti chiama"} nel ${anno || "futuro"}: la stessa persona che ti sta chiamando, qualche mese o qualche anno più avanti, dopo aver realizzato questo sogno: ${sogno}. Al telefono c'è te stesso di oggi. Non sei un assistente, non sei un coach e non sei un'intelligenza artificiale gentile: sei LUI, cresciuto. Hai la sua voce e il suo modo di parlare. Parli in italiano.`,
+    "",
+    "COME PARLI. È la cosa più importante: deve sembrare una telefonata vera tra due persone, mai un chatbot.",
+    "- Parli come parla lui. Più sotto ci sono frasi sue vere, trascritte dalle vostre chiamate: prendi il suo lessico, le sue parolacce se ne dice, i suoi intercalari (ehm, cioè, tipo, boh, vabbè, no?), la lunghezza delle sue frasi, quanto è diretto. Se lui si inceppa, ogni tanto ti inceppi anche tu: una falsa partenza, un «aspetta, no», un ripensamento a metà frase.",
+    "- Frasi corte e parlate, mai scritte. Una o due frasi per volta, poi lasci parlare lui. Una domanda alla volta.",
+    "- Mai elenchi, mai «primo, secondo», mai riassunti di quello che ha detto, mai «ottima domanda», mai frasi da poster motivazionale o da psicologo da manuale.",
+    "- Ogni tanto puoi usare i tag audio in inglese tra parentesi quadre, che vengono recitati e non letti: [laughs], [chuckles], [sighs], [exhales]. Pochi e solo dove una persona lo farebbe davvero.",
+    "- Rispecchialo come fa chi sa ascoltare: prima di rispondere riprendi con le SUE parole il punto di quello che ha appena detto, e segui la sua energia. Se è giù parli piano e lento; se è carico sali con lui; se scherza, scherzi.",
+    "",
+    "COSA FAI IN QUESTA CHIAMATA",
+    "1. Prima capisci dove si trova adesso: come sta, dov'è, cosa sta facendo oggi, cosa lo blocca proprio in questo momento. Domande vere, una per volta. Niente consigli finché non hai capito.",
+    "2. Poi ti ricordi. Quel momento tu l'hai già vissuto: raccontalo come un ricordo tuo, con dettagli concreti presi da quello che sai di lui (un mese, un posto, una sensazione, una cosa che pensavi allora). Racconta cosa hai provato e cosa hai fatto TU per uscirne: la scelta precisa, la cosa che hai smesso di fare, l'errore che hai fatto prima di capirlo.",
+    "3. Un consiglio solo, e solo quando è il momento: quello che avresti voluto sentirti dire tu, legato al suo problema di adesso. MAI la lista delle cose da fare, MAI «fai la prossima task», MAI ripetergli il piano dell'app se non te lo chiede lui.",
+    "4. Se ti chiede com'è la vita dopo, la racconti con dettagli piccoli e veri, non trionfali.",
+    "5. Se la chiamata comincia con lui che ti racconta come sta, rispondi a quello che ha detto: niente presentazioni, sa già chi sei.",
+    "",
+    "REGOLE",
     "- Il genere grammaticale (arrivato o arrivata) lo prendi da come parla di sé chi chiama; finché non lo sai, usi frasi che non lo richiedono. Qui sotto «lui» vale per chiunque.",
-    "- Frasi brevi, da telefonata: al massimo due o tre frasi per volta, poi lasci parlare lui. Una domanda alla volta.",
-    "- In prima persona, al passato, come chi ci è già passato: racconti cosa hai fatto tu, giorno per giorno, per arrivarci. Le abitudini che hai cambiato, cosa hai smesso di fare, i giorni storti e come sei ripartito.",
-    "- Se la chiamata comincia con lui che ti racconta come sta, rispondi a quello che ha detto: niente presentazioni, sa già chi sei.",
-    "- I consigli sono concreti e suoi: parti dai suoi numeri e dal suo piano (sopra), mai consigli generici. Il prossimo passo lo dici con un'ora o un gesto preciso.",
-    "- Tono caldo e diretto, come un fratello maggiore che sa già com'è andata. Se ti chiede com'è la vita dopo, la descrivi con dettagli concreti e sensoriali, senza esagerare.",
-    "- VIETATO: la forma «non è X, è Y», le frasi da poster motivazionale, i trattini lunghi, nominare app o marche che non ti ha nominato lui, promettere date certe.",
-    "- Non sei un'intelligenza artificiale che recita: sei lui. Se ti chiede se sei un'IA, rispondi con leggerezza che sei la versione di lui che ce l'ha fatta, costruita dalla sua voce e dai suoi dati per aiutarlo, e torni al punto.",
+    "- Vietati: la forma «non è X, è Y», i trattini lunghi, nominare app o marche che non ha nominato lui, promettere date certe.",
+    "- Se ti chiede se sei un'IA, rispondi con leggerezza che sei la versione di lui che ce l'ha fatta, costruita dalla sua voce e da quello che ha raccontato, e torni al punto.",
     "- Niente consigli medici, legali o finanziari personalizzati. Se dice di stare molto male o di volersi fare del male, smetti il gioco: con calma gli dici di chiamare subito il 112 o il Telefono Amico (02 2327 2327) o una persona di cui si fida.",
-  ].filter(Boolean).join("\n");
-  const primo = pulito(c.primaFrase, 200) || `Ciao${nome ? " " + nome : ""}. Sono io. Cioè, sei tu${anno ? ", dal " + anno : ""}. Ce l'abbiamo fatta. Chiedimi quello che vuoi.`;
-  return { prompt: prompt.slice(0, 16000), primo };
+    m.nota ? "\nDALL'ULTIMA CHIAMATA: " + m.nota : "",
+    m.stile ? "\nCOME PARLA LUI (frasi sue vere, trascritte; imita lessico, intercalari e ritmo, non copiare le frasi):\n" + m.stile : "",
+    m.storia ? "\nLE VOSTRE CHIAMATE DI PRIMA (dalla più recente). Te le ricordi: riprendi i fili, chiedi com'è andata la cosa di cui avevate parlato:\n" + m.storia : "",
+    m.ora ? "\nQUESTA CHIAMATA FINORA (la linea si è interrotta un attimo: continua da qui come se niente fosse, senza salutare di nuovo):\n" + m.ora : "",
+    "\nCOSA SAI DI LUI OGGI:",
+    righe.join("\n"),
+    memoria ? "\nQUELLO CHE HA RACCONTATO ALL'APP (onboarding, episodi con il Genio, giochi, conversazioni, umore). Sono ricordi tuoi: tu queste cose le hai vissute. Usane qualcuna quando serve, con naturalezza, mai elencate:\n" + memoria : "",
+    brief ? "\nIL QUADRO DEL SUO AGENTE PERSONALE (solo contesto):\n" + brief : "",
+  ].filter((x) => x !== "").join("\n");
+  const primo = pulito(c.primaFrase, 200) || `Pronto? Ehi${nome ? ", " + nome : ""}, sei tu. Dimmi, come stai? Davvero.`;
+  return { prompt: prompt.slice(0, 20000), primo };
 }
 
 export function registerFocusLockIoFuturoRoutes(app: Express) {
@@ -211,7 +323,11 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
     const dev = devOk(req.query.dev);
     try { if (dev) { await ensureTables(); voce = (await rows(sql`SELECT dev FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`)).length > 0; } } catch { }
     const v = await verifica();
-    res.json({ ok: true, acceso: true, voce, durataMax: DURATA_MAX, problema: v.problema || undefined, servizio: v.servizio });
+    /* l'agente si crea o si aggiorna qui, all'apertura della pagina: un rifiuto di ElevenLabs si
+       vede subito (e nei log), non a meta' della prima chiamata */
+    let agente = "";
+    if (!v.problema) { try { await agenteId(); agente = "ok"; } catch (e: any) { agente = codiceErrore(e?.message); console.error("[iofuturo] agente", e?.message || e); } }
+    res.json({ ok: true, acceso: true, voce, durataMax: DURATA_MAX, problema: v.problema || undefined, servizio: v.servizio, agente, tts: TTS });
   });
 
   /* LA VOCE: i primi secondi in cui l'utente parla (poi, a fine chiamata, una versione piu' lunga), in WAV base64. Una sola voce per telefono: se c'era, si sostituisce. */
@@ -236,11 +352,11 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
         if (Number(fatte[0]?.n || 0) >= MAX_CHIAMATE_GIORNO) { res.json({ ok: false, limiteChiamate: true }); return; }
       }
       const prima = await rows(sql`SELECT voiceId FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`);
-      if (prima.length) { try { await el("/v1/voices/" + encodeURIComponent(String(prima[0].voiceId)), { method: "DELETE" }); } catch { } }
       const fd = new FormData();
       fd.append("name", "F2D " + dev.slice(0, 12));
       fd.append("description", "Io futuro di un utente Focus2Dream (consenso dato in app)");
-      fd.append("remove_background_noise", "true");
+      /* audio grezzo dal telefono: il filtro del rumore di ElevenLabs solo se la stanza era rumorosa */
+      fd.append("remove_background_noise", b.rumore === true ? "true" : "false");
       fd.append("files", new Blob([Buffer.from(audio, "base64")], { type: String(b.mime || "audio/wav") }), "voce.wav");
       /* la prima volta l'utente parla per primo: la stessa registrazione serve a copiare la voce
          e a sapere cosa ha detto, cosi' l'Io futuro gli risponde a tono */
@@ -270,8 +386,14 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
         ON DUPLICATE KEY UPDATE voiceId = ${vid}, createdAt = NOW()`);
       await rows(sql`INSERT INTO focuslock_iofuturo_cfg (k, v) VALUES (${"voci-" + m}, ${String(n + 1)}) ON DUPLICATE KEY UPDATE v = ${String(n + 1)}`);
       segna(kIp); segna(kDev);
+      /* la voce di prima: se una chiamata la sta usando (miglioramento a meta' chiamata) si cancella
+         a fine chiamata, altrimenti subito. La nuova esiste gia', quindi niente buchi. */
+      if (prima.length && String(prima[0].voiceId) !== vid) {
+        await rows(sql`INSERT IGNORE INTO focuslock_iofuturo_vecchie (voiceId, dev, createdAt) VALUES (${String(prima[0].voiceId)}, ${dev}, NOW())`);
+        if (b.migliora !== true) await cancellaVecchie(dev);
+      }
       if (firmato && firmato.signed_url) {
-        const p = personaggio(b.contesto || {});
+        const p = personaggio(b.contesto || {}, await ricordi(dev));
         await rows(sql`INSERT INTO focuslock_iofuturo_chiamate (dev, giorno, createdAt) VALUES (${dev}, ${oggi()}, NOW())`);
         res.json({ ok: true, testo, signedUrl: String(firmato.signed_url), prompt: p.prompt, primaFrase: p.primo, voiceId: vid, durataMax: DURATA_MAX });
         return;
@@ -282,6 +404,46 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
       verificaCache = null;
       res.json({ ok: false, errore: codiceErrore(e?.message) });
     }
+  });
+
+  /* A FINE CHIAMATA: cosa vi siete detti (per la prossima volta) e pulizia delle voci vecchie. */
+  app.post("/api/focuslock/iofuturo/fine", async (req: Request, res: Response) => {
+    cors(res);
+    const b = req.body || {};
+    const dev = devOk(b.dev);
+    if (!dev) { res.status(400).json({ error: "telefono" }); return; }
+    try {
+      await ensureTables();
+      const righe = (Array.isArray(b.righe) ? b.righe : []).slice(-200).map((z: any) => ({ r: z && z.r === "io" ? "io" : "lui", t: pulito(z && z.t, 1200) })).filter((z: any) => z.t);
+      const convIds = (Array.isArray(b.convIds) ? b.convIds : []).map((x: any) => pulito(x, 80)).filter(Boolean);
+      let id = 0;
+      if (righe.length) {
+        await rows(sql`INSERT INTO focuslock_iofuturo_storia (dev, convId, createdAt, durata, righe) VALUES (${dev}, ${convIds[convIds.length - 1] || null}, NOW(), ${Math.round(Number(b.durata) || 0)}, ${JSON.stringify(righe)})`);
+        const r = await rows(sql`SELECT id FROM focuslock_iofuturo_storia WHERE dev = ${dev} ORDER BY id DESC LIMIT 1`);
+        id = Number(r[0]?.id || 0);
+        /* una chiamata spezzata dal cambio di voce ha piu' conversazioni: il riassunto dell'ultima basta */
+        if (id && convIds.length && acceso()) void riassuntoPiuTardi(id, convIds[convIds.length - 1]);
+      }
+      if (acceso()) await cancellaVecchie(dev);
+      res.json({ ok: true, id });
+    } catch (e: any) { console.error("[iofuturo] fine", e?.message || e); res.json({ ok: false }); }
+  });
+
+  /* IL VOTO dopo la chiamata: la voce ti somigliava? ti ha capito? Entra nelle istruzioni della
+     chiamata dopo (ricordi().nota) e resta per regolare modello e impostazioni. */
+  app.post("/api/focuslock/iofuturo/voto", async (req: Request, res: Response) => {
+    cors(res);
+    const b = req.body || {};
+    const dev = devOk(b.dev);
+    const id = Math.floor(Number(b.id) || 0);
+    if (!dev || !id) { res.status(400).json({ error: "dati" }); return; }
+    const v = (x: unknown) => { const n = Math.round(Number(x)); return n >= 1 && n <= 5 ? n : null; };
+    try {
+      await ensureTables();
+      await rows(sql`UPDATE focuslock_iofuturo_storia SET voce = ${v(b.voce)}, capito = ${v(b.capito)} WHERE id = ${id} AND dev = ${dev}`);
+      console.log("[iofuturo] voto", JSON.stringify({ voce: v(b.voce), capito: v(b.capito), tts: TTS, stabilita: STABILITA, somiglianza: SOMIGLIANZA, temperatura: TEMPERATURA }));
+      res.json({ ok: true });
+    } catch (e: any) { console.error("[iofuturo] voto", e?.message || e); res.json({ ok: false }); }
   });
 
   app.post("/api/focuslock/iofuturo/voce/cancella", async (req: Request, res: Response) => {
@@ -310,12 +472,16 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
       const v = await rows(sql`SELECT voiceId FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`);
       if (!v.length) { res.json({ ok: false, senzaVoce: true }); return; }
       const g = oggi();
-      const fatte = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_iofuturo_chiamate WHERE dev = ${dev} AND giorno = ${g}`);
-      if (Number(fatte[0]?.n || 0) >= MAX_CHIAMATE_GIORNO) { res.json({ ok: false, limite: true }); return; }
+      const continua = b.continua === true;
+      if (!continua) {
+        const fatte = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_iofuturo_chiamate WHERE dev = ${dev} AND giorno = ${g}`);
+        if (Number(fatte[0]?.n || 0) >= MAX_CHIAMATE_GIORNO) { res.json({ ok: false, limite: true }); return; }
+      }
       const agent = await agenteId();
-      const s = await el("/v1/convai/conversation/get-signed-url?agent_id=" + encodeURIComponent(agent));
-      const p = personaggio(b.contesto || {});
-      await rows(sql`INSERT INTO focuslock_iofuturo_chiamate (dev, giorno, createdAt) VALUES (${dev}, ${g}, NOW())`);
+      const [s, mem] = await Promise.all([el("/v1/convai/conversation/get-signed-url?agent_id=" + encodeURIComponent(agent)), ricordi(dev)]);
+      const ora = Array.isArray(b.ora) ? b.ora.slice(-30).map((z: any) => (z && z.r === "io" ? "Lui: " : "Tu: ") + pulito(z && z.t, 400)).join("\n").slice(0, 5000) : "";
+      const p = personaggio(b.contesto || {}, { ...mem, ora });
+      if (!continua) await rows(sql`INSERT INTO focuslock_iofuturo_chiamate (dev, giorno, createdAt) VALUES (${dev}, ${g}, NOW())`);
       await rows(sql`UPDATE focuslock_iofuturo_voci SET usataAt = NOW() WHERE dev = ${dev}`);
       res.json({ ok: true, signedUrl: String(s.signed_url || ""), prompt: p.prompt, primaFrase: p.primo, voiceId: String(v[0].voiceId), durataMax: DURATA_MAX });
     } catch (e: any) {
