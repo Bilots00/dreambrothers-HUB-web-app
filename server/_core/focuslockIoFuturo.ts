@@ -340,7 +340,7 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
     const kIp = "voce:" + ipDi(req), kDev = "voce:" + dev;
     if (pieno(kIp, 8, 86400000) || pieno(kDev, 4, 86400000)) { res.json({ ok: false, errore: "troppe" }); return; }
     const audio = String(b.audio || "");
-    if (audio.length < 50000 || audio.length > 12_000_000) { res.status(400).json({ error: "registrazione troppo corta o troppo lunga" }); return; }
+    if (audio.length < 50000 || audio.length > 16_000_000) { res.status(400).json({ error: "registrazione troppo corta o troppo lunga" }); return; }
     try {
       await ensureTables();
       const m = mese();
