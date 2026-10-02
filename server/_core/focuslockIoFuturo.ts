@@ -68,6 +68,42 @@ function troppe(k: string, max: number, ms: number): boolean {
   if (v.length >= max) { finestre.set(k, v); return true; }
   v.push(ora); finestre.set(k, v); if (finestre.size > 20000) finestre.clear(); return false;
 }
+/* per le voci si conta solo quello che e' riuscito: un tentativo fallito per colpa nostra (chiave
+   sbagliata, rete) non deve lasciare l'utente chiuso fuori per un giorno */
+function pieno(k: string, max: number, ms: number): boolean { const ora = Date.now(); return (finestre.get(k) || []).filter((t) => ora - t < ms).length >= max; }
+function segna(k: string) { const v = finestre.get(k) || []; v.push(Date.now()); finestre.set(k, v); }
+
+/* Un nome per ogni guasto di ElevenLabs, cosi' l'app dice la cosa giusta invece di «riprova». */
+function codiceErrore(msg: unknown): string {
+  const m = String(msg || "");
+  if (/api_key_id_used_as_api_key|invalid_api_key|401/i.test(m)) return "chiave";
+  if (/missing_permissions|permission/i.test(m)) return "permessi";
+  if (/can_not_use_instant_voice_cloning|subscription|upgrade|plan/i.test(m)) return "piano";
+  if (/voice_limit|voice limit|slots|max_voice/i.test(m)) return "spazio";
+  if (/quota_exceeded|credits|insufficient/i.test(m)) return "crediti";
+  return "servizio";
+}
+/* La chiave e il piano si controllano una volta ogni dieci minuti, non a ogni apertura. */
+let verificaCache: { at: number; problema: string; tier: string } | null = null;
+async function verifica(): Promise<{ problema: string; tier: string }> {
+  if (verificaCache && Date.now() - verificaCache.at < 600000) return verificaCache;
+  let problema = "", tier = "";
+  if (!/^sk_/.test(chiave())) problema = "chiave";
+  else {
+    try {
+      const u = await el("/v1/user/subscription");
+      tier = String(u.tier || "");
+      if (u.can_use_instant_voice_cloning === false) problema = "piano";
+    } catch (e: any) {
+      const c = codiceErrore(e?.message);
+      /* una chiave con i permessi ristretti puo' non leggere l'abbonamento: non e' un guasto */
+      problema = c === "permessi" ? "" : c;
+      if (c !== "permessi") console.error("[iofuturo] verifica", e?.message || e);
+    }
+  }
+  verificaCache = { at: Date.now(), problema, tier };
+  return verificaCache;
+}
 function devOk(x: unknown): string | null { const s = String(x || ""); return /^[a-z0-9]{8,48}$/i.test(s) ? s : null; }
 function oggi(): string { return new Date().toISOString().slice(0, 10); }
 function mese(): string { return new Date().toISOString().slice(0, 7); }
@@ -170,17 +206,19 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
     let voce = false;
     const dev = devOk(req.query.dev);
     try { if (dev) { await ensureTables(); voce = (await rows(sql`SELECT dev FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`)).length > 0; } } catch { }
-    res.json({ ok: true, acceso: true, voce, durataMax: DURATA_MAX });
+    const v = await verifica();
+    res.json({ ok: true, acceso: true, voce, durataMax: DURATA_MAX, problema: v.problema || undefined });
   });
 
-  /* LA VOCE: un minuto di lettura, in WAV base64. Una sola voce per telefono: se c'era, si sostituisce. */
+  /* LA VOCE: i primi secondi in cui l'utente parla (poi, a fine chiamata, una versione piu' lunga), in WAV base64. Una sola voce per telefono: se c'era, si sostituisce. */
   app.post("/api/focuslock/iofuturo/voce", async (req: Request, res: Response) => {
     cors(res);
     if (!acceso()) { res.json({ ok: false, spento: true }); return; }
     const b = req.body || {};
     const dev = devOk(b.dev);
     if (!dev || b.consenso !== true) { res.status(400).json({ error: "consenso e telefono richiesti" }); return; }
-    if (troppe("voce:" + ipDi(req), 3, 86400000) || troppe("voce:" + dev, 2, 86400000)) { res.status(429).json({ error: "troppe voci oggi" }); return; }
+    const kIp = "voce:" + ipDi(req), kDev = "voce:" + dev;
+    if (pieno(kIp, 8, 86400000) || pieno(kDev, 4, 86400000)) { res.json({ ok: false, errore: "troppe" }); return; }
     const audio = String(b.audio || "");
     if (audio.length < 50000 || audio.length > 12_000_000) { res.status(400).json({ error: "registrazione troppo corta o troppo lunga" }); return; }
     try {
@@ -189,6 +227,10 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
       const usate = await rows(sql`SELECT v FROM focuslock_iofuturo_cfg WHERE k = ${"voci-" + m} LIMIT 1`);
       const n = usate.length ? Number(usate[0].v || 0) : 0;
       if (n >= MAX_VOCI_MESE) { res.json({ ok: false, limite: true }); return; }
+      if (b.chiamata === true) {
+        const fatte = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_iofuturo_chiamate WHERE dev = ${dev} AND giorno = ${oggi()}`);
+        if (Number(fatte[0]?.n || 0) >= MAX_CHIAMATE_GIORNO) { res.json({ ok: false, limiteChiamate: true }); return; }
+      }
       const prima = await rows(sql`SELECT voiceId FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`);
       if (prima.length) { try { await el("/v1/voices/" + encodeURIComponent(String(prima[0].voiceId)), { method: "DELETE" }); } catch { } }
       const fd = new FormData();
@@ -209,16 +251,32 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
           return pulito(t.text, 3000);
         } catch (e: any) { console.error("[iofuturo] trascrizione", e?.message || e); return ""; }
       };
-      const [j, testo] = await Promise.all([el("/v1/voices/add", { method: "POST", body: fd as any }), trascrivi()]);
+      /* la voce, la trascrizione e l'URL firmato della chiamata partono INSIEME: e' il tempo che
+         l'utente aspetta in silenzio dopo aver parlato, e ogni giro in piu' si sente */
+      const [j, testo, firmato] = await Promise.all([
+        el("/v1/voices/add", { method: "POST", body: fd as any }),
+        trascrivi(),
+        /* se fallisce solo questo, la voce resta salvata e l'app chiede l'URL a /chiamata */
+        b.chiamata === true ? agenteId().then((a) => el("/v1/convai/conversation/get-signed-url?agent_id=" + encodeURIComponent(a)))
+          .catch((e: any) => { console.error("[iofuturo] url della prima chiamata", e?.message || e); return null; }) : Promise.resolve(null),
+      ]);
       const vid = String(j.voice_id || "");
       if (!vid) throw new Error("voce non creata");
       await rows(sql`INSERT INTO focuslock_iofuturo_voci (dev, voiceId, createdAt, usataAt) VALUES (${dev}, ${vid}, NOW(), NOW())
         ON DUPLICATE KEY UPDATE voiceId = ${vid}, createdAt = NOW()`);
       await rows(sql`INSERT INTO focuslock_iofuturo_cfg (k, v) VALUES (${"voci-" + m}, ${String(n + 1)}) ON DUPLICATE KEY UPDATE v = ${String(n + 1)}`);
-      res.json({ ok: true, testo });
+      segna(kIp); segna(kDev);
+      if (firmato && firmato.signed_url) {
+        const p = personaggio(b.contesto || {});
+        await rows(sql`INSERT INTO focuslock_iofuturo_chiamate (dev, giorno, createdAt) VALUES (${dev}, ${oggi()}, NOW())`);
+        res.json({ ok: true, testo, signedUrl: String(firmato.signed_url), prompt: p.prompt, primaFrase: p.primo, voiceId: vid, durataMax: DURATA_MAX });
+        return;
+      }
+      res.json({ ok: true, testo, voiceId: vid });
     } catch (e: any) {
       console.error("[iofuturo] voce", e?.message || e);
-      res.json({ ok: false, errore: /voice_limit|voice limit|slots/i.test(String(e?.message)) ? "spazio" : "servizio" });
+      verificaCache = null;
+      res.json({ ok: false, errore: codiceErrore(e?.message) });
     }
   });
 
@@ -258,7 +316,8 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
       res.json({ ok: true, signedUrl: String(s.signed_url || ""), prompt: p.prompt, primaFrase: p.primo, voiceId: String(v[0].voiceId), durataMax: DURATA_MAX });
     } catch (e: any) {
       console.error("[iofuturo] chiamata", e?.message || e);
-      res.json({ ok: false, errore: "servizio" });
+      verificaCache = null;
+      res.json({ ok: false, errore: codiceErrore(e?.message) });
     }
   });
 }
