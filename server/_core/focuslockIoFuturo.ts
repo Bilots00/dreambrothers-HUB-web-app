@@ -27,7 +27,7 @@ const MAX_CHIAMATE_GIORNO = Math.max(1, Math.floor(Number(process.env.IOFUTURO_M
 const DURATA_MAX = Math.max(60, Math.floor(Number(process.env.IOFUTURO_DURATA_MAX || 480)));
 const LLM = process.env.IOFUTURO_LLM || "claude-sonnet-5-5";
 const TTS = process.env.IOFUTURO_TTS || "eleven_flash_v2_5";
-const STT = process.env.IOFUTURO_STT || "scribe_v1";
+const STT = process.env.IOFUTURO_STT || "scribe_v2";
 
 let ready: Promise<void> | null = null;
 function ensureTables(): Promise<void> {
