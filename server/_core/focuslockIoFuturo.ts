@@ -83,16 +83,20 @@ function codiceErrore(msg: unknown): string {
   if (/quota_exceeded|credits|insufficient/i.test(m)) return "crediti";
   return "servizio";
 }
-/* La chiave e il piano si controllano una volta ogni dieci minuti, non a ogni apertura. */
-let verificaCache: { at: number; problema: string; tier: string } | null = null;
-async function verifica(): Promise<{ problema: string; tier: string }> {
-  if (verificaCache && Date.now() - verificaCache.at < 600000) return verificaCache;
-  let problema = "", tier = "";
+/* La chiave e il piano: quando va tutto bene si ricontrolla ogni dieci minuti; quando c'e' un
+   problema si ricontrolla a ogni apertura, perche' chi lo sta sistemando (upgrade del piano,
+   chiave nuova) deve vedere subito l'effetto. `servizio` = cosa vede ElevenLabs con questa
+   chiave, senza segreti: serve a capire su quale abbonamento lavora la chiave. */
+let verificaCache: { at: number; problema: string; tier: string; servizio?: any } | null = null;
+async function verifica(): Promise<{ problema: string; tier: string; servizio?: any }> {
+  if (verificaCache && !verificaCache.problema && Date.now() - verificaCache.at < 600000) return verificaCache;
+  let problema = "", tier = "", servizio: any = undefined;
   if (!/^sk_/.test(chiave())) problema = "chiave";
   else {
     try {
       const u = await el("/v1/user/subscription");
       tier = String(u.tier || "");
+      servizio = { tier: u.tier, status: u.status, ivc: u.can_use_instant_voice_cloning, voci: u.voice_slots_used, maxVoci: u.voice_limit, aggiunte: u.voice_add_edit_counter, maxAggiunte: u.max_voice_add_edits };
       if (u.can_use_instant_voice_cloning === false) problema = "piano";
     } catch (e: any) {
       const c = codiceErrore(e?.message);
@@ -101,7 +105,7 @@ async function verifica(): Promise<{ problema: string; tier: string }> {
       if (c !== "permessi") console.error("[iofuturo] verifica", e?.message || e);
     }
   }
-  verificaCache = { at: Date.now(), problema, tier };
+  verificaCache = { at: Date.now(), problema, tier, servizio };
   return verificaCache;
 }
 function devOk(x: unknown): string | null { const s = String(x || ""); return /^[a-z0-9]{8,48}$/i.test(s) ? s : null; }
@@ -207,7 +211,7 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
     const dev = devOk(req.query.dev);
     try { if (dev) { await ensureTables(); voce = (await rows(sql`SELECT dev FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`)).length > 0; } } catch { }
     const v = await verifica();
-    res.json({ ok: true, acceso: true, voce, durataMax: DURATA_MAX, problema: v.problema || undefined });
+    res.json({ ok: true, acceso: true, voce, durataMax: DURATA_MAX, problema: v.problema || undefined, servizio: v.servizio });
   });
 
   /* LA VOCE: i primi secondi in cui l'utente parla (poi, a fine chiamata, una versione piu' lunga), in WAV base64. Una sola voce per telefono: se c'era, si sostituisce. */
