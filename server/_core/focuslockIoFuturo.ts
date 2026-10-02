@@ -31,10 +31,13 @@ const LLM = process.env.IOFUTURO_LLM || "claude-sonnet-5-5";
    agenti e fa «high-fidelity voice cloning». Somiglianza alta, stabilita' bassa = piu' umana,
    meno da lettore. La temperatura dell'agente di serie e' 0: il motivo per cui sembrava scriptato. */
 const TTS = process.env.IOFUTURO_TTS || "eleven_v4_turbo";
-const STABILITA = Number(process.env.IOFUTURO_STABILITY || 0.35);
-const SOMIGLIANZA = Number(process.env.IOFUTURO_SIMILARITY || 0.95);
+/* 0.9.197: con 0.35 la voce suonava «casuale, randomica» (Andrea). Il metodo che funziona
+   (video «Come clonare la voce usando ElevenLabs», Antonio Guadagno): stabilita' e somiglianza
+   intorno all'85%. Per una telefonata un filo meno stabile, per non suonare letta. */
+const STABILITA = Number(process.env.IOFUTURO_STABILITY || 0.75);
+const SOMIGLIANZA = Number(process.env.IOFUTURO_SIMILARITY || 0.9);
 const TEMPERATURA = Number(process.env.IOFUTURO_TEMPERATURE || 0.85);
-const AGENTE_VER = "3";
+const AGENTE_VER = "4";
 const STT = process.env.IOFUTURO_STT || "scribe_v2";
 
 let ready: Promise<void> | null = null;
@@ -56,6 +59,7 @@ function ensureTables(): Promise<void> {
         createdAt TIMESTAMP NULL,
         KEY idx_dev (dev, giorno)
       )`);
+      try { await db.execute(sql`ALTER TABLE focuslock_iofuturo_voci ADD COLUMN fonte VARCHAR(12) NULL`); } catch { /* c'e' gia' */ }
       /* la memoria delle chiamate: cosa vi siete detti, il riassunto di ElevenLabs, e il voto */
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_iofuturo_storia (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -262,6 +266,7 @@ function personaggio(c: any, m: { storia?: string; stile?: string; nota?: string
   const sogno = pulito(c.sogno, 140) || "il tuo sogno";
   const data = pulito(c.data, 40);
   const anno = pulito(c.anno, 8);
+  const oggiTxt = pulito(c.oggi, 40);
   const righe: string[] = [];
   const add = (k: string, v: unknown, max = 300) => { const s = pulito(v, max); if (s) righe.push("- " + k + ": " + s); };
   add("Nome", nome, 40);
@@ -287,23 +292,31 @@ function personaggio(c: any, m: { storia?: string; stile?: string; nota?: string
     "- Ogni tanto puoi usare i tag audio in inglese tra parentesi quadre, che vengono recitati e non letti: [laughs], [chuckles], [sighs], [exhales]. Pochi e solo dove una persona lo farebbe davvero.",
     "- Rispecchialo come fa chi sa ascoltare: prima di rispondere riprendi con le SUE parole il punto di quello che ha appena detto, e segui la sua energia. Se è giù parli piano e lento; se è carico sali con lui; se scherza, scherzi.",
     "",
+    "IL RUOLO. Sei un attore da Oscar che non esce MAI dal personaggio. Lo scopo della chiamata è fargli vivere, con la sua stessa voce, la certezza che ce l'ha fatta e COME: il sistema nervoso reagisce a quello che immagina in modo vivido come a quello che vive. Una storia vaga o un «non te lo posso dire» rompono l'immedesimazione e la chiamata non serve più a niente. Quindi:",
+    "- Non dici MAI «non posso dirtelo», «ti mentirei», «non lo so», «dipende», «devi trovarla da solo», «ogni strada è diversa». Tu la tua strada la conosci perché l'hai fatta: la racconti.",
+    "- Se ti chiede una cosa precisa (quale prodotto, quale piattaforma, quanto spendevi, in che mese è cambiato tutto, chi hai chiamato, cosa hai mollato), rispondi con una cosa precisa, detta con la sicurezza di chi se la ricorda: un nome, un numero, un mese. Sceglila credibile e agganciata a quello che lui ha OGGI: se nella chiamata o in quello che sai qui sotto c'è un elenco (prodotti, canali, idee), scegli da lì e spiega perché proprio quello. Se ti manca il materiale, fagli una domanda veloce per prenderlo («ricordami cosa hai in catalogo adesso») e poi scegli con decisione, senza tornare indietro.",
+    "- Se ti dice «ti ricordi quando…» o ti racconta qualcosa del suo presente, te lo ricordi: aggiungi un dettaglio sensoriale coerente (la stanza, l'ora, cosa provavi) e collegalo a come è andata dopo.",
+    "- Mai contraddire quello che lui ha detto di sé, e mai cose impossibili: la storia deve reggere a un orecchio scettico.",
+    "",
+    "LA STORIA È IL PONTE. Ogni racconto parte dal SUO punto di oggi (le sue difficoltà vere, i suoi numeri, i suoi blocchi) e arriva al sogno passo per passo. Quello che lo fa credere è il collegamento: «ero esattamente lì, con lo stesso problema» → il momento in cui hai deciso (mese, posto) → la scelta concreta → il primo risultato piccolo → come è cresciuto → oggi. Dalla sua situazione di adesso deve vedere il primo passo del ponte e pensare «se l'ha fatto lui, posso farlo anch'io».",
+    "",
     "COSA FAI IN QUESTA CHIAMATA",
-    "1. Prima capisci dove si trova adesso: come sta, dov'è, cosa sta facendo oggi, cosa lo blocca proprio in questo momento. Domande vere, una per volta. Niente consigli finché non hai capito.",
-    "2. Poi ti ricordi. Quel momento tu l'hai già vissuto: raccontalo come un ricordo tuo, con dettagli concreti presi da quello che sai di lui (un mese, un posto, una sensazione, una cosa che pensavi allora). Racconta cosa hai provato e cosa hai fatto TU per uscirne: la scelta precisa, la cosa che hai smesso di fare, l'errore che hai fatto prima di capirlo.",
-    "3. Un consiglio solo, e solo quando è il momento: quello che avresti voluto sentirti dire tu, legato al suo problema di adesso. MAI la lista delle cose da fare, MAI «fai la prossima task», MAI ripetergli il piano dell'app se non te lo chiede lui.",
+    "1. Prima capisci dove si trova adesso: come sta, cosa sta facendo oggi, cosa lo blocca proprio in questo momento. Domande vere, una per volta, finché non hai capito.",
+    "2. Poi ti ricordi. Quel momento tu l'hai già vissuto: raccontalo come un ricordo tuo, con dettagli concreti, e racconta cosa hai fatto TU per uscirne: la scelta precisa, la cosa che hai smesso di fare, l'errore che hai fatto prima di capirlo.",
+    "3. Il consiglio è la tua scelta di allora, detta come un ricordo: «io a quel punto ho fatto questo». Uno per volta. MAI la lista delle cose da fare, MAI «fai la prossima task», MAI ripetergli il piano dell'app se non te lo chiede lui.",
     "4. Se ti chiede com'è la vita dopo, la racconti con dettagli piccoli e veri, non trionfali.",
     "5. Se la chiamata comincia con lui che ti racconta come sta, rispondi a quello che ha detto: niente presentazioni, sa già chi sei.",
     "",
     "REGOLE",
     "- Il genere grammaticale (arrivato o arrivata) lo prendi da come parla di sé chi chiama; finché non lo sai, usi frasi che non lo richiedono. Qui sotto «lui» vale per chiunque.",
     "- Vietati: la forma «non è X, è Y», i trattini lunghi, nominare app o marche che non ha nominato lui, promettere date certe.",
-    "- Se ti chiede se sei un'IA, rispondi con leggerezza che sei la versione di lui che ce l'ha fatta, costruita dalla sua voce e da quello che ha raccontato, e torni al punto.",
-    "- Niente consigli medici, legali o finanziari personalizzati. Se dice di stare molto male o di volersi fare del male, smetti il gioco: con calma gli dici di chiamare subito il 112 o il Telefono Amico (02 2327 2327) o una persona di cui si fida.",
+    "- Se ti chiede se sei un'IA, resti nel ruolo con leggerezza («sono io, quello che ce l'ha fatta») e torni al punto. Solo se insiste davvero sul serio gli dici che sei la sua versione futura costruita dalla sua voce e da quello che ha raccontato.",
+    "- I soli limiti della storia: niente farmaci o cure, niente debiti, prestiti, scommesse, trading o cripto come scorciatoia, niente cose illegali. Se dice di stare molto male o di volersi fare del male, esci dal gioco: con calma gli dici di chiamare subito il 112 o il Telefono Amico (02 2327 2327) o una persona di cui si fida.",
     m.nota ? "\nDALL'ULTIMA CHIAMATA: " + m.nota : "",
     m.stile ? "\nCOME PARLA LUI (frasi sue vere, trascritte; imita lessico, intercalari e ritmo, non copiare le frasi):\n" + m.stile : "",
     m.storia ? "\nLE VOSTRE CHIAMATE DI PRIMA (dalla più recente). Te le ricordi: riprendi i fili, chiedi com'è andata la cosa di cui avevate parlato:\n" + m.storia : "",
     m.ora ? "\nQUESTA CHIAMATA FINORA (la linea si è interrotta un attimo: continua da qui come se niente fosse, senza salutare di nuovo):\n" + m.ora : "",
-    "\nCOSA SAI DI LUI OGGI:",
+    "\nCOSA SAI DI LUI OGGI" + (oggiTxt ? " (oggi per lui è il " + oggiTxt + ")" : "") + ":",
     righe.join("\n"),
     memoria ? "\nQUELLO CHE HA RACCONTATO ALL'APP (onboarding, episodi con il Genio, giochi, conversazioni, umore). Sono ricordi tuoi: tu queste cose le hai vissute. Usane qualcuna quando serve, con naturalezza, mai elencate:\n" + memoria : "",
     brief ? "\nIL QUADRO DEL SUO AGENTE PERSONALE (solo contesto):\n" + brief : "",
@@ -319,15 +332,15 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
   app.get("/api/focuslock/iofuturo/stato", async (req: Request, res: Response) => {
     cors(res);
     if (!acceso()) { res.json({ ok: true, acceso: false }); return; }
-    let voce = false;
+    let voce = false, fonte = "";
     const dev = devOk(req.query.dev);
-    try { if (dev) { await ensureTables(); voce = (await rows(sql`SELECT dev FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`)).length > 0; } } catch { }
+    try { if (dev) { await ensureTables(); const r = await rows(sql`SELECT fonte FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`); voce = r.length > 0; fonte = voce ? String(r[0].fonte || "") : ""; } } catch { }
     const v = await verifica();
     /* l'agente si crea o si aggiorna qui, all'apertura della pagina: un rifiuto di ElevenLabs si
        vede subito (e nei log), non a meta' della prima chiamata */
     let agente = "";
     if (!v.problema) { try { await agenteId(); agente = "ok"; } catch (e: any) { agente = codiceErrore(e?.message); console.error("[iofuturo] agente", e?.message || e); } }
-    res.json({ ok: true, acceso: true, voce, durataMax: DURATA_MAX, problema: v.problema || undefined, servizio: v.servizio, agente, tts: TTS });
+    res.json({ ok: true, acceso: true, voce, fonte, durataMax: DURATA_MAX, problema: v.problema || undefined, servizio: v.servizio, agente, tts: TTS });
   });
 
   /* LA VOCE: i primi secondi in cui l'utente parla (poi, a fine chiamata, una versione piu' lunga), in WAV base64. Una sola voce per telefono: se c'era, si sostituisce. */
@@ -339,8 +352,15 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
     if (!dev || b.consenso !== true) { res.status(400).json({ error: "consenso e telefono richiesti" }); return; }
     const kIp = "voce:" + ipDi(req), kDev = "voce:" + dev;
     if (pieno(kIp, 8, 86400000) || pieno(kDev, 4, 86400000)) { res.json({ ok: false, errore: "troppe" }); return; }
-    const audio = String(b.audio || "");
-    if (audio.length < 50000 || audio.length > 16_000_000) { res.status(400).json({ error: "registrazione troppo corta o troppo lunga" }); return; }
+    /* due strade: `files` = le registrazioni fatte dall'utente con il registratore del telefono
+       (il metodo del video: piu' fedele), `audio` = quello che l'app ha raccolto in chiamata */
+    const daFile = Array.isArray(b.files) && b.files.length > 0;
+    const pezzi: { audio: string; mime: string; nome: string }[] = daFile
+      ? b.files.slice(0, 8).map((f: any, i: number) => ({ audio: String(f && f.audio || ""), mime: String(f && f.mime || "audio/mpeg").slice(0, 40), nome: pulito(f && f.nome, 60) || ("voce-" + (i + 1)) }))
+      : [{ audio: String(b.audio || ""), mime: String(b.mime || "audio/wav"), nome: "voce.wav" }];
+    const totale = pezzi.reduce((a, x) => a + x.audio.length, 0);
+    if (totale < 50000 || totale > 30_000_000) { res.status(400).json({ error: "registrazione troppo corta o troppo lunga" }); return; }
+    const audio = pezzi[0].audio;
     try {
       await ensureTables();
       const m = mese();
@@ -351,13 +371,15 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
         const fatte = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_iofuturo_chiamate WHERE dev = ${dev} AND giorno = ${oggi()}`);
         if (Number(fatte[0]?.n || 0) >= MAX_CHIAMATE_GIORNO) { res.json({ ok: false, limiteChiamate: true }); return; }
       }
-      const prima = await rows(sql`SELECT voiceId FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`);
+      const prima = await rows(sql`SELECT voiceId, fonte FROM focuslock_iofuturo_voci WHERE dev = ${dev} LIMIT 1`);
+      /* una voce fatta con le registrazioni dell'utente non la sostituisce il miglioramento automatico */
+      if (b.migliora === true && prima.length && prima[0].fonte === "file") { res.json({ ok: true, tenuta: true, voiceId: String(prima[0].voiceId) }); return; }
       const fd = new FormData();
       fd.append("name", "F2D " + dev.slice(0, 12));
       fd.append("description", "Io futuro di un utente Focus2Dream (consenso dato in app)");
       /* audio grezzo dal telefono: il filtro del rumore di ElevenLabs solo se la stanza era rumorosa */
       fd.append("remove_background_noise", b.rumore === true ? "true" : "false");
-      fd.append("files", new Blob([Buffer.from(audio, "base64")], { type: String(b.mime || "audio/wav") }), "voce.wav");
+      pezzi.forEach((x) => fd.append("files", new Blob([Buffer.from(x.audio, "base64")], { type: x.mime }), x.nome));
       /* la prima volta l'utente parla per primo: la stessa registrazione serve a copiare la voce
          e a sapere cosa ha detto, cosi' l'Io futuro gli risponde a tono */
       const trascrivi = async (): Promise<string> => {
@@ -382,8 +404,9 @@ export function registerFocusLockIoFuturoRoutes(app: Express) {
       ]);
       const vid = String(j.voice_id || "");
       if (!vid) throw new Error("voce non creata");
-      await rows(sql`INSERT INTO focuslock_iofuturo_voci (dev, voiceId, createdAt, usataAt) VALUES (${dev}, ${vid}, NOW(), NOW())
-        ON DUPLICATE KEY UPDATE voiceId = ${vid}, createdAt = NOW()`);
+      const fonte = daFile ? "file" : "chiamata";
+      await rows(sql`INSERT INTO focuslock_iofuturo_voci (dev, voiceId, createdAt, usataAt, fonte) VALUES (${dev}, ${vid}, NOW(), NOW(), ${fonte})
+        ON DUPLICATE KEY UPDATE voiceId = ${vid}, createdAt = NOW(), fonte = ${fonte}`);
       await rows(sql`INSERT INTO focuslock_iofuturo_cfg (k, v) VALUES (${"voci-" + m}, ${String(n + 1)}) ON DUPLICATE KEY UPDATE v = ${String(n + 1)}`);
       segna(kIp); segna(kDev);
       /* la voce di prima: se una chiamata la sta usando (miglioramento a meta' chiamata) si cancella
