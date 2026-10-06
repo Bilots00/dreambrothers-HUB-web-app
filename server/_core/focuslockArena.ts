@@ -18,7 +18,7 @@ import { rows, ensureTables as ensureSocial } from "./focuslockSocial";
  * retrocessi, e MAI giocatori finti. Punti = minuti di Full Focus portati a termine (li conta
  * il telefono, con il tetto di 480 al giorno) + 30 per ogni passo della rotta spuntato. */
 
-const REAZIONI = ["grande", "continua", "nonmollare", "centrato"];
+const REAZIONI = ["cuore", "grande", "continua", "nonmollare", "centrato"];
 const TIERS = ["bronzo", "argento", "oro", "diamante"];
 const LEGA_MAX = 30;
 const LEGA_MIN = 5;
@@ -173,6 +173,43 @@ async function assegnaLega(device: string, goal: string, tier: string, nick: str
 }
 
 export function registerFocusLockArenaRoutes(app: Express) {
+  /* CERCA PER NOME (0.9.203): nome o nick che contengono il testo, mai se stessi, 12 al massimo.
+     Si vede solo nome, device e livello: niente di piu' di quello che la lega gia' mostra. */
+  app.get("/api/focuslock/social/cerca", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    const q = String(req.query.q || "").trim().slice(0, 40);
+    if (!device || q.length < 2) { res.json({ giocatori: [] }); return; }
+    try {
+      await ensureArena();
+      const like = "%" + q.replace(/[%_]/g, "") + "%";
+      const list = await rows(sql`SELECT device, name, nick, level FROM focuslock_players
+        WHERE device <> ${device} AND (name LIKE ${like} OR nick LIKE ${like}) AND updatedAt > (NOW() - INTERVAL 90 DAY)
+        ORDER BY updatedAt DESC LIMIT 12`);
+      res.json({ giocatori: list.map((r) => ({ device: String(r.device), nome: nomeDi(r), level: Number(r.level || 1) })) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "ricerca non disponibile" });
+    }
+  });
+
+  /* SEGUI (0.9.203): una freccia sola, da me a lui. Chi entra con il codice resta amico in
+     entrambe le direzioni (focuslockSocial), chi viene seguito da qui diventa un follower. */
+  app.post("/api/focuslock/social/segui", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const a = String(b.a || "").slice(0, 64);
+    if (!device || !a) { res.status(400).json({ error: "device mancante" }); return; }
+    if (device === a) { res.status(400).json({ error: "sei tu" }); return; }
+    try {
+      await ensureArena();
+      const p = await rows(sql`SELECT device, name, nick FROM focuslock_players WHERE device = ${a}`);
+      if (!p[0]) { res.status(404).json({ error: "giocatore non trovato" }); return; }
+      await rows(sql`INSERT IGNORE INTO focuslock_friends (device, friend, createdAt) VALUES (${device}, ${a}, NOW())`);
+      res.json({ ok: true, nome: nomeDi(p[0]) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "non seguito" });
+    }
+  });
+
   /* Gli amici, con i soli aggregati che si possono vedere. Piu' gli inviti al Focus insieme
      in attesa e le reazioni gia' mandate oggi. */
   app.get("/api/focuslock/social/amici", async (req: Request, res: Response) => {
@@ -194,7 +231,13 @@ export function registerFocusLockArenaRoutes(app: Express) {
       }));
       const ricevute = await rows(sql`SELECT r.tipo, COUNT(*) AS n FROM focuslock_reazioni r WHERE r.a = ${device} AND r.createdAt > (NOW() - INTERVAL 7 DAY) GROUP BY r.tipo`);
       const ultime = await rows(sql`SELECT r.tipo, r.createdAt, p.name, p.nick FROM focuslock_reazioni r JOIN focuslock_players p ON p.device = r.da WHERE r.a = ${device} ORDER BY r.createdAt DESC LIMIT 12`);
-      res.json({ amici, reazioni: { totali: ricevute.map((x) => ({ tipo: String(x.tipo), n: Number(x.n) })), ultime: ultime.map((x) => ({ tipo: String(x.tipo), da: nomeDi(x), at: x.createdAt })) } });
+      /* seguiti e follower (0.9.203): chi seguo io, e chi segue me */
+      let seguiti = amici.length, follower = 0;
+      try {
+        const c = await rows(sql`SELECT (SELECT COUNT(*) FROM focuslock_friends WHERE device = ${device}) AS seguiti, (SELECT COUNT(*) FROM focuslock_friends WHERE friend = ${device}) AS follower`);
+        seguiti = Number(c[0]?.seguiti || 0); follower = Number(c[0]?.follower || 0);
+      } catch (_) { /* senza contatori si vive */ }
+      res.json({ amici, seguiti, follower, reazioni: { totali: ricevute.map((x) => ({ tipo: String(x.tipo), n: Number(x.n) })), ultime: ultime.map((x) => ({ tipo: String(x.tipo), da: nomeDi(x), at: x.createdAt })) } });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "amici non disponibili" });
     }
