@@ -309,7 +309,71 @@ async function appresi(d: Dominio): Promise<any> {
 /* ---------------------------------------------------------------------------------------
  * LE ROTTE
  * --------------------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------------------
+ * UNA MANO SU UNA COSA DA FARE (0.9.206): la riga del foglio, dove la persona si blocca, il suo
+ * sogno e il suo freno. Claude risponde con i passi (da dove si parte, in ordine) e con due o
+ * tre ricerche per un tutorial. Tetto per telefono al giorno: il costo si regge cosi'.
+ * --------------------------------------------------------------------------------------- */
+const SCHEMA_AIUTO = {
+  type: "object", additionalProperties: false,
+  properties: {
+    nota: { type: "string", description: "Una frase, calda e diretta, che dice da dove si parte (max 160 caratteri)" },
+    passi: { type: "array", items: { type: "string" }, description: "Da 3 a 6 passi concreti, ognuno fattibile in meno di 25 minuti, con un verbo all'inizio" },
+    query: { type: "array", items: { type: "string" }, description: "2 o 3 ricerche in italiano per trovare un video tutorial passo passo su YouTube" }
+  },
+  required: ["nota", "passi", "query"],
+};
+const AIUTI = new Map<string, { g: string; n: number }>();
+const AIUTI_MAX = Math.max(1, Math.floor(Number(process.env.AIUTO_MAX_GIORNO || 12)));
+async function aiutoPensa(task: string, domanda: string, ctx: any): Promise<any | null> {
+  const sys = [
+    "Sei l'agente personale di DreamMap, un'app italiana che aiuta a realizzare un sogno con una tappa al giorno.",
+    "Chi ti scrive e' bloccato su una cosa da fare oggi. Rispondi in italiano, con il tu, senza premesse e senza moralismi.",
+    "Dai i passi nell'ordine in cui si fanno: il primo deve essere cosi' piccolo da poterlo fare in due minuti (aprire un file, scrivere una riga, telefonare a una persona).",
+    "Ogni passo sta dentro una sessione di 25 minuti. Niente teoria: azioni. Se un passo si impara meglio guardando, dillo nel passo.",
+    "Le ricerche per il tutorial: in italiano, concrete, come le scriverebbe una persona su YouTube (es. «come aprire partita iva forfettaria 2026 tutorial»).",
+    ctx && ctx.freno ? "Tieni conto del suo freno: " + String(ctx.freno).slice(0, 200) : "",
+  ].filter(Boolean).join("\n");
+  const testo = ["Cosa deve fare: " + task, "Dove si blocca: " + domanda, ctx && ctx.sogno ? "Il suo sogno: " + String(ctx.sogno).slice(0, 200) : "", ctx && ctx.profilo ? "Chi e' oggi: " + String(ctx.profilo).slice(0, 80) : ""].filter(Boolean).join("\n");
+  const r: any = await (claude().beta.messages.create as any)({
+    model: process.env.GENIO_MODEL || "claude-opus-5-5",
+    max_tokens: 1500,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA_AIUTO } },
+    system: sys,
+    messages: [{ role: "user", content: testo }],
+  });
+  if (!r || r.stop_reason === "refusal" || r.stop_reason === "max_tokens") return null;
+  const t = (r.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+  try {
+    const j = JSON.parse(t);
+    return { nota: String(j.nota || "").slice(0, 200), passi: (Array.isArray(j.passi) ? j.passi : []).slice(0, 6).map((x: any) => String(x).slice(0, 160)), query: (Array.isArray(j.query) ? j.query : []).slice(0, 3).map((x: any) => String(x).slice(0, 100)) };
+  } catch { return null; }
+}
+
 export function registerFocusLockGenioRoutes(app: Express) {
+  app.post("/api/focuslock/aiuto", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const task = String(b.task || "").trim().slice(0, 200);
+    const domanda = String(b.domanda || "").trim().slice(0, 500);
+    if (!device || !task || !domanda) { res.status(400).json({ error: "manca la cosa da fare o la domanda" }); return; }
+    if (!process.env.AGENT_LLM_KEY) { res.status(503).json({ error: "l'agente non e' acceso su questo server" }); return; }
+    const g = new Date().toISOString().slice(0, 10);
+    const u = AIUTI.get(device);
+    const n = u && u.g === g ? u.n : 0;
+    if (n >= AIUTI_MAX) { res.status(429).json({ error: "gli aiuti di oggi sono finiti" }); return; }
+    AIUTI.set(device, { g, n: n + 1 });
+    try {
+      const r = await aiutoPensa(task, domanda, b.contesto || {});
+      if (!r) { res.status(502).json({ error: "l'agente non ha risposto" }); return; }
+      res.json(r);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "aiuto non disponibile" });
+    }
+  });
+
   app.options("/api/focuslock/genio/:x", (_req: Request, res: Response) => { cors(res); res.status(204).end(); });
 
   app.get("/api/focuslock/genio/stato", (_req: Request, res: Response) => {
