@@ -182,10 +182,10 @@ export function registerFocusLockArenaRoutes(app: Express) {
     try {
       await ensureArena();
       const like = "%" + q.replace(/[%_]/g, "") + "%";
-      const list = await rows(sql`SELECT device, name, nick, level FROM focuslock_players
+      const list = await rows(sql`SELECT device, name, nick, level, (updatedAt > (NOW() - INTERVAL 10 MINUTE)) AS online FROM focuslock_players
         WHERE device <> ${device} AND (name LIKE ${like} OR nick LIKE ${like}) AND updatedAt > (NOW() - INTERVAL 90 DAY)
         ORDER BY updatedAt DESC LIMIT 12`);
-      res.json({ giocatori: list.map((r) => ({ device: String(r.device), nome: nomeDi(r), level: Number(r.level || 1) })) });
+      res.json({ giocatori: list.map((r) => ({ device: String(r.device), nome: nomeDi(r), level: Number(r.level || 1), online: !!Number(r.online) })) });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "ricerca non disponibile" });
     }
@@ -217,7 +217,8 @@ export function registerFocusLockArenaRoutes(app: Express) {
     if (!device) { res.status(400).json({ error: "device mancante" }); return; }
     try {
       await ensureArena();
-      const list = await rows(sql`SELECT p.device, p.name, p.nick, p.level, p.ffMin7, p.streak, p.ffStreak, p.neo, p.old, p.score7, p.prevScore7, p.tier, p.updatedAt
+      const list = await rows(sql`SELECT p.device, p.name, p.nick, p.level, p.ffMin7, p.streak, p.ffStreak, p.neo, p.old, p.score7, p.prevScore7, p.tier, p.updatedAt, p.attivita,
+        (p.updatedAt > (NOW() - INTERVAL 10 MINUTE)) AS online
         FROM focuslock_friends f JOIN focuslock_players p ON p.device = f.friend WHERE f.device = ${device} ORDER BY p.score7 DESC, p.updatedAt DESC LIMIT 100`);
       const oggi = await rows(sql`SELECT a, tipo FROM focuslock_reazioni WHERE da = ${device} AND giorno = UTC_DATE()`);
       const mandate: Record<string, string[]> = {};
@@ -228,6 +229,8 @@ export function registerFocusLockArenaRoutes(app: Express) {
         neo: Number(r.neo || 0), old: Number(r.old || 0), score7: Number(r.score7 || 0), prevScore7: Number(r.prevScore7 || 0),
         tier: String(r.tier || "bronzo"), visto: r.updatedAt ? new Date(r.updatedAt).toISOString() : null,
         reazioniOggi: mandate[String(r.device)] || [],
+        /* online = ha parlato col server negli ultimi dieci minuti; attivita = cosa stava facendo */
+        online: !!Number(r.online), attivita: String(r.attivita || "app"),
       }));
       const ricevute = await rows(sql`SELECT r.tipo, COUNT(*) AS n FROM focuslock_reazioni r WHERE r.a = ${device} AND r.createdAt > (NOW() - INTERVAL 7 DAY) GROUP BY r.tipo`);
       const ultime = await rows(sql`SELECT r.tipo, r.createdAt, p.name, p.nick FROM focuslock_reazioni r JOIN focuslock_players p ON p.device = r.da WHERE r.a = ${device} ORDER BY r.createdAt DESC LIMIT 12`);

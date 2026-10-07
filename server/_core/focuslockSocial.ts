@@ -47,7 +47,10 @@ export function ensureTables(): Promise<void> {
         "nick VARCHAR(24) NOT NULL DEFAULT ''", "categoria VARCHAR(24) NOT NULL DEFAULT ''", "premiumUntil DATETIME NULL", "ffStreak INT NOT NULL DEFAULT 0",
         "neo INT NOT NULL DEFAULT 0", "old INT NOT NULL DEFAULT 0", "prevScore7 INT NOT NULL DEFAULT 0",
         "legaPunti INT NOT NULL DEFAULT 0", "legaSettimana VARCHAR(10) NOT NULL DEFAULT ''", "legaOptIn TINYINT NOT NULL DEFAULT 0",
-        "tier VARCHAR(12) NOT NULL DEFAULT 'bronzo'", "sfide TEXT NULL"]) {
+        "tier VARCHAR(12) NOT NULL DEFAULT 'bronzo'", "sfide TEXT NULL",
+        // 0.9.205: cosa sta facendo adesso (ff | severa | app) e le impronte SHA-256 di mail e numero,
+        // per farsi trovare dai contatti senza che la rubrica lasci il telefono
+        "attivita VARCHAR(12) NOT NULL DEFAULT ''", "emailHash VARCHAR(64) NOT NULL DEFAULT ''", "telHash VARCHAR(64) NOT NULL DEFAULT ''"]) {
         try { await db.execute(sql.raw("ALTER TABLE focuslock_players ADD COLUMN " + col)); } catch { /* already there */ }
       }
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_friends (
@@ -133,6 +136,9 @@ export function registerFocusLockSocialRoutes(app: Express) {
       nick: String(b.nick || "").trim().slice(0, 24),
       ffStreak: n(b.ffStreak, 5000), neo: n(b.neo, 100000), old: n(b.old, 100000), prevScore7: n(b.prevScore7, 10000000),
       legaPunti: n(b.legaPunti, 100000), legaSettimana: String(b.legaSettimana || "").slice(0, 10),
+      attivita: ["ff", "severa", "app"].includes(String(b.attivita || "")) ? String(b.attivita) : "app",
+      emailHash: /^[0-9a-f]{64}$/.test(String(b.emailHash || "")) ? String(b.emailHash) : "",
+      telHash: /^[0-9a-f]{64}$/.test(String(b.telHash || "")) ? String(b.telHash) : "",
       sfide: Array.isArray(b.sfide) ? JSON.stringify(b.sfide.slice(0, 20).map((s: any) => ({ id: String(s?.id || "").slice(0, 40), stato: String(s?.stato || "").slice(0, 12) }))) : null };
     const score7 = score7Of(p);
     try {
@@ -155,7 +161,8 @@ export function registerFocusLockSocialRoutes(app: Express) {
       /* gli aggregati sociali e i punti della lega: colonne aggiunte dopo, si aggiornano a parte */
       try {
         await rows(sql`UPDATE focuslock_players SET nick = ${p.nick}, ffStreak = ${p.ffStreak}, neo = ${p.neo}, old = ${p.old}, prevScore7 = ${p.prevScore7},
-          legaPunti = ${p.legaPunti}, legaSettimana = ${p.legaSettimana}, sfide = ${p.sfide} WHERE device = ${device}`);
+          legaPunti = ${p.legaPunti}, legaSettimana = ${p.legaSettimana}, sfide = ${p.sfide}, attivita = ${p.attivita},
+          emailHash = IF(${p.emailHash} = '', emailHash, ${p.emailHash}), telHash = IF(${p.telHash} = '', telHash, ${p.telHash}) WHERE device = ${device}`);
         if (p.legaSettimana) await rows(sql`UPDATE focuslock_lega_membri SET punti = ${p.legaPunti}, nick = ${p.nick} WHERE settimana = ${p.legaSettimana} AND device = ${device}`);
         if (p.sfide) {
           const lista = JSON.parse(p.sfide) as { id: string; stato: string }[];
@@ -242,6 +249,26 @@ export function registerFocusLockSocialRoutes(app: Express) {
   });
 
   /* A friend by code, both ways. */
+  /* I CONTATTI (0.9.205): arrivano solo impronte SHA-256 di numeri e mail. Si risponde con i
+     giocatori che hanno la stessa impronta, mai con la rubrica. */
+  app.post("/api/focuslock/social/contatti", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    const hash = (Array.isArray(b.hash) ? b.hash : []).map((x: any) => String(x || "")).filter((x: string) => /^[0-9a-f]{64}$/.test(x)).slice(0, 3000);
+    const mio = /^[0-9a-f]{64}$/.test(String(b.emailHash || "")) ? String(b.emailHash) : "";
+    try {
+      await ensureTables();
+      if (mio) await rows(sql`UPDATE focuslock_players SET emailHash = ${mio} WHERE device = ${device}`);
+      if (!hash.length) { res.json({ giocatori: [] }); return; }
+      const lista = hash.map((h: string) => "'" + h + "'").join(",");
+      const r = await rows(sql.raw(`SELECT device, name, nick, emailHash, telHash FROM focuslock_players WHERE device <> '${device.replace(/[^A-Za-z0-9_-]/g, "")}' AND (emailHash IN (${lista}) OR telHash IN (${lista})) LIMIT 50`));
+      res.json({ giocatori: r.map((p: any) => ({ device: String(p.device), nome: String(p.nick || p.name || "Giocatore"), hash: hash.includes(String(p.telHash)) ? String(p.telHash) : String(p.emailHash) })) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "contatti non confrontabili" });
+    }
+  });
+
   app.post("/api/focuslock/social/friend", async (req: Request, res: Response) => {
     const b = req.body || {};
     const device = String(b.device || "").slice(0, 64);
