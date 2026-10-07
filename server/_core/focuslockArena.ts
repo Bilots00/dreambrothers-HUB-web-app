@@ -173,6 +173,35 @@ async function assegnaLega(device: string, goal: string, tier: string, nick: str
 }
 
 export function registerFocusLockArenaRoutes(app: Express) {
+  /* AMICI SUGGERITI (0.9.207): gli amici dei miei amici («Seguito da …»), poi chi e' attivo
+     («Persona che potresti conoscere»). Mai chi seguo gia'. */
+  app.get("/api/focuslock/social/suggeriti", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const miei = (await rows(sql`SELECT friend FROM focuslock_friends WHERE device = ${device}`)).map((x) => String(x.friend));
+      const fof = await rows(sql`SELECT f2.friend AS device, p.name, p.nick, p1.name AS daName, p1.nick AS daNick
+        FROM focuslock_friends f1 JOIN focuslock_friends f2 ON f2.device = f1.friend
+        JOIN focuslock_players p ON p.device = f2.friend JOIN focuslock_players p1 ON p1.device = f1.friend
+        WHERE f1.device = ${device} AND f2.friend <> ${device} LIMIT 80`);
+      const visti: Record<string, boolean> = {}; const out: any[] = [];
+      for (const r of fof) { const d = String(r.device); if (miei.includes(d) || visti[d]) continue; visti[d] = true; out.push({ device: d, nome: nomeDi(r), da: String(r.daNick || r.daName || "un amico") }); }
+      const attivi = await rows(sql`SELECT device, name, nick FROM focuslock_players WHERE device <> ${device} AND name <> '' AND updatedAt > (NOW() - INTERVAL 14 DAY) ORDER BY updatedAt DESC LIMIT 40`);
+      for (const r of attivi) { const d = String(r.device); if (miei.includes(d) || visti[d] || out.length >= 30) continue; visti[d] = true; out.push({ device: d, nome: nomeDi(r), da: "" }); }
+      res.json({ giocatori: out });
+    } catch (e: any) { res.status(500).json({ error: e?.message || "suggeriti non disponibili" }); }
+  });
+  /* PRIMA DEGLI ALTRI (0.9.207): quanti giocatori attivi non si sono ancora fatti vivi oggi */
+  app.get("/api/focuslock/social/serie-prima", async (_req: Request, res: Response) => {
+    try {
+      await ensureArena();
+      const r = await rows(sql`SELECT COUNT(*) AS tot, SUM(updatedAt < CURDATE()) AS nonOggi FROM focuslock_players WHERE name <> '' AND updatedAt > (NOW() - INTERVAL 7 DAY)`);
+      const tot = Number(r[0]?.tot || 0), non = Number(r[0]?.nonOggi || 0);
+      res.json({ pct: tot >= 3 ? Math.round(non * 100 / tot) : 0, tot });
+    } catch { res.json({ pct: 0, tot: 0 }); }
+  });
+
   /* CERCA PER NOME (0.9.203): nome o nick che contengono il testo, mai se stessi, 12 al massimo.
      Si vede solo nome, device e livello: niente di piu' di quello che la lega gia' mostra. */
   app.get("/api/focuslock/social/cerca", async (req: Request, res: Response) => {

@@ -20,6 +20,7 @@ import { registerFocusLockTreeRoutes } from "./focuslockTrees";
 import { registerFocusLockSocialRoutes } from "./focuslockSocial";
 import { registerFocusLockArenaRoutes } from "./focuslockArena";
 import { registerFocusLockGenioRoutes } from "./focuslockGenio";
+import { registerFocusLockAgentTools } from "./focuslockAgentTools";
 import { registerFocusLockIoFuturoRoutes } from "./focuslockIoFuturo";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
@@ -673,6 +674,7 @@ async function startServer() {
   registerFocusLockSocialRoutes(app);
   registerFocusLockArenaRoutes(app);
   registerFocusLockGenioRoutes(app);
+  registerFocusLockAgentTools(app);
   registerFocusLockIoFuturoRoutes(app);
   registerWatchlistRoutes(app);
   registerImageProxy(app);

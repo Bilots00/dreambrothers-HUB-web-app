@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { getDb } from "../db";
+import { comandiPendenti } from "./focuslockAgentTools";
 
 /* FocusLock — Amici e classifica.
  *
@@ -179,6 +180,8 @@ export function registerFocusLockSocialRoutes(app: Express) {
         const reaz = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_reazioni WHERE a = ${device} AND createdAt > (NOW() - INTERVAL 7 DAY)`);
         extra = { premiumUntil: me[0]?.premiumUntil ? new Date(me[0].premiumUntil).toISOString() : null, nick: String(me[0]?.nick || ""), tier: String(me[0]?.tier || "bronzo"),
           legaOptIn: !!Number(me[0]?.legaOptIn || 0), reazioni7: Number(reaz[0]?.k || 0) };
+        /* i comandi dell'agente in coda per questo telefono (0.9.207) */
+        try { extra.comandi = await comandiPendenti(device); } catch { /* tabella non pronta */ }
       } catch { /* colonne non ancora pronte */ }
       res.json(Object.assign({ ok: true, code: c, score7, rank7: Number(above7[0]?.k || 0) + 1, rankAll: Number(aboveAll[0]?.k || 0) + 1, players: Number(total[0]?.k || 0), live }, extra));
     } catch (e: any) {
