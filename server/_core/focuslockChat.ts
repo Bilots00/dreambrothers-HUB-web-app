@@ -230,7 +230,15 @@ function eRoadmap(testo: string, primo: boolean): boolean {
 async function chiamaModello(messaggi: { role: string; content: string }[], piano = false): Promise<string> {
   const f = fornitore();
   if (f === "anthropic") {
-    const msgs = messaggi.map((m) => ({ role: m.role === "assistant" ? "assistant" as const : "user" as const, content: m.content }));
+    /* 0.9.230: le immagini allegate dal piano (link alle immagini del piano su questo server) arrivano
+     * al modello come immagini vere, non solo come testo */
+    const IMG = /https:\/\/meta-ai-media-buyer-production\.up\.railway\.app\/api\/focuslock\/piano\/img\/[a-f0-9]{32}/g;
+    const msgs = messaggi.map((m) => {
+      const role = m.role === "assistant" ? "assistant" as const : "user" as const;
+      const urls = role === "user" ? Array.from(new Set(m.content.match(IMG) || [])).slice(0, 6) : [];
+      if (!urls.length) return { role, content: m.content };
+      return { role, content: [...urls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })), { type: "text" as const, text: m.content }] };
+    });
     const system = [{ type: "text" as const, text: PERSONA, cache_control: { type: "ephemeral" as const } }];
     /* Haiku 4.5 non accetta `effort`: il parametro va solo al modello del piano */
     const r = piano
