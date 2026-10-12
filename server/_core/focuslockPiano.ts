@@ -48,6 +48,13 @@ function ensureTables(): Promise<void> {
         createdAt TIMESTAMP NULL,
         KEY idx_chiave (chiave)
       )`);
+      // 0.9.233: le note importate da Samsung Notes, in attesa che il telefono le prenda
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_note_import (
+        chiave VARCHAR(64) PRIMARY KEY,
+        dati LONGTEXT NOT NULL,
+        at BIGINT NOT NULL,
+        updatedAt TIMESTAMP NULL
+      )`);
     })().catch((e) => { ready = null; throw e; });
   }
   return ready;
@@ -165,6 +172,37 @@ export function registerFocusLockPianoRoutes(app: Express) {
         return JSON.stringify([u.pages, u.trash ?? []]) !== JSON.stringify([arrivato.pages, arrivato.trash ?? []]);
       });
       res.json({ ok: true, at, diverso });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+
+  /* LE NOTE IMPORTATE (0.9.233): Andrea ha chiesto di portare nella replica di Samsung Notes tutte
+     le sue note. Il PC le converte e le lascia qui sotto la chiave privata del suo piano; l'app, che
+     ha la stessa chiave, le prende una volta e le unisce alle sue (per id, senza doppioni). */
+  app.get("/api/focuslock/piano/:k/note-import", async (req: Request, res: Response) => {
+    cors(res); res.setHeader("Cache-Control", "no-store");
+    const k = String(req.params.k || "");
+    if (!CHIAVE.test(k)) { res.status(400).json({ error: "chiave non valida" }); return; }
+    if (troppe("ni:" + ip(req), 300, 3600000)) { res.status(429).json({ error: "troppe richieste" }); return; }
+    try {
+      await ensureTables();
+      const r = await rows(sql`SELECT dati, at FROM focuslock_note_import WHERE chiave = ${k} LIMIT 1`);
+      res.json(r.length ? { dati: String(r[0].dati), at: Number(r[0].at) || 0 } : { dati: null, at: 0 });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+  app.post("/api/focuslock/piano/:k/note-import", async (req: Request, res: Response) => {
+    cors(res);
+    const k = String(req.params.k || "");
+    if (!CHIAVE.test(k)) { res.status(400).json({ error: "chiave non valida" }); return; }
+    if (troppe("nip:" + ip(req), 30, 3600000)) { res.status(429).json({ error: "troppe richieste" }); return; }
+    const dati = typeof (req.body ?? {}).dati === "string" ? String(req.body.dati) : "";
+    if (!dati || dati.length > MAX_DATI) { res.status(400).json({ error: "vuoto o troppo grande" }); return; }
+    try { const l = JSON.parse(dati); if (!Array.isArray(l)) throw new Error("x"); } catch { res.status(400).json({ error: "note illeggibili" }); return; }
+    try {
+      await ensureTables();
+      const at = Date.now();
+      await rows(sql`INSERT INTO focuslock_note_import (chiave, dati, at, updatedAt) VALUES (${k}, ${dati}, ${at}, NOW())
+        ON DUPLICATE KEY UPDATE dati = VALUES(dati), at = VALUES(at), updatedAt = NOW()`);
+      res.json({ ok: true, at });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
 
