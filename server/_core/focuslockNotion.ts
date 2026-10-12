@@ -43,7 +43,7 @@ const trattini = (id: string) => { const x = id.replace(/-/g, "").toLowerCase();
 // 60 letture con 6 in parallelo = 15,8 al secondo senza un solo 429. Si parte una chiamata ogni
 // 70 ms, al massimo 12 in volo; al primo 429 TUTTE le chiamate si fermano per il tempo che dice Notion.
 let ultima = 0, inVolo = 0, fermiFino = 0;
-let chiamate = 0;
+let chiamate = 0, msInRete = 0, attesaTurno = 0;
 const pausa = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function turno() {
   for (;;) {
@@ -58,7 +58,9 @@ async function turno() {
 async function api(method: string, path: string, body?: unknown): Promise<any> {
   if (!token()) throw new Error("manca NOTION_TOKEN");
   for (let tentativo = 0; ; tentativo++) {
+    const t0 = Date.now();
     await turno();
+    const t1 = Date.now(); attesaTurno += t1 - t0;
     chiamate++;
     let r: globalThis.Response;
     try {
@@ -66,7 +68,7 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
         method, headers: { Authorization: "Bearer " + token(), "Notion-Version": NV, "Content-Type": "application/json" },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
-    } finally { inVolo--; }
+    } finally { inVolo--; msInRete += Date.now() - t1; }
     if (r.status === 429 || r.status >= 500) {
       if (tentativo >= 6) throw new Error(`Notion ${r.status} su ${method} ${path}`);
       const ms = Math.max(1000, Number(r.headers.get("retry-after") || 0) * 1000) * (tentativo + 1);
@@ -495,7 +497,7 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
     if (serve && pg) { o.visto = pg.last_edited_time; o.scanInizio = inizio; o.scanAt = Date.now(); }
     await salva();
     delete stato.errore;
-    stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate, letturaMs: durata, giroMs: Date.now() - inizio };
+    stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate, letturaMs: durata, giroMs: Date.now() - inizio, latenzaMediaMs: chiamate ? Math.round(msInRete / chiamate) : 0, turnoMedioMs: chiamate ? Math.round(attesaTurno / chiamate) : 0 };
     if (durata >= 0) scrivi(stato, `riletta Notion: ${letti?.size} blocchi in ${Math.round(durata / 100) / 10} s, ${ops.length} operazioni`);
     await salvaStato(k, paginaId, stato);
   } catch (e: any) {
