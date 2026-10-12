@@ -38,24 +38,40 @@ const CHIAVE = /^[A-Za-z0-9_-]{32,64}$/;
 const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 const trattini = (id: string) => { const x = id.replace(/-/g, "").toLowerCase(); return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`; };
 
-// ---------------------------------------------------------------- l'API di Notion, piano piano
-let ultima = 0;
+// ---------------------------------------------------------------- l'API di Notion, con il freno
+// Notion dichiara ~3 chiamate al secondo «in media, con picchi ammessi»: misurato il 12/10/2026,
+// 60 letture con 6 in parallelo = 15,8 al secondo senza un solo 429. Si parte una chiamata ogni
+// 100 ms, al massimo 6 in volo; al primo 429 TUTTE le chiamate si fermano per il tempo che dice Notion.
+let ultima = 0, inVolo = 0, fermiFino = 0;
 let chiamate = 0;
 const pausa = (ms: number) => new Promise(r => setTimeout(r, ms));
+async function turno() {
+  for (;;) {
+    const ora = Date.now();
+    if (ora < fermiFino) { await pausa(fermiFino - ora); continue; }
+    if (inVolo >= 6) { await pausa(50); continue; }
+    const attesa = ultima + 100 - ora;
+    if (attesa > 0) { await pausa(attesa); continue; }
+    ultima = ora; inVolo++; return;
+  }
+}
 async function api(method: string, path: string, body?: unknown): Promise<any> {
   if (!token()) throw new Error("manca NOTION_TOKEN");
   for (let tentativo = 0; ; tentativo++) {
-    const attesa = ultima + 340 - Date.now(); // ~3 al secondo, il limite di Notion
-    ultima = Math.max(Date.now(), ultima + 340);
-    if (attesa > 0) await pausa(attesa);
+    await turno();
     chiamate++;
-    const r = await fetch("https://api.notion.com/v1" + path, {
-      method, headers: { Authorization: "Bearer " + token(), "Notion-Version": NV, "Content-Type": "application/json" },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
+    let r: globalThis.Response;
+    try {
+      r = await fetch("https://api.notion.com/v1" + path, {
+        method, headers: { Authorization: "Bearer " + token(), "Notion-Version": NV, "Content-Type": "application/json" },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+    } finally { inVolo--; }
     if (r.status === 429 || r.status >= 500) {
       if (tentativo >= 6) throw new Error(`Notion ${r.status} su ${method} ${path}`);
-      await pausa(Math.max(1000, Number(r.headers.get("retry-after") || 0) * 1000) * (tentativo + 1));
+      const ms = Math.max(1000, Number(r.headers.get("retry-after") || 0) * 1000) * (tentativo + 1);
+      if (r.status === 429) fermiFino = Math.max(fermiFino, Date.now() + ms);
+      await pausa(ms);
       continue;
     }
     const j: any = await r.json().catch(() => ({}));
@@ -195,13 +211,15 @@ async function aggancia(k: string, paginaId: string, notionId: string, stato: St
     const preso = new Set(coppie.map(c => c[1]));
     nb.forEach((n, j) => { if (!preso.has(j)) x.push(n.id); });
     let prv: string | null = null;
+    const giu: Promise<void>[] = [];
     for (const [i, j] of coppie) {
       const b = pl[i]!, n = nb[j]!;
       const ro = !SINCRONIZZABILE(b.kind) || !kindDi(n);
       voci[n.id] = { pid: b.id, hp: impP(b), hn: impN(n), par: parKey, prv, t: n.type, ...(ro ? { ro: 1 as const } : {}) };
       legati.set(b.id, n.id); prv = n.id;
-      if (!ro && n.has_children && !NON_SCENDERE.has(n.type)) await lista(n.id, b.id, n.id);
+      if (!ro && n.has_children && !NON_SCENDERE.has(n.type)) giu.push(lista(n.id, b.id, n.id));
     }
+    await Promise.all(giu);
   };
   const pg = await api("GET", `/pages/${notionId}`);
   await lista(notionId, null, "");
@@ -233,8 +251,9 @@ async function scansiona(o: Ombra): Promise<{ letti: Map<string, LettoN>; nuoviX
       const v = o.voci[n.id];
       if (!v && (padreFuori || !kindDi(n))) { nuoviX.push(n.id); continue; } // nuovo e non sincronizzabile: fuori, per sempre
       letti.set(n.id, { n, par: parKey, prv }); prv = n.id;
-      if (n.has_children && !v?.ro && !NON_SCENDERE.has(n.type)) await giro(n.id, n.id, false);
     }
+    // i rami si leggono in parallelo (il freno sta in api)
+    await Promise.all(nb.filter(n => letti.has(n.id) && n.has_children && !o.voci[n.id]?.ro && !NON_SCENDERE.has(n.type)).map(n => giro(n.id, n.id, false)));
   };
   await giro(o.notion, "", false);
   return { letti, nuoviX };
@@ -262,7 +281,8 @@ const descrivi = (op: Op, p: Pagina): string => {
   }
 };
 
-async function giro(k: string, paginaId: string, forza = false): Promise<void> {
+type Lettura = "mai" | "se-serve" | "sempre";
+async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"): Promise<void> {
   const riga = await leggiRiga(k, paginaId); if (!riga?.ombra) return;
   const o = riga.ombra, stato = riga.stato;
   if (o.ferma) return;
@@ -271,9 +291,8 @@ async function giro(k: string, paginaId: string, forza = false): Promise<void> {
   try {
     // 1. Notion: si rilegge solo se la pagina e' cambiata (l'ora di Notion va al minuto: se il minuto
     //    di quell'ora non era finito quando abbiamo letto l'ultima volta, si rilegge ancora)
-    const pg = await api("GET", `/pages/${o.notion}`);
-    const vistoMs = Date.parse(pg.last_edited_time);
-    const serve = forza || pg.last_edited_time !== o.visto || vistoMs + 60_000 > o.scanInizio || Date.now() - o.scanAt > SCANSIONE_COMUNQUE;
+    const pg = lettura === "mai" ? null : await api("GET", `/pages/${o.notion}`);
+    const serve = !!pg && (lettura === "sempre" || pg.last_edited_time !== o.visto || Date.parse(pg.last_edited_time) + 60_000 > o.scanInizio || Date.now() - o.scanAt > SCANSIONE_COMUNQUE);
     let letti: Map<string, LettoN> | null = null;
     const inizio = Date.now();
     if (serve) { const s = await scansiona(o); letti = s.letti; if (!prova && s.nuoviX.length) o.x.push(...s.nuoviX); }
@@ -466,7 +485,7 @@ async function giro(k: string, paginaId: string, forza = false): Promise<void> {
     }
     // le voci che hanno cambiato posto in Notion senza cambiare altro: il posto nuovo
     if (letti) for (const [nid, ln] of Array.from(letti)) { const v = o.voci[nid]; if (v && !ops.some(op => (op.t === "sposta") && op.nid === nid)) { v.par = ln.par; v.prv = ln.prv; } }
-    if (serve) { o.visto = pg.last_edited_time; o.scanInizio = inizio; o.scanAt = Date.now(); }
+    if (serve && pg) { o.visto = pg.last_edited_time; o.scanInizio = inizio; o.scanAt = Date.now(); }
     await salva();
     delete stato.errore;
     stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate };
@@ -479,16 +498,26 @@ async function giro(k: string, paginaId: string, forza = false): Promise<void> {
 }
 
 // ---------------------------------------------------------------- il ciclo e le rotte
-let inCorso = false;
+// una pagina alla volta per se', le pagine fra loro in parallelo. Prima si spinge in Notion quello che e'
+// cambiato nel piano (veloce, senza rileggere Notion), poi si rilegge Notion se la pagina e' cambiata:
+// cosi' una rilettura lunga non fa aspettare le modifiche fatte nell'app.
+const inCorso = new Set<string>();
+function unaVolta(k: string, pagina: string, fn: () => Promise<void>): Promise<void> {
+  const id = k + "/" + pagina;
+  if (inCorso.has(id)) return Promise.resolve();
+  inCorso.add(id);
+  return fn().finally(() => inCorso.delete(id));
+}
 async function ciclo() {
-  if (inCorso || !token() || (modo() !== "on" && modo() !== "prova")) return;
-  inCorso = true;
+  if (!token() || (modo() !== "on" && modo() !== "prova")) return;
   try {
     await tabelle();
     const r = await rows(sql`SELECT chiave, pagina FROM focuslock_notion WHERE ombra IS NOT NULL`);
-    for (const x of r) await giro(String(x.chiave), String(x.pagina));
+    for (const x of r) {
+      const k = String(x.chiave), pg = String(x.pagina);
+      void unaVolta(k, pg, async () => { await giro(k, pg, "mai"); await giro(k, pg, "se-serve"); }).catch(e => console.error("[notion-sync]", e));
+    }
   } catch (e) { console.error("[notion-sync]", e); }
-  finally { inCorso = false; }
 }
 
 export function registerFocusLockNotionRoutes(app: Express) {
@@ -532,7 +561,7 @@ export function registerFocusLockNotionRoutes(app: Express) {
     const pagina = String(req.body?.pagina || "");
     if (!CHIAVE.test(k) || !pagina) { res.status(400).json({ error: "servono chiave e pagina" }); return; }
     if (modo() !== "on" && modo() !== "prova") { res.status(409).json({ error: "NOTION_SYNC non e' acceso" }); return; }
-    try { await tabelle(); await giro(k, pagina, true); res.json({ ok: true, stato: (await leggiRiga(k, pagina))?.stato }); }
+    try { await tabelle(); await unaVolta(k, pagina, () => giro(k, pagina, "sempre")); res.json({ ok: true, stato: (await leggiRiga(k, pagina))?.stato }); }
     catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
 
