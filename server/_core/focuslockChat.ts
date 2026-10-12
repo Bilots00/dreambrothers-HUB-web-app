@@ -554,7 +554,10 @@ export function registerFocusLockChatRoutes(app: Express) {
     const who = await utente(req, res); if (!who) return;
     try {
       await ensureTables();
-      const r = await rows(sql`SELECT chiave FROM focuslock_piano_owner WHERE googleSub = ${who.sub} ORDER BY updatedAt DESC LIMIT 1`);
+      // 0.9.231: il quaderno con le pagine vince sempre. Prima vinceva l'ultimo registrato, e il PC
+      // che si era fatto una chiave sua (vuota) toglieva il quaderno vero a ogni dispositivo nuovo
+      const r = await rows(sql`SELECT o.chiave FROM focuslock_piano_owner o LEFT JOIN focuslock_piano p ON p.chiave = o.chiave
+        WHERE o.googleSub = ${who.sub} ORDER BY COALESCE(LENGTH(p.dati), 0) DESC, o.updatedAt ASC LIMIT 1`);
       res.json({ k: r[0]?.chiave ? String(r[0].chiave) : null });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
