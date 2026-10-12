@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import { rows } from "./focuslockRoutes";
 import { conChiave, leggiQuaderno, pianoTabelle, scriviQuaderno } from "./focuslockPiano";
 import {
-  CONTENITORE, SINCRONIZZABILE, classeN, classeP, impN, impP, kindDi, normale, notionDi, pianoDi, struttura, testoDi,
+  CONTENITORE, SINCRONIZZABILE, classeN, classeP, htmlDi, impN, impP, kindDi, normale, notionDi, pianoDi, struttura, testoDi,
   type BloccoN, type BloccoP,
 } from "./notionBlocchi";
 
@@ -571,6 +571,74 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
   }
 }
 
+// ---------------------------------------------------------------- i doppioni della To do list (una volta sola)
+// La vecchia sync del telefono (foglio-sync.js) ha riempito la «To do list» di Notion con ~59.000 righe doppie
+// (50.000 nel toggle «IMPORTANTE»). Andrea ha detto di cancellarle (12/10/2026). Regola = quella dell'import
+// del piano (converti_html.py, senza_doppioni): nella STESSA lista, una casella / un punto / un numero con lo
+// stesso tipo, testo e formattazione di uno di prima e' un doppione, e va via con i suoi figli. Le cancellate
+// finiscono nel cestino di Notion (30 giorni). Gira sul server, riprende da sola dopo un riavvio (rilegge e
+// cancella quello che resta), e parte davvero solo se il numero trovato e' quello atteso (± 1%).
+const DOPPI = new Set(["to_do", "bulleted_list_item", "numbered_list_item"]);
+type Pulizia = { notion: string; fase: "prova" | "cancello" | "fatto" | "errore"; atteso?: number; letti: number; trovati: number; cancellati: number; esempi: string[]; inizio: number; fine?: number; errore?: string };
+async function trovaDoppioni(notionId: string): Promise<{ via: string[]; letti: number; esempi: string[] }> {
+  const via: string[] = []; const esempi: string[] = []; let letti = 0;
+  const giro = async (id: string): Promise<void> => {
+    const visti = new Set<string>(); const giu: Promise<void>[] = [];
+    await figli(id, nb => {
+      letti += nb.length;
+      for (const n of nb) {
+        if (DOPPI.has(n.type)) {
+          const rt = n[n.type]?.rich_text ?? [];
+          const k = n.type + "|" + testoDi(rt).trim() + "|" + (htmlDi(rt) ?? "");
+          if (visti.has(k)) { via.push(n.id); if (esempi.length < 15 && !esempi.includes(k)) esempi.push(k.slice(0, 90)); continue; } // non si scende: va via con i figli
+          visti.add(k);
+        }
+        if (n.has_children && !NON_SCENDERE.has(n.type)) giu.push(giro(n.id));
+      }
+    });
+    await Promise.all(giu);
+  };
+  await giro(notionId);
+  return { via, letti, esempi };
+}
+const pulizieInCorso = new Set<string>();
+async function pulisci(k: string, notionId: string, prova: boolean, atteso?: number): Promise<void> {
+  const riga = "_doppioni:" + notionId;
+  if (pulizieInCorso.has(riga)) return;
+  pulizieInCorso.add(riga);
+  const stato: Stato = (await dep.leggiRiga(k, riga))?.stato ?? { giri: 0, registro: [] };
+  const p: Pulizia = { notion: notionId, fase: prova ? "prova" : "cancello", atteso, letti: 0, trovati: 0, cancellati: 0, esempi: [], inizio: Date.now() };
+  const salva = async () => { (stato as any).pulizia = p; await dep.salvaStato(k, riga, stato); };
+  try {
+    await salva();
+    const t = await trovaDoppioni(notionId);
+    p.letti = t.letti; p.trovati = t.via.length; p.esempi = t.esempi;
+    scrivi(stato, `doppioni: letti ${t.letti} blocchi, ${t.via.length} da cancellare`);
+    if (prova) { p.fine = Date.now(); await salva(); return; }
+    if (!atteso || Math.abs(t.via.length - atteso) > Math.max(5, atteso * 0.01)) {
+      // dopo un riavvio ne restano meno: va bene se sono MENO di quelli attesi all'inizio
+      if (!(atteso && t.via.length < atteso)) throw new Error(`trovati ${t.via.length} doppioni, attesi ${atteso}: non cancello niente`);
+    }
+    await salva();
+    let i = 0;
+    const lavora = async () => {
+      while (i < t.via.length) {
+        const id = t.via[i++]!;
+        try { await api("DELETE", `/blocks/${id}`); } catch (e: any) { if (e.status !== 404 && !/archived|trash/i.test(e.message)) throw e; }
+        p.cancellati++;
+        if (p.cancellati % 250 === 0) await salva();
+      }
+    };
+    await Promise.all([lavora(), lavora(), lavora()]);
+    p.fase = "fatto"; p.fine = Date.now();
+    scrivi(stato, `doppioni: cancellati ${p.cancellati}`);
+    await salva();
+  } catch (e: any) {
+    p.fase = "errore"; p.errore = String(e?.message || e); scrivi(stato, "ERRORE doppioni: " + p.errore);
+    await salva().catch(() => undefined);
+  } finally { pulizieInCorso.delete(riga); }
+}
+
 // ---------------------------------------------------------------- il ciclo e le rotte
 // Per ogni pagina due strade:
 //   - la SPINTA (ogni 10 s): quello che e' cambiato nel piano va in Notion. Veloce, sotto il lucchetto.
@@ -619,6 +687,12 @@ async function ciclo() {
   if (!token() || (modo() !== "on" && modo() !== "prova")) return;
   try {
     await tabelle();
+    // una pulizia dei doppioni interrotta da un riavvio riparte da sola
+    const pz = await rows(sql`SELECT chiave, pagina, stato FROM focuslock_notion WHERE pagina LIKE '_doppioni:%'`);
+    for (const x of pz) {
+      let pu: Pulizia | undefined; try { pu = JSON.parse(String(x.stato)).pulizia; } catch { pu = undefined; }
+      if (pu?.fase === "cancello" && !pulizieInCorso.has(String(x.pagina))) void pulisci(String(x.chiave), pu.notion, false, pu.atteso);
+    }
     const r = await rows(sql`SELECT chiave, pagina FROM focuslock_notion WHERE ombra IS NOT NULL`);
     for (const x of r) {
       const k = String(x.chiave), pg = String(x.pagina), id = k + "/" + pg;
@@ -643,6 +717,7 @@ export function registerFocusLockNotionRoutes(app: Express) {
         pagine: r.map((x: any) => {
           let o: Ombra | null = null; try { o = x.ombra ? JSON.parse(String(x.ombra)) : null; } catch { o = null; }
           let s: Stato | null = null; try { s = x.stato ? JSON.parse(String(x.stato)) : null; } catch { s = null; }
+          if (String(x.pagina).startsWith("_doppioni:")) return { pagina: x.pagina, pulizia: (s as any)?.pulizia, registro: s?.registro?.slice(-10) };
           return { pagina: x.pagina, notion: o?.notion, agganciati: o ? Object.keys(o.voci).length : 0, fuoriPiano: o?.fuori.length ?? 0, fuoriNotion: o?.x.length ?? 0, visto: o?.visto, stato: s };
         }),
       });
@@ -670,6 +745,16 @@ export function registerFocusLockNotionRoutes(app: Express) {
     if (!CHIAVE.test(k) || !pagina) { res.status(400).json({ error: "servono chiave e pagina" }); return; }
     if (modo() !== "on" && modo() !== "prova") { res.status(409).json({ error: "NOTION_SYNC non e' acceso" }); return; }
     try { await tabelle(); await unaVolta(letture, k + "/" + pagina, () => leggiSeServe(k, pagina, true)); res.json({ ok: true, stato: (await dep.leggiRiga(k, pagina))?.stato }); }
+    catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
+  });
+
+  // i doppioni di una pagina: {notion, prova: true} conta e mostra esempi; {notion, atteso} cancella davvero
+  app.post("/api/focuslock/notion/:k/doppioni", async (req: Request, res: Response) => {
+    const k = String(req.params.k || ""); const notion = String(req.body?.notion || "");
+    if (!CHIAVE.test(k) || !UUID.test(notion)) { res.status(400).json({ error: "servono chiave e notion" }); return; }
+    const prova = req.body?.prova !== false; const atteso = Number(req.body?.atteso) || undefined;
+    if (!prova && !atteso) { res.status(400).json({ error: "per cancellare serve il numero atteso (dalla prova)" }); return; }
+    try { await tabelle(); void pulisci(k, trattini(notion), prova, atteso); res.json({ ok: true, partita: true, stato: `/api/focuslock/notion/${k}/stato` }); }
     catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
 
