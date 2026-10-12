@@ -140,6 +140,14 @@ async function salvaStato(k: string, pagina: string, s: Stato) {
 }
 const scrivi = (s: Stato, riga: string) => { s.registro.push(new Date().toISOString().slice(0, 19).replace("T", " ") + " " + riga); };
 
+// Dove il job legge e scrive (il database e il quaderno del piano). Le prove (focuslockNotion.test.ts)
+// lo sostituiscono con uno in memoria, insieme a un Notion finto.
+type Deposito = {
+  leggiRiga: typeof leggiRiga; salvaOmbra: typeof salvaOmbra; salvaStato: typeof salvaStato;
+  leggiQuaderno: typeof leggiQuaderno; scriviQuaderno: typeof scriviQuaderno; conChiave: typeof conChiave;
+};
+let dep: Deposito = { leggiRiga, salvaOmbra, salvaStato, leggiQuaderno, scriviQuaderno, conChiave };
+
 // ---------------------------------------------------------------- il piano: trovare e cambiare blocchi
 type Pagina = { id: string; mod?: number; blocks: BloccoP[]; tomb?: Record<string, number>; notion?: string; notionAt?: number; [k: string]: unknown };
 type Dove = { list: BloccoP[]; i: number; padre: BloccoP | null };
@@ -174,6 +182,7 @@ function posto(p: Pagina, par: string, prv: string | null): { list: BloccoP[]; i
   if (prv) {
     const j = list.findIndex(b => b.nid === prv);
     if (j >= 0) return { list, i: j + 1 + coda(list, j), rientro: r };
+    return null; // il fratello prima non e' (ancora) qui: meglio aspettare il prossimo giro che mettere il blocco in cima
   }
   return { list, i: inizio, rientro: r };
 }
@@ -202,7 +211,7 @@ const chiaveP = (b: BloccoP) => classeP(b) + "|" + (SINCRONIZZABILE(b.kind) ? no
 const chiaveN = (n: BloccoN) => classeN(n) + "|" + (kindDi(n) ? normale(testoDi(n[n.type]?.rich_text ?? [])) : "");
 
 async function aggancia(k: string, paginaId: string, notionId: string, stato: Stato): Promise<Record<string, number>> {
-  const q = await leggiQuaderno(k); if (!q) throw new Error("quaderno vuoto");
+  const q = await dep.leggiQuaderno(k); if (!q) throw new Error("quaderno vuoto");
   const p = (q.dati.pages as unknown as Pagina[]).find(x => x.id === paginaId); if (!p) throw new Error("pagina del piano non trovata: " + paginaId);
   const posti = struttura(p.blocks);
   const gruppi = new Map<number | null, BloccoP[]>();
@@ -230,14 +239,14 @@ async function aggancia(k: string, paginaId: string, notionId: string, stato: St
   await lista(notionId, null, "");
   const fuori = tutti(p.blocks).filter(b => !legati.has(b.id)).map(b => b.id);
   const ombra: Ombra = { notion: notionId, at: Date.now(), visto: pg.last_edited_time, scanInizio: Date.now(), scanAt: Date.now(), voci, x, fuori };
-  await salvaOmbra(k, paginaId, ombra);
+  await dep.salvaOmbra(k, paginaId, ombra);
   // i nid nel piano (sotto il lucchetto, sulla copia di adesso)
-  await conChiave(k, async () => {
-    const c = await leggiQuaderno(k); if (!c) return;
+  await dep.conChiave(k, async () => {
+    const c = await dep.leggiQuaderno(k); if (!c) return;
     const pc = (c.dati.pages as unknown as Pagina[]).find(z => z.id === paginaId); if (!pc) return;
     tutti(pc.blocks).forEach(b => { const n = legati.get(b.id); if (n) b.nid = n; });
     pc.notion = notionId; pc.notionAt = ombra.at;
-    await scriviQuaderno(k, c.dati, Date.now());
+    await dep.scriviQuaderno(k, c.dati, Date.now());
   });
   const conti = { lettiNotion: lette, agganciati: legati.size, soloLettura: Object.values(voci).filter(v => v.ro).length, fuoriPiano: fuori.length, fuoriNotion: x.length, chiamate };
   scrivi(stato, `aggancio a ${notionId}: ${JSON.stringify(conti)}`);
@@ -246,8 +255,9 @@ async function aggancia(k: string, paginaId: string, notionId: string, stato: St
 
 // ---------------------------------------------------------------- un giro
 type LettoN = { n: BloccoN; par: string; prv: string | null };
-async function scansiona(o: Ombra): Promise<{ letti: Map<string, LettoN>; nuoviX: string[] }> {
+async function scansiona(o: Ombra): Promise<{ letti: Map<string, LettoN>; nuoviX: string[]; liste: Map<string, string[]> }> {
   const letti = new Map<string, LettoN>(); const nuoviX: string[] = []; const xs = new Set(o.x);
+  const liste = new Map<string, string[]>(); // per ogni genitore, i figli letti in ordine
   // i rami si leggono in parallelo, e si comincia a scendere appena arriva ogni pagina di 100 figli
   // (il freno sui 429 sta in api)
   const giro = async (id: string, parKey: string, padreFuori: boolean): Promise<void> => {
@@ -259,13 +269,14 @@ async function scansiona(o: Ombra): Promise<{ letti: Map<string, LettoN>; nuoviX
         const v = o.voci[n.id];
         if (!v && (padreFuori || !kindDi(n))) { nuoviX.push(n.id); continue; } // nuovo e non sincronizzabile: fuori, per sempre
         letti.set(n.id, { n, par: parKey, prv }); prv = n.id;
+        const l = liste.get(parKey) ?? []; l.push(n.id); liste.set(parKey, l);
         if (n.has_children && !v?.ro && !NON_SCENDERE.has(n.type)) giu.push(giro(n.id, n.id, false));
       }
     });
     await Promise.all(giu);
   };
   await giro(o.notion, "", false);
-  return { letti, nuoviX };
+  return { letti, nuoviX, liste };
 }
 
 type Op =
@@ -291,9 +302,9 @@ const descrivi = (op: Op, p: Pagina): string => {
 };
 
 // Una lettura di Notion fatta SENZA lucchetto (dura decine di secondi), da applicare dopo, sotto il lucchetto.
-type Letta = { letti: Map<string, LettoN>; nuoviX: string[]; inizio: number; visto: string; durata: number };
+type Letta = { letti: Map<string, LettoN>; nuoviX: string[]; liste: Map<string, string[]>; inizio: number; visto: string; durata: number };
 async function giro(k: string, paginaId: string, letta: Letta | null): Promise<void> {
-  const riga = await leggiRiga(k, paginaId); if (!riga?.ombra) return;
+  const riga = await dep.leggiRiga(k, paginaId); if (!riga?.ombra) return;
   const o = riga.ombra, stato = riga.stato;
   if (o.ferma) return;
   const prova = modo() === "prova";
@@ -313,7 +324,7 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
     }
 
     // 2. il piano, adesso
-    const q = await leggiQuaderno(k); if (!q) throw new Error("quaderno vuoto");
+    const q = await dep.leggiQuaderno(k); if (!q) throw new Error("quaderno vuoto");
     const p = (q.dati.pages as unknown as Pagina[]).find(x => x.id === paginaId); if (!p) throw new Error("pagina sparita dal piano");
     const posti = struttura(p.blocks);
     const perPid = new Map(posti.map(x => [x.b.id, x]));
@@ -328,8 +339,40 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
     const parP = (x: typeof posti[number]) => { const r = nidDi(x.padre); return r === null ? "?" : r; };
     const prvP = (x: typeof posti[number]) => { for (const f of x.fratelli) { const n = nidDi(f); if (n) return n; } return null; };
 
+    // il fratello prima in Notion, contando solo i blocchi che l'ombra conosce (come fa prvP nel piano)
+    const prvNoto = (nid: string, par: string): string | null => {
+      const l = letta?.liste.get(par); if (!l) return null;
+      for (let i = l.indexOf(nid) - 1; i >= 0; i--) if (o.voci[l[i]!]) return l[i]!;
+      return null;
+    };
+    const ordineOmbra = (par: string): string[] => {
+      const dopo = new Map<string | null, string[]>();
+      Object.entries(o.voci).forEach(([n, v]) => { if (v.par === par) { const l = dopo.get(v.prv) ?? []; l.push(n); dopo.set(v.prv, l); } });
+      const out: string[] = []; const visti = new Set<string>();
+      const giu = (prv: string | null) => { for (const n of dopo.get(prv) ?? []) if (!visti.has(n)) { visti.add(n); out.push(n); giu(n); } };
+      giu(null);
+      Object.entries(o.voci).forEach(([n, v]) => { if (v.par === par && !visti.has(n)) out.push(n); }); // catena rotta: in fondo
+      return out;
+    };
+    const mossi = (liste: Map<string, string[]>): Set<string> => {
+      const out = new Set<string>();
+      liste.forEach((l, par) => {
+        const qui = new Set(l);
+        const vecchia = ordineOmbra(par).filter(n => qui.has(n));
+        const fermi = new Set(allinea(vecchia, l).map(([i]) => vecchia[i]!));
+        l.forEach(n => { if (o.voci[n]!.par !== par || !fermi.has(n)) out.add(n); });
+      });
+      return out;
+    };
+    const listePiano = new Map<string, string[]>();
+    posti.forEach(x => { const n = x.b.nid; if (!n || !o.voci[n]) return; const par = parP(x); if (par === "?") return; const l = listePiano.get(par) ?? []; l.push(n); listePiano.set(par, l); });
+    const movP = mossi(listePiano);
+    const listeNotion = new Map<string, string[]>();
+    letta?.liste.forEach((l, par) => listeNotion.set(par, l.filter(n => o.voci[n] && !nonCreduti.has(n))));
+    const movN = mossi(listeNotion);
     const ops: Op[] = [];
     const daRifare = new Set<string>(); // cancellati in Notion per essere ricreati (spostati, cambiati di tipo)
+    let spostatiQui = 0; // spostamenti decisi nel piano (i figli che li seguono non contano)
     for (const [nid, v] of Object.entries(o.voci)) {
       const x = perNid.get(nid); const pb = x?.b;
       const creduto = !!letti && !nonCreduti.has(nid);
@@ -375,11 +418,10 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
       } else if (nC === "mod" && nb) tira(nb);
       // posto
       if (daRifare.has(nid)) continue;
-      const nMov = !!ln && (ln.par !== v.par || ln.prv !== v.prv);
-      const pp = parP(x!), pv = prvP(x!);
-      const pMov = pp !== "?" && (pp !== v.par || pv !== v.prv);
-      if (nMov) ops.push({ t: "sposta", nid, par: ln!.par, prv: ln!.prv });
-      else if (pMov) daRifare.add(nid);
+      const nMov = !!ln && movN.has(nid);
+      const pMov = movP.has(nid);
+      if (nMov) ops.push({ t: "sposta", nid, par: ln!.par, prv: prvNoto(nid, ln!.par) });
+      else if (pMov) { daRifare.add(nid); spostatiQui++; }
     }
     // i blocchi da rifare in Notion si portano dietro tutti quelli che in Notion stanno sotto di loro
     if (daRifare.size) {
@@ -399,17 +441,26 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
     // nuovi in Notion
     if (letti) for (const [nid, ln] of Array.from(letti)) if (!o.voci[nid] && !o.x.includes(nid) && !o.via?.[nid] && !ops.some(op => op.t === "metti" && op.n.id === nid)) ops.push({ t: "metti", n: ln.n, par: ln.par, prv: ln.prv });
 
+    const conta = (t: Op["t"]) => ops.filter(op => op.t === t).length;
+    const troppo = spostatiQui > 5 ? `${spostatiQui} spostamenti da portare in Notion` : conta("via") > 100 ? `${conta("via")} cancellazioni in Notion` : conta("sposta") > 20 ? `${conta("sposta")} spostamenti nel piano` : conta("togli") > 100 ? `${conta("togli")} righe da togliere dal piano` : "";
+    if (troppo && !prova) {
+      o.ferma = `un giro voleva fare ${troppo}: sync ferma per sicurezza, serve un'occhiata (registro e «prova»)`;
+      stato.prova = ops.slice(0, 400).map(op => descrivi(op, p));
+      stato.errore = o.ferma; scrivi(stato, "FERMA " + o.ferma);
+      await dep.salvaOmbra(k, paginaId, o); await dep.salvaStato(k, paginaId, stato);
+      return;
+    }
     if (prova) {
       stato.prova = ops.slice(0, 400).map(op => descrivi(op, p));
       stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate };
       if (ops.length) scrivi(stato, `prova: ${ops.length} operazioni (vedi «prova»)`);
       delete stato.errore;
-      await salvaStato(k, paginaId, stato);
+      await dep.salvaStato(k, paginaId, stato);
       return;
     }
 
     // 3. Notion: cancellazioni, aggiornamenti, creazioni (in ordine di pagina)
-    const salva = () => salvaOmbra(k, paginaId, o);
+    const salva = () => dep.salvaOmbra(k, paginaId, o);
     for (const op of ops) {
       if (op.t === "via") {
         try { await api("DELETE", `/blocks/${op.nid}`); } catch (e: any) { if (e.status !== 404 && !/archived/i.test(e.message)) throw e; }
@@ -453,8 +504,8 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
     // 4. il piano: sotto il lucchetto, sulla copia di adesso (il telefono puo' aver scritto nel frattempo)
     const tirate = ops.filter(op => op.t === "tira" || op.t === "togli" || op.t === "sposta" || op.t === "metti");
     if (tirate.length || assegnati.length) {
-      await conChiave(k, async () => {
-        const c = await leggiQuaderno(k); if (!c) return;
+      await dep.conChiave(k, async () => {
+        const c = await dep.leggiQuaderno(k); if (!c) return;
         const pc = (c.dati.pages as unknown as Pagina[]).find(z => z.id === paginaId); if (!pc) return;
         const adesso = Date.now();
         let cambiata = false;
@@ -501,21 +552,21 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
           }
         }
         if (cambiata) pc.mod = adesso;
-        await scriviQuaderno(k, c.dati, adesso);
+        await dep.scriviQuaderno(k, c.dati, adesso);
       });
     }
     // le voci che hanno cambiato posto in Notion senza cambiare altro: il posto nuovo
-    if (letti) for (const [nid, ln] of Array.from(letti)) { const v = o.voci[nid]; if (v && !nonCreduti.has(nid) && !ops.some(op => (op.t === "sposta") && op.nid === nid)) { v.par = ln.par; v.prv = ln.prv; } }
+    if (letti) for (const [nid, ln] of Array.from(letti)) { const v = o.voci[nid]; if (v && !nonCreduti.has(nid)) { v.par = ln.par; v.prv = prvNoto(nid, ln.par); } }
     if (letta) { o.visto = letta.visto; o.scanInizio = letta.inizio; o.scanAt = Date.now(); }
     await salva();
     delete stato.errore;
     stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate, letturaMs: durata, giroMs: Date.now() - inizio, latenzaMediaMs: chiamate ? Math.round(msInRete / chiamate) : 0, turnoMedioMs: chiamate ? Math.round(attesaTurno / chiamate) : 0 };
     if (durata >= 0) scrivi(stato, `riletta Notion: ${letti?.size} blocchi in ${Math.round(durata / 100) / 10} s, ${ops.length} operazioni`);
-    await salvaStato(k, paginaId, stato);
+    await dep.salvaStato(k, paginaId, stato);
   } catch (e: any) {
     stato.errore = String(e?.message || e);
     scrivi(stato, "ERRORE " + stato.errore);
-    await salvaStato(k, paginaId, stato).catch(() => undefined);
+    await dep.salvaStato(k, paginaId, stato).catch(() => undefined);
   }
 }
 
@@ -542,7 +593,7 @@ function unaVolta(insieme: Set<string>, id: string, fn: () => Promise<void>): Pr
 }
 async function leggiSeServe(k: string, pagina: string, sempre = false): Promise<void> {
   const id = k + "/" + pagina;
-  const riga = await leggiRiga(k, pagina); const o = riga?.ombra; if (!o || o.ferma) return;
+  const riga = await dep.leggiRiga(k, pagina); const o = riga?.ombra; if (!o || o.ferma) return;
   const pg = await api("GET", `/pages/${o.notion}`);
   // l'ora di Notion va al minuto: se il minuto di quell'ora non era finito quando e' cominciata l'ultima
   // lettura, si rilegge ancora (una modifica nello stesso minuto non cambierebbe l'ora)
@@ -552,10 +603,10 @@ async function leggiSeServe(k: string, pagina: string, sempre = false): Promise<
   let s: Awaited<ReturnType<typeof scansiona>>;
   try { s = await scansiona(o); }
   catch (e: any) {
-    await conLucchetto(id, async () => { const r = await leggiRiga(k, pagina); if (r) { r.stato.errore = "lettura di Notion: " + String(e?.message || e); scrivi(r.stato, "ERRORE " + r.stato.errore); await salvaStato(k, pagina, r.stato); } });
+    await conLucchetto(id, async () => { const r = await dep.leggiRiga(k, pagina); if (r) { r.stato.errore = "lettura di Notion: " + String(e?.message || e); scrivi(r.stato, "ERRORE " + r.stato.errore); await dep.salvaStato(k, pagina, r.stato); } });
     return;
   }
-  const letta: Letta = { letti: s.letti, nuoviX: s.nuoviX, inizio, visto: pg.last_edited_time, durata: Date.now() - inizio };
+  const letta: Letta = { letti: s.letti, nuoviX: s.nuoviX, liste: s.liste, inizio, visto: pg.last_edited_time, durata: Date.now() - inizio };
   await conLucchetto(id, () => giro(k, pagina, letta));
 }
 async function ciclo() {
@@ -599,9 +650,9 @@ export function registerFocusLockNotionRoutes(app: Express) {
     if (!CHIAVE.test(k) || !pagina || !UUID.test(notion)) { res.status(400).json({ error: "servono chiave, pagina e notion" }); return; }
     try {
       await tabelle();
-      const stato = (await leggiRiga(k, pagina))?.stato ?? { giri: 0, registro: [] };
+      const stato = (await dep.leggiRiga(k, pagina))?.stato ?? { giri: 0, registro: [] };
       const conti = await conLucchetto(k + "/" + pagina, () => aggancia(k, pagina, trattini(notion), stato));
-      await salvaStato(k, pagina, stato);
+      await dep.salvaStato(k, pagina, stato);
       res.json({ ok: true, conti });
     } catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
@@ -612,7 +663,7 @@ export function registerFocusLockNotionRoutes(app: Express) {
     const pagina = String(req.body?.pagina || "");
     if (!CHIAVE.test(k) || !pagina) { res.status(400).json({ error: "servono chiave e pagina" }); return; }
     if (modo() !== "on" && modo() !== "prova") { res.status(409).json({ error: "NOTION_SYNC non e' acceso" }); return; }
-    try { await tabelle(); await unaVolta(letture, k + "/" + pagina, () => leggiSeServe(k, pagina, true)); res.json({ ok: true, stato: (await leggiRiga(k, pagina))?.stato }); }
+    try { await tabelle(); await unaVolta(letture, k + "/" + pagina, () => leggiSeServe(k, pagina, true)); res.json({ ok: true, stato: (await dep.leggiRiga(k, pagina))?.stato }); }
     catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
 
@@ -624,3 +675,6 @@ export function registerFocusLockNotionRoutes(app: Express) {
     catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
 }
+
+// solo per le prove: deposito in memoria e accesso alle funzioni del giro
+export const __prova = { usa: (d: Deposito) => { dep = d; }, giro, aggancia, leggiSeServe, conLucchetto };
