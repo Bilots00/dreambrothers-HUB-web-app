@@ -414,6 +414,8 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
       if (op.t === "via") {
         try { await api("DELETE", `/blocks/${op.nid}`); } catch (e: any) { if (e.status !== 404 && !/archived/i.test(e.message)) throw e; }
         (o.via = o.via ?? {})[op.nid] = Date.now();
+        const tolta = o.voci[op.nid];
+        if (tolta) Object.values(o.voci).forEach(v => { if (v.par === tolta.par && v.prv === op.nid) v.prv = tolta.prv; });
         delete o.voci[op.nid]; scrivi(stato, descrivi(op, p)); await salva();
       } else if (op.t === "agg") {
         const r = await api("PATCH", `/blocks/${op.nid}`, { [op.tipo]: op.body });
@@ -430,16 +432,18 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
       if (!corpo) continue;
       const after = prvP(x);
       const r = await api("PATCH", `/blocks/${par || o.notion}/children`, { children: [{ object: "block", type: corpo.type, [corpo.type]: corpo.body }], position: after ? { type: "after_block", after_block: { id: after } } : { type: "start" } });
-      // il nuovo e' il blocco della risposta che non conosciamo (ne' agganciato ne' lasciato fuori)
+      // il nuovo e' il PRIMO dei risultati: Notion restituisce il blocco creato e poi i fratelli che lo
+      // seguono, 100 alla volta (provato il 12/10/2026 con position, after e start). Si controlla che sia
+      // davvero sconosciuto e del tipo giusto; se no ci si ferma.
+      const primo: BloccoN | undefined = r.results?.[0];
       const xs = new Set(o.x);
-      const ignoti: BloccoN[] = (r.results ?? []).filter((z: BloccoN) => z.type === corpo.type && !o.voci[z.id] && !xs.has(z.id) && !perNid.has(z.id));
-      let nuovo: BloccoN | undefined = ignoti.length === 1 ? ignoti[0] : undefined;
-      if (!nuovo && after && Array.isArray(r.results)) { const i = r.results.findIndex((z: BloccoN) => z.id === after); if (i >= 0 && ignoti.includes(r.results[i + 1])) nuovo = r.results[i + 1]; }
+      const nuovo: BloccoN | undefined = primo && primo.type === corpo.type && !o.voci[primo.id] && !xs.has(primo.id) && !perNid.has(primo.id) ? primo : undefined;
       if (!nuovo) {
-        o.ferma = `creato un blocco in Notion ma non riconosciuto nella risposta (${ignoti.length} candidati, sotto ${par || o.notion}): sync ferma per non creare doppioni`;
+        o.ferma = `creato un blocco in Notion ma la risposta non lo mostra per primo (sotto ${par || o.notion}): sync ferma per non creare doppioni`;
         await salva(); throw new Error(o.ferma);
       }
       x.b.nid = nuovo.id; perNid.set(nuovo.id, x);
+      Object.values(o.voci).forEach(v => { if (v.par === par && v.prv === after) v.prv = nuovo.id; });
       o.voci[nuovo.id] = { pid: x.b.id, hp: impP(x.b), hn: impN(nuovo), par, prv: after, t: nuovo.type, w: Date.now(), ...(x.b.kind === "image" ? { ro: 1 as const } : {}) };
       assegnati.push([x.b.id, nuovo.id]);
       await salva(); // SUBITO: un giro interrotto qui non deve ricreare il blocco
