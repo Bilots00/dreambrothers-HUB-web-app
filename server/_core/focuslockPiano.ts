@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { getDb } from "../db";
 import { rows } from "./focuslockRoutes";
+import { unisciQuaderni, type QuadernoU } from "./pianoUnione";
 
 /*
  * IL PIANO DI DREAMMAP SUL COMPUTER (app 0.9.222).
@@ -17,6 +18,11 @@ import { rows } from "./focuslockRoutes";
  *   - POST /api/focuslock/piano/:k/img    { mime, b64 } -> { url }  (le immagini importate da Notion)
  *   - GET  /api/focuslock/piano/img/:id   -> l'immagine
  * L'unione fra le due copie la fa il client, pagina per pagina (vince la modifica piu' recente).
+ *
+ * 0.9.227 (sync con Notion): il server non sovrascrive piu' alla cieca. Quello che arriva si unisce
+ * blocco per blocco con quello che c'e' (pianoUnione.ts): cosi' una modifica arrivata da Notion (il job
+ * di focuslockNotion.ts scrive qui) non viene coperta dalla prossima riga scritta sul telefono. Le
+ * scritture su una chiave passano tutte da `conChiave`, una alla volta.
  */
 const CHIAVE = /^[A-Za-z0-9_-]{32,64}$/;
 const MAX_DATI = 40 * 1024 * 1024;
@@ -45,6 +51,29 @@ function ensureTables(): Promise<void> {
     })().catch((e) => { ready = null; throw e; });
   }
   return ready;
+}
+
+// una scrittura alla volta per quaderno (il POST del telefono e il job di Notion)
+const code = new Map<string, Promise<unknown>>();
+export function conChiave<T>(k: string, fn: () => Promise<T>): Promise<T> {
+  const prima = code.get(k) ?? Promise.resolve();
+  const qui = prima.catch(() => undefined).then(fn);
+  code.set(k, qui);
+  void qui.catch(() => undefined).then(() => { if (code.get(k) === qui) code.delete(k); });
+  return qui;
+}
+export { ensureTables as pianoTabelle };
+export async function leggiQuaderno(k: string): Promise<{ dati: QuadernoU; at: number } | null> {
+  await ensureTables();
+  const r = await rows(sql`SELECT dati, at FROM focuslock_piano WHERE chiave = ${k} LIMIT 1`);
+  if (!r.length) return null;
+  try { return { dati: JSON.parse(String(r[0].dati)) as QuadernoU, at: Number(r[0].at) || 0 }; } catch { return null; }
+}
+export async function scriviQuaderno(k: string, dati: QuadernoU, at: number): Promise<void> {
+  const testo = JSON.stringify(dati);
+  if (testo.length > MAX_DATI) throw new Error("quaderno troppo grande");
+  await rows(sql`INSERT INTO focuslock_piano (chiave, dati, at, updatedAt) VALUES (${k}, ${testo}, ${at}, NOW())
+    ON DUPLICATE KEY UPDATE dati = VALUES(dati), at = VALUES(at), updatedAt = NOW()`);
 }
 
 const finestre = new Map<string, number[]>();
@@ -103,12 +132,22 @@ export function registerFocusLockPianoRoutes(app: Express) {
     const dati = typeof b.dati === "string" ? b.dati : "";
     const at = Number(b.at) || Date.now();
     if (!dati || dati.length > MAX_DATI) { res.status(400).json({ error: "quaderno vuoto o troppo grande" }); return; }
-    try { const j = JSON.parse(dati); if (!j || !Array.isArray(j.pages)) throw new Error("x"); } catch { res.status(400).json({ error: "quaderno illeggibile" }); return; }
+    let arrivato: QuadernoU;
+    try { arrivato = JSON.parse(dati); if (!arrivato || !Array.isArray(arrivato.pages)) throw new Error("x"); } catch { res.status(400).json({ error: "quaderno illeggibile" }); return; }
     try {
       await ensureTables();
-      await rows(sql`INSERT INTO focuslock_piano (chiave, dati, at, updatedAt) VALUES (${k}, ${dati}, ${at}, NOW())
-        ON DUPLICATE KEY UPDATE dati = VALUES(dati), at = VALUES(at), updatedAt = NOW()`);
-      res.json({ ok: true, at });
+      const diverso = await conChiave(k, async () => {
+        const c = await leggiQuaderno(k);
+        if (!c || !Array.isArray(c.dati.pages)) { await scriviQuaderno(k, arrivato, at); return false; }
+        // vale quello che arriva (ordine delle pagine, impostazioni, giorni), unito con quello che c'e'
+        const u = unisciQuaderni(arrivato, c.dati);
+        if (arrivato.giorni === undefined && c.dati.giorni !== undefined) { u.giorni = c.dati.giorni; u.nomeUtente = c.dati.nomeUtente; }
+        await scriviQuaderno(k, u, at);
+        // «diverso»: il client deve riscaricare (c'era qualcosa che lui non aveva). Si guardano solo le
+        // pagine e il cestino: un «si'» sbagliato farebbe girare all'infinito scarica -> salva -> scarica
+        return JSON.stringify([u.pages, u.trash ?? []]) !== JSON.stringify([arrivato.pages, arrivato.trash ?? []]);
+      });
+      res.json({ ok: true, at, diverso });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
 
