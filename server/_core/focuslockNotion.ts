@@ -614,22 +614,32 @@ async function pulisci(k: string, notionId: string, prova: boolean, atteso?: num
   const salva = async () => { const pp = poiPer.get(riga); if (pp) p.poi = pp; (stato as any).pulizia = p; await dep.salvaStato(k, riga, stato); };
   try {
     await salva();
-    const t = await trovaDoppioni(notionId);
+    // la lista da cancellare si salva una volta (riga «:ids»): dopo un riavvio si riparte da li', senza
+    // rileggere 60.000 blocchi (10 minuti); un id gia' cancellato da' 404 e si salta
+    const rigaIds = riga + ":ids";
+    const salvata = prova ? null : ((await dep.leggiRiga(k, rigaIds))?.stato as any)?.ids as string[] | undefined;
+    let t: { via: string[]; letti: number; esempi: string[] };
+    if (salvata?.length) { t = { via: salvata, letti: (stato as any).pulizia?.letti ?? 0, esempi: (stato as any).pulizia?.esempi ?? [] }; scrivi(stato, `doppioni: riparto dalla lista salvata (${salvata.length})`); }
+    else {
+      t = await trovaDoppioni(notionId);
+      scrivi(stato, `doppioni: letti ${t.letti} blocchi, ${t.via.length} da cancellare`);
+    }
     p.letti = t.letti; p.trovati = t.via.length; p.esempi = t.esempi;
-    scrivi(stato, `doppioni: letti ${t.letti} blocchi, ${t.via.length} da cancellare`);
+    p.cancellati = salvata?.length ? Number((stato as any).pulizia?.cancellati) || 0 : 0;
     if (prova) { p.fine = Date.now(); await salva(); return; }
     if (!atteso || Math.abs(t.via.length - atteso) > Math.max(5, atteso * 0.01)) {
       // dopo un riavvio ne restano meno: va bene se sono MENO di quelli attesi all'inizio
       if (!(atteso && t.via.length < atteso)) throw new Error(`trovati ${t.via.length} doppioni, attesi ${atteso}: non cancello niente`);
     }
     await salva();
-    let i = 0;
+    if (!salvata?.length) await dep.salvaStato(k, rigaIds, { giri: 0, registro: [], ids: t.via } as any);
+    let i = Math.max(0, p.cancellati - 30), salvatoA = i; // un po' indietro: le ultime prima del riavvio potrebbero non essere partite
     const lavora = async () => {
       while (i < t.via.length) {
         const id = t.via[i++]!;
         try { await api("DELETE", `/blocks/${id}`); } catch (e: any) { if (e.status !== 404 && !/archived|trash/i.test(e.message)) throw e; }
-        p.cancellati++;
-        if (p.cancellati % 250 === 0) await salva();
+        p.cancellati = Math.max(p.cancellati, i);
+        if (p.cancellati - salvatoA >= 250) { salvatoA = p.cancellati; await salva(); }
       }
     };
     await Promise.all([lavora(), lavora(), lavora()]);
@@ -698,7 +708,7 @@ async function ciclo() {
   try {
     await tabelle();
     // una pulizia dei doppioni interrotta da un riavvio riparte da sola
-    const pz = await rows(sql`SELECT chiave, pagina, stato FROM focuslock_notion WHERE pagina LIKE '_doppioni:%'`);
+    const pz = await rows(sql`SELECT chiave, pagina, stato FROM focuslock_notion WHERE pagina LIKE '_doppioni:%' AND pagina NOT LIKE '%:ids'`);
     for (const x of pz) {
       let pu: Pulizia | undefined; try { pu = JSON.parse(String(x.stato)).pulizia; } catch { pu = undefined; }
       if (pu?.fase === "cancello" && !pulizieInCorso.has(String(x.pagina))) void pulisci(String(x.chiave), pu.notion, false, pu.atteso, pu.poi);
@@ -727,6 +737,7 @@ export function registerFocusLockNotionRoutes(app: Express) {
         pagine: r.map((x: any) => {
           let o: Ombra | null = null; try { o = x.ombra ? JSON.parse(String(x.ombra)) : null; } catch { o = null; }
           let s: Stato | null = null; try { s = x.stato ? JSON.parse(String(x.stato)) : null; } catch { s = null; }
+          if (String(x.pagina).endsWith(":ids")) return { pagina: x.pagina };
           if (String(x.pagina).startsWith("_doppioni:")) return { pagina: x.pagina, pulizia: (s as any)?.pulizia, registro: s?.registro?.slice(-10) };
           return { pagina: x.pagina, notion: o?.notion, agganciati: o ? Object.keys(o.voci).length : 0, fuoriPiano: o?.fuori.length ?? 0, fuoriNotion: o?.x.length ?? 0, visto: o?.visto, stato: s };
         }),
