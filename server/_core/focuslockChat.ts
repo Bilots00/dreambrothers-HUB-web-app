@@ -541,6 +541,15 @@ export function registerFocusLockChatRoutes(app: Express) {
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
+  /* il quaderno di questa persona, per un dispositivo che non ce l'ha ancora (il PC, un telefono nuovo) */
+  app.get("/api/focuslock/agent/piano/chiave", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    try {
+      await ensureTables();
+      const r = await rows(sql`SELECT chiave FROM focuslock_piano_owner WHERE googleSub = ${who.sub} ORDER BY updatedAt DESC LIMIT 1`);
+      res.json({ k: r[0]?.chiave ? String(r[0].chiave) : null });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
   app.post("/api/focuslock/piano/:k/agente", async (req: Request, res: Response) => {
     corsPubblico(res);
     const k = String(req.params.k || "");
