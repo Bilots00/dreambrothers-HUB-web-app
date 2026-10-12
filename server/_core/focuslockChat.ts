@@ -63,6 +63,14 @@ function ensureTables(): Promise<void> {
         KEY idx_esterno (canale, esterno),
         KEY idx_codice (codice)
       )`);
+      /* app 0.9.227: di chi e' un quaderno del piano (la chiave del link /piano/#k=…): lo dice
+       * l'app con l'account, cosi' l'AI del piano scrive all'agente personale di quella persona */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_piano_owner (
+        chiave VARCHAR(64) NOT NULL PRIMARY KEY,
+        googleSub VARCHAR(64) NOT NULL,
+        email VARCHAR(191),
+        updatedAt TIMESTAMP NULL
+      )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_agent_profilo (
         googleSub VARCHAR(64) NOT NULL PRIMARY KEY,
         email VARCHAR(191),
@@ -205,6 +213,12 @@ const ISTRUZIONE_UMORE = [
   "Al massimo UNA domanda, alla fine. VIETATO: la forma «non e' X, e' Y», i trattini lunghi, le frasi da poster motivazionale, la parola «rotta», proporre acquisti."
 ].join(" ");
 function eUmore(testo: unknown): boolean { return String(testo || "").startsWith(PREFISSO_UMORE); }
+/* L'AI DEL PIANO (app 0.9.227): la bolla, la barra dello spazio e «Chiedi all'AI» del piano scrivono
+ * all'agente personale con questo prefisso. Le istruzioni (come rispondere, i comandi @@ per cambiare
+ * le pagine) e la pagina viaggiano nel messaggio. Conversazione a parte: la chat dell'app non la vede
+ * e lei non vede la chat. Per gli account del Max risponde il VPS, per gli altri il fornitore a crediti. */
+const PREFISSO_PIANO = "[piano] ";
+function ePiano(testo: unknown): boolean { return String(testo || "").startsWith(PREFISSO_PIANO); }
 const ISTRUZIONE_SCOMPONI = "Scomponi questa cosa da fare in 3-5 passi piccoli e concreti, nell'ordine in cui si fanno, ognuno con un verbo all'inizio e i minuti fra parentesi scritti per intero (per esempio «(15 minuti)»), tarati sul suo tempo reale. Una riga di commento al massimo, poi SOLO il blocco ```json {\"scomponi\": {\"passi\": [\"…\"]}} ```.";
 /** È una richiesta di roadmap? La prima conversazione, o una domanda sul piano. */
 function eRoadmap(testo: string, primo: boolean): boolean {
@@ -297,8 +311,9 @@ async function rispondiACrediti(id: number): Promise<void> {
   const scomponi = String(m.testo || "").startsWith(PREFISSO_SCOMPONI);
   const iofuturo = String(m.testo || "").startsWith(PREFISSO_IOFUTURO);
   const umore = eUmore(m.testo);
-  const roadmap = !scomponi && !iofuturo && !umore && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
-  const costo = iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : 1));
+  const piano = ePiano(m.testo);
+  const roadmap = !piano && !scomponi && !iofuturo && !umore && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
+  const costo = piano ? 1 : iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : 1));
   if (!(await scala(sub, costo))) {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'crediti' WHERE id = ${id}`);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out",
@@ -309,13 +324,13 @@ async function rispondiACrediti(id: number): Promise<void> {
     const prof = await rows(sql`SELECT nome, brief FROM focuslock_agent_profilo WHERE googleSub = ${sub} LIMIT 1`);
     /* due conversazioni: quella dell'umore vede solo se stessa (ultimi 14 giorni), quella
      * principale non vede mai l'umore */
-    const storico = (umore
+    const storico = piano ? [] : (umore
       ? await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
           WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND createdAt >= (NOW() - INTERVAL 14 DAY)
             AND ((direzione = 'in' AND testo LIKE '[umore]%') OR (direzione = 'out' AND azioni LIKE '%"umore"%')) ORDER BY id DESC LIMIT 12`)
       : await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
-          WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%' AND testo NOT LIKE '[iofuturo]%' AND testo NOT LIKE '[umore]%'
-            AND (azioni IS NULL OR (azioni NOT LIKE '%"scomponi"%' AND azioni NOT LIKE '%"iofuturo"%' AND azioni NOT LIKE '%"umore"%')) ORDER BY id DESC LIMIT 12`)).reverse();
+          WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%' AND testo NOT LIKE '[iofuturo]%' AND testo NOT LIKE '[umore]%' AND testo NOT LIKE '[piano]%'
+            AND (azioni IS NULL OR (azioni NOT LIKE '%"scomponi"%' AND azioni NOT LIKE '%"iofuturo"%' AND azioni NOT LIKE '%"umore"%' AND azioni NOT LIKE '%"pianoAi"%')) ORDER BY id DESC LIMIT 12`)).reverse();
     /* la voce dell'utente: i suoi ultimi messaggi veri, per la lettera dell'Io Futuro */
     const suoi = iofuturo ? (await rows(sql`SELECT testo FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'in' AND testo NOT LIKE '[%' ORDER BY id DESC LIMIT 20`)).reverse() : [];
     const nome = prof[0]?.nome || "Genio";
@@ -327,7 +342,9 @@ async function rispondiACrediti(id: number): Promise<void> {
       else messaggi.push({ role: ruolo, content: testo });
     }
     while (messaggi.length && messaggi[0].role === "assistant") messaggi.shift();
-    const richiesta = scomponi
+    const richiesta = piano
+      ? String(m.testo).slice(PREFISSO_PIANO.length)
+      : scomponi
       ? "LA COSA DA FARE DA SCOMPORRE: «" + String(m.testo).slice(PREFISSO_SCOMPONI.length) + "»\n\n" + ISTRUZIONE_SCOMPONI
       : iofuturo
         ? "IL PASSO CHE HA APPENA FATTO: " + String(m.testo).slice(PREFISSO_IOFUTURO.length)
@@ -343,8 +360,8 @@ async function rispondiACrediti(id: number): Promise<void> {
     if (messaggi.length && messaggi[messaggi.length - 1].role === "user") messaggi[messaggi.length - 1].content += "\n\n" + domanda;
     else messaggi.push({ role: "user", content: domanda });
     const testo = await chiamaModello(messaggi, roadmap || scomponi || iofuturo);
-    const t = umore ? { testo: testo.trim(), azioni: { umore: true } } : tagliaPiano(testo);
-    await inserisci(sub, m.email ?? null, m.canale as Canale, "out", t.testo, t.azioni, id, umore ? "fatto" : consegna);
+    const t = piano ? { testo: testo.trim(), azioni: { pianoAi: true } } : umore ? { testo: testo.trim(), azioni: { umore: true } } : tagliaPiano(testo);
+    await inserisci(sub, m.email ?? null, m.canale as Canale, "out", t.testo, t.azioni, id, umore || piano ? "fatto" : consegna);
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
     if (m.canale === "whatsapp") {
       const link = await rows(sql`SELECT esterno FROM focuslock_agent_links WHERE googleSub = ${sub} AND canale = 'whatsapp' AND collegatoAt IS NOT NULL LIMIT 1`);
@@ -508,6 +525,63 @@ export function registerFocusLockChatRoutes(app: Express) {
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
 
+  /* ---- L'AI DEL PIANO (app 0.9.227) ----
+   * 1. l'app, con l'account, dice di chi e' il quaderno del piano (la chiave del link);
+   * 2. il piano (app o sito) manda la richiesta con la chiave: diventa un messaggio [piano] per
+   *    l'agente personale di quella persona (VPS per il Max, crediti per gli altri);
+   * 3. il piano chiede ogni secondo e mezzo se la risposta e' arrivata. */
+  app.post("/api/focuslock/agent/piano/proprietario", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const k = String((req.body ?? {}).k || "");
+    if (!/^[A-Za-z0-9_-]{32,64}$/.test(k)) { res.status(400).json({ error: "chiave non valida" }); return; }
+    try {
+      await ensureTables();
+      await rows(sql`INSERT INTO focuslock_piano_owner (chiave, googleSub, email, updatedAt) VALUES (${k}, ${who.sub}, ${who.email}, NOW())
+        ON DUPLICATE KEY UPDATE googleSub = VALUES(googleSub), email = VALUES(email), updatedAt = NOW()`);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+  app.post("/api/focuslock/piano/:k/agente", async (req: Request, res: Response) => {
+    corsPubblico(res);
+    const k = String(req.params.k || "");
+    if (!/^[A-Za-z0-9_-]{32,64}$/.test(k)) { res.status(400).json({ error: "chiave non valida" }); return; }
+    const testo = pulisci((req.body ?? {}).testo, 30000);
+    if (!testo) { res.status(400).json({ error: "domanda vuota" }); return; }
+    try {
+      await ensureTables();
+      const o = await rows(sql`SELECT googleSub, email FROM focuslock_piano_owner WHERE chiave = ${k} LIMIT 1`);
+      if (!o.length) { res.status(409).json({ error: "proprietario" }); return; }
+      const sub = String(o[0].googleSub), email = o[0].email ? String(o[0].email) : null;
+      const max = emailMax().includes(String(email || "").trim().toLowerCase());
+      if (!max) {
+        const q = await rows(sql`SELECT dati FROM focuslock_piano WHERE chiave = ${k} LIMIT 1`);
+        let premium = false; try { premium = JSON.parse(String(q[0]?.dati || "{}")).premium === true; } catch { premium = false; }
+        if (!premium) { res.status(402).json({ error: "premium" }); return; }
+        if (!llmAcceso()) { res.status(503).json({ error: "spenta" }); return; }
+      }
+      const oggi = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'in' AND testo LIKE '[piano]%' AND createdAt >= (NOW() - INTERVAL 1 DAY)`);
+      if (Number(oggi[0]?.n || 0) >= 150) { res.status(429).json({ error: "troppe richieste" }); return; }
+      const id = await inserisci(sub, email, "app", "in", PREFISSO_PIANO + testo, null, null, "attesa");
+      lanciaCrediti(id);
+      res.json({ id, via: max ? "max" : "crediti" });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+  app.get("/api/focuslock/piano/:k/agente/:id", async (req: Request, res: Response) => {
+    corsPubblico(res);
+    res.setHeader("Cache-Control", "no-store");
+    const k = String(req.params.k || ""); const id = Number(req.params.id || 0);
+    if (!/^[A-Za-z0-9_-]{32,64}$/.test(k) || !id) { res.status(400).json({ error: "richiesta non valida" }); return; }
+    try {
+      await ensureTables();
+      const o = await rows(sql`SELECT googleSub FROM focuslock_piano_owner WHERE chiave = ${k} LIMIT 1`);
+      if (!o.length) { res.status(404).json({ error: "proprietario" }); return; }
+      const m = await rows(sql`SELECT stato FROM focuslock_agent_msgs WHERE id = ${id} AND googleSub = ${String(o[0].googleSub)} AND direzione = 'in' LIMIT 1`);
+      if (!m.length) { res.status(404).json({ error: "richiesta sconosciuta" }); return; }
+      const r = await rows(sql`SELECT testo FROM focuslock_agent_msgs WHERE inReplyTo = ${id} AND direzione = 'out' ORDER BY id DESC LIMIT 1`);
+      res.json({ stato: String(m[0].stato), testo: r[0]?.testo ? String(r[0].testo) : null });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+
   app.post("/api/focuslock/agent/chat", async (req: Request, res: Response) => {
     const who = await utente(req, res); if (!who) return;
     const testo = pulisci((req.body ?? {}).testo);
@@ -536,9 +610,10 @@ export function registerFocusLockChatRoutes(app: Express) {
     try {
       await ensureTables();
       const lista = await rows(sql`SELECT id, canale, direzione, testo, azioni, stato, inReplyTo, createdAt
-        FROM focuslock_agent_msgs WHERE googleSub = ${who.sub} AND id > ${after} ORDER BY id ASC LIMIT 80`);
+        FROM focuslock_agent_msgs WHERE googleSub = ${who.sub} AND id > ${after}
+          AND testo NOT LIKE '[piano]%' AND (azioni IS NULL OR azioni NOT LIKE '%"pianoAi"%') ORDER BY id ASC LIMIT 80`);
       const attesa = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_agent_msgs
-        WHERE googleSub = ${who.sub} AND direzione = 'in' AND stato IN ('attesa', 'lavoro')`);
+        WHERE googleSub = ${who.sub} AND direzione = 'in' AND stato IN ('attesa', 'lavoro') AND testo NOT LIKE '[piano]%'`);
       res.json({
         messaggi: lista.map((m: any) => ({ id: Number(m.id), inReplyTo: m.inReplyTo ? Number(m.inReplyTo) : null, canale: m.canale, direzione: m.direzione, testo: m.testo,
           azioni: parse(m.azioni), stato: m.stato, at: m.createdAt ? new Date(m.createdAt).getTime() : 0 })),
@@ -614,13 +689,13 @@ export function registerFocusLockChatRoutes(app: Express) {
       for (const m of lista) {
         await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'lavoro' WHERE id = ${m.id} AND stato = 'attesa'`);
         const prof = await rows(sql`SELECT nome, brief FROM focuslock_agent_profilo WHERE googleSub = ${m.googleSub} LIMIT 1`);
-        const storico = eUmore(m.testo)
+        const storico = ePiano(m.testo) ? [] : eUmore(m.testo)
           ? await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
               WHERE googleSub = ${m.googleSub} AND id < ${m.id} AND stato <> 'errore' AND createdAt >= (NOW() - INTERVAL 14 DAY)
                 AND ((direzione = 'in' AND testo LIKE '[umore]%') OR (direzione = 'out' AND azioni LIKE '%"umore"%')) ORDER BY id DESC LIMIT 12`)
           : await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
-              WHERE googleSub = ${m.googleSub} AND id < ${m.id} AND stato <> 'errore' AND testo NOT LIKE '[umore]%'
-                AND (azioni IS NULL OR azioni NOT LIKE '%"umore"%') ORDER BY id DESC LIMIT 12`);
+              WHERE googleSub = ${m.googleSub} AND id < ${m.id} AND stato <> 'errore' AND testo NOT LIKE '[umore]%' AND testo NOT LIKE '[piano]%'
+                AND (azioni IS NULL OR (azioni NOT LIKE '%"umore"%' AND azioni NOT LIKE '%"pianoAi"%')) ORDER BY id DESC LIMIT 12`);
         const link = await rows(sql`SELECT esterno FROM focuslock_agent_links
           WHERE googleSub = ${m.googleSub} AND canale = ${m.canale} AND collegatoAt IS NOT NULL LIMIT 1`);
         out.push({ id: Number(m.id), canale: m.canale, email: m.email,
@@ -664,6 +739,7 @@ export function registerFocusLockChatRoutes(app: Express) {
       const o = orig[0];
       let azioni = body.azioni && typeof body.azioni === "object" ? body.azioni : null;
       if (eUmore(o.testo)) azioni = { ...(azioni || {}), umore: true };
+      if (ePiano(o.testo)) azioni = { ...(azioni || {}), pianoAi: true };
       const outId = await inserisci(String(o.googleSub), o.email ?? null, o.canale as Canale, "out", testo, azioni, id, "fatto");
       await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
       let consegnato = false;
