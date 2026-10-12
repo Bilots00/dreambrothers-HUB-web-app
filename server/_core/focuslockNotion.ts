@@ -579,7 +579,7 @@ async function giro(k: string, paginaId: string, letta: Letta | null): Promise<v
 // finiscono nel cestino di Notion (30 giorni). Gira sul server, riprende da sola dopo un riavvio (rilegge e
 // cancella quello che resta), e parte davvero solo se il numero trovato e' quello atteso (± 1%).
 const DOPPI = new Set(["to_do", "bulleted_list_item", "numbered_list_item"]);
-type Pulizia = { notion: string; fase: "prova" | "cancello" | "fatto" | "errore"; atteso?: number; letti: number; trovati: number; cancellati: number; esempi: string[]; inizio: number; fine?: number; errore?: string };
+type Pulizia = { poi?: string; notion: string; fase: "prova" | "cancello" | "fatto" | "errore"; atteso?: number; letti: number; trovati: number; cancellati: number; esempi: string[]; inizio: number; fine?: number; errore?: string };
 async function trovaDoppioni(notionId: string): Promise<{ via: string[]; letti: number; esempi: string[] }> {
   const via: string[] = []; const esempi: string[] = []; let letti = 0;
   const giro = async (id: string): Promise<void> => {
@@ -602,13 +602,16 @@ async function trovaDoppioni(notionId: string): Promise<{ via: string[]; letti: 
   return { via, letti, esempi };
 }
 const pulizieInCorso = new Set<string>();
-async function pulisci(k: string, notionId: string, prova: boolean, atteso?: number): Promise<void> {
+// a pulizia finita, la pagina del piano da agganciare alla pagina Notion ripulita (anche se impostata a pulizia gia' partita)
+const poiPer = new Map<string, string>();
+async function pulisci(k: string, notionId: string, prova: boolean, atteso?: number, poi?: string): Promise<void> {
   const riga = "_doppioni:" + notionId;
+  if (poi) poiPer.set(riga, poi);
   if (pulizieInCorso.has(riga)) return;
   pulizieInCorso.add(riga);
   const stato: Stato = (await dep.leggiRiga(k, riga))?.stato ?? { giri: 0, registro: [] };
   const p: Pulizia = { notion: notionId, fase: prova ? "prova" : "cancello", atteso, letti: 0, trovati: 0, cancellati: 0, esempi: [], inizio: Date.now() };
-  const salva = async () => { (stato as any).pulizia = p; await dep.salvaStato(k, riga, stato); };
+  const salva = async () => { const pp = poiPer.get(riga); if (pp) p.poi = pp; (stato as any).pulizia = p; await dep.salvaStato(k, riga, stato); };
   try {
     await salva();
     const t = await trovaDoppioni(notionId);
@@ -633,6 +636,13 @@ async function pulisci(k: string, notionId: string, prova: boolean, atteso?: num
     p.fase = "fatto"; p.fine = Date.now();
     scrivi(stato, `doppioni: cancellati ${p.cancellati}`);
     await salva();
+    const pg = poiPer.get(riga) ?? p.poi;
+    if (pg) {
+      const sp: Stato = (await dep.leggiRiga(k, pg))?.stato ?? { giri: 0, registro: [] };
+      const conti = await conLucchetto(k + "/" + pg, () => aggancia(k, pg, notionId, sp));
+      await dep.salvaStato(k, pg, sp);
+      scrivi(stato, `agganciata «${pg}»: ${JSON.stringify(conti)}`); await salva();
+    }
   } catch (e: any) {
     p.fase = "errore"; p.errore = String(e?.message || e); scrivi(stato, "ERRORE doppioni: " + p.errore);
     await salva().catch(() => undefined);
@@ -691,7 +701,7 @@ async function ciclo() {
     const pz = await rows(sql`SELECT chiave, pagina, stato FROM focuslock_notion WHERE pagina LIKE '_doppioni:%'`);
     for (const x of pz) {
       let pu: Pulizia | undefined; try { pu = JSON.parse(String(x.stato)).pulizia; } catch { pu = undefined; }
-      if (pu?.fase === "cancello" && !pulizieInCorso.has(String(x.pagina))) void pulisci(String(x.chiave), pu.notion, false, pu.atteso);
+      if (pu?.fase === "cancello" && !pulizieInCorso.has(String(x.pagina))) void pulisci(String(x.chiave), pu.notion, false, pu.atteso, pu.poi);
     }
     const r = await rows(sql`SELECT chiave, pagina FROM focuslock_notion WHERE ombra IS NOT NULL`);
     for (const x of r) {
@@ -753,8 +763,9 @@ export function registerFocusLockNotionRoutes(app: Express) {
     const k = String(req.params.k || ""); const notion = String(req.body?.notion || "");
     if (!CHIAVE.test(k) || !UUID.test(notion)) { res.status(400).json({ error: "servono chiave e notion" }); return; }
     const prova = req.body?.prova !== false; const atteso = Number(req.body?.atteso) || undefined;
+    const poi = typeof req.body?.poi === "string" && req.body.poi ? String(req.body.poi) : undefined;
     if (!prova && !atteso) { res.status(400).json({ error: "per cancellare serve il numero atteso (dalla prova)" }); return; }
-    try { await tabelle(); void pulisci(k, trattini(notion), prova, atteso); res.json({ ok: true, partita: true, stato: `/api/focuslock/notion/${k}/stato` }); }
+    try { await tabelle(); void pulisci(k, trattini(notion), prova, atteso, poi); res.json({ ok: true, partita: true, stato: `/api/focuslock/notion/${k}/stato` }); }
     catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
 
