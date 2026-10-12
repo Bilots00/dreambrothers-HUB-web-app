@@ -41,7 +41,7 @@ const trattini = (id: string) => { const x = id.replace(/-/g, "").toLowerCase();
 // ---------------------------------------------------------------- l'API di Notion, con il freno
 // Notion dichiara ~3 chiamate al secondo «in media, con picchi ammessi»: misurato il 12/10/2026,
 // 60 letture con 6 in parallelo = 15,8 al secondo senza un solo 429. Si parte una chiamata ogni
-// 100 ms, al massimo 6 in volo; al primo 429 TUTTE le chiamate si fermano per il tempo che dice Notion.
+// 70 ms, al massimo 8 in volo; al primo 429 TUTTE le chiamate si fermano per il tempo che dice Notion.
 let ultima = 0, inVolo = 0, fermiFino = 0;
 let chiamate = 0;
 const pausa = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -49,8 +49,8 @@ async function turno() {
   for (;;) {
     const ora = Date.now();
     if (ora < fermiFino) { await pausa(fermiFino - ora); continue; }
-    if (inVolo >= 6) { await pausa(50); continue; }
-    const attesa = ultima + 100 - ora;
+    if (inVolo >= 8) { await pausa(30); continue; }
+    const attesa = ultima + 70 - ora;
     if (attesa > 0) { await pausa(attesa); continue; }
     ultima = ora; inVolo++; return;
   }
@@ -295,7 +295,8 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
     const serve = !!pg && (lettura === "sempre" || pg.last_edited_time !== o.visto || Date.parse(pg.last_edited_time) + 60_000 > o.scanInizio || Date.now() - o.scanAt > SCANSIONE_COMUNQUE);
     let letti: Map<string, LettoN> | null = null;
     const inizio = Date.now();
-    if (serve) { const s = await scansiona(o); letti = s.letti; if (!prova && s.nuoviX.length) o.x.push(...s.nuoviX); }
+    let durata = -1;
+    if (serve) { const s = await scansiona(o); letti = s.letti; durata = Date.now() - inizio; if (!prova && s.nuoviX.length) o.x.push(...s.nuoviX); }
 
     // 2. il piano, adesso
     const q = await leggiQuaderno(k); if (!q) throw new Error("quaderno vuoto");
@@ -488,7 +489,8 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
     if (serve && pg) { o.visto = pg.last_edited_time; o.scanInizio = inizio; o.scanAt = Date.now(); }
     await salva();
     delete stato.errore;
-    stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate };
+    stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate, letturaMs: durata, giroMs: Date.now() - inizio };
+    if (durata >= 0) scrivi(stato, `riletta Notion: ${letti?.size} blocchi in ${Math.round(durata / 100) / 10} s, ${ops.length} operazioni`);
     await salvaStato(k, paginaId, stato);
   } catch (e: any) {
     stato.errore = String(e?.message || e);
