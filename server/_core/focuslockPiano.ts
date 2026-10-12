@@ -119,7 +119,17 @@ export function registerFocusLockPianoRoutes(app: Express) {
       await ensureTables();
       const r = await rows(sql`SELECT dati, at FROM focuslock_piano WHERE chiave = ${k} LIMIT 1`);
       if (!r.length) { res.json({ dati: null, at: 0 }); return; }
-      res.json({ dati: String(r[0].dati), at: Number(r[0].at) || 0 });
+      // 0.9.231: se l'AI del piano risponde lo dice il server (proprietario con l'abbonamento Max, o
+      // quaderno con Premium), non l'ultimo dispositivo che ha salvato
+      let premium = false; try { premium = JSON.parse(String(r[0].dati)).premium === true; } catch { premium = false; }
+      let proprietario = false, max = false;
+      try {
+        const o = await rows(sql`SELECT email FROM focuslock_piano_owner WHERE chiave = ${k} LIMIT 1`);
+        proprietario = o.length > 0;
+        const lista = String(process.env.FOCUSLOCK_AGENT_MAX_EMAILS || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+        max = proprietario && lista.includes(String(o[0].email || "").trim().toLowerCase());
+      } catch { /* tabella non ancora creata */ }
+      res.json({ dati: String(r[0].dati), at: Number(r[0].at) || 0, ai: max || premium, proprietario, max });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
 
@@ -142,6 +152,13 @@ export function registerFocusLockPianoRoutes(app: Express) {
         // vale quello che arriva (ordine delle pagine, impostazioni, giorni), unito con quello che c'e'
         const u = unisciQuaderni(arrivato, c.dati);
         if (arrivato.giorni === undefined && c.dati.giorni !== undefined) { u.giorni = c.dati.giorni; u.nomeUtente = c.dati.nomeUtente; }
+        // 0.9.231: Premium e l'agente li scrive SOLO l'app (che manda anche i giorni). Il sito, che non
+        // lo sa, mandava premium:false a ogni modifica e spegneva l'AI del piano
+        if (arrivato.giorni === undefined) {
+          const vecchio = c.dati as unknown as Record<string, unknown>, nuovo = u as unknown as Record<string, unknown>;
+          if (vecchio.premium !== undefined) nuovo.premium = vecchio.premium;
+          if (vecchio.agente !== undefined) nuovo.agente = vecchio.agente;
+        }
         await scriviQuaderno(k, u, at);
         // «diverso»: il client deve riscaricare (c'era qualcosa che lui non aveva). Si guardano solo le
         // pagine e il cestino: un «si'» sbagliato farebbe girare all'infinito scarica -> salva -> scarica
