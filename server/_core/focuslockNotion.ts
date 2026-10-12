@@ -30,7 +30,7 @@ import {
  */
 
 const NV = "2022-06-28";
-const OGNI = 20_000;
+const OGNI = 10_000;
 const SCANSIONE_COMUNQUE = 10 * 60_000; // anche senza segnali, una rilettura completa ogni 10 minuti
 const modo = () => (process.env.NOTION_SYNC || "").trim().toLowerCase();
 const token = () => (process.env.NOTION_TOKEN || "").trim();
@@ -41,7 +41,7 @@ const trattini = (id: string) => { const x = id.replace(/-/g, "").toLowerCase();
 // ---------------------------------------------------------------- l'API di Notion, con il freno
 // Notion dichiara ~3 chiamate al secondo «in media, con picchi ammessi»: misurato il 12/10/2026,
 // 60 letture con 6 in parallelo = 15,8 al secondo senza un solo 429. Si parte una chiamata ogni
-// 70 ms, al massimo 8 in volo; al primo 429 TUTTE le chiamate si fermano per il tempo che dice Notion.
+// 70 ms, al massimo 12 in volo; al primo 429 TUTTE le chiamate si fermano per il tempo che dice Notion.
 let ultima = 0, inVolo = 0, fermiFino = 0;
 let chiamate = 0;
 const pausa = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -49,7 +49,7 @@ async function turno() {
   for (;;) {
     const ora = Date.now();
     if (ora < fermiFino) { await pausa(fermiFino - ora); continue; }
-    if (inVolo >= 8) { await pausa(30); continue; }
+    if (inVolo >= 12) { await pausa(30); continue; }
     const attesa = ultima + 70 - ora;
     if (attesa > 0) { await pausa(attesa); continue; }
     ultima = ora; inVolo++; return;
@@ -80,12 +80,14 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
   }
 }
 /** Tutti i figli di un blocco o di una pagina: pagina dopo pagina, finche' Notion dice che non ce n'e' piu'. */
-async function figli(id: string): Promise<BloccoN[]> {
+async function figli(id: string, aOgniPagina?: (nb: BloccoN[]) => void): Promise<BloccoN[]> {
   const out: BloccoN[] = [];
   let cur: string | undefined;
   do {
     const j = await api("GET", `/blocks/${id}/children?page_size=100${cur ? "&start_cursor=" + encodeURIComponent(cur) : ""}`);
-    out.push(...(j.results ?? []));
+    const nb: BloccoN[] = j.results ?? [];
+    out.push(...nb);
+    aOgniPagina?.(nb); // chi legge l'albero scende nei rami di questa pagina mentre arriva la prossima
     cur = j.has_more ? j.next_cursor : undefined;
   } while (cur);
   return out;
@@ -243,17 +245,21 @@ async function aggancia(k: string, paginaId: string, notionId: string, stato: St
 type LettoN = { n: BloccoN; par: string; prv: string | null };
 async function scansiona(o: Ombra): Promise<{ letti: Map<string, LettoN>; nuoviX: string[] }> {
   const letti = new Map<string, LettoN>(); const nuoviX: string[] = []; const xs = new Set(o.x);
-  const giro = async (id: string, parKey: string, padreFuori: boolean) => {
-    const nb = await figli(id);
+  // i rami si leggono in parallelo, e si comincia a scendere appena arriva ogni pagina di 100 figli
+  // (il freno sui 429 sta in api)
+  const giro = async (id: string, parKey: string, padreFuori: boolean): Promise<void> => {
     let prv: string | null = null;
-    for (const n of nb) {
-      if (xs.has(n.id)) continue;
-      const v = o.voci[n.id];
-      if (!v && (padreFuori || !kindDi(n))) { nuoviX.push(n.id); continue; } // nuovo e non sincronizzabile: fuori, per sempre
-      letti.set(n.id, { n, par: parKey, prv }); prv = n.id;
-    }
-    // i rami si leggono in parallelo (il freno sta in api)
-    await Promise.all(nb.filter(n => letti.has(n.id) && n.has_children && !o.voci[n.id]?.ro && !NON_SCENDERE.has(n.type)).map(n => giro(n.id, n.id, false)));
+    const giu: Promise<void>[] = [];
+    await figli(id, nb => {
+      for (const n of nb) {
+        if (xs.has(n.id)) continue;
+        const v = o.voci[n.id];
+        if (!v && (padreFuori || !kindDi(n))) { nuoviX.push(n.id); continue; } // nuovo e non sincronizzabile: fuori, per sempre
+        letti.set(n.id, { n, par: parKey, prv }); prv = n.id;
+        if (n.has_children && !v?.ro && !NON_SCENDERE.has(n.type)) giu.push(giro(n.id, n.id, false));
+      }
+    });
+    await Promise.all(giu);
   };
   await giro(o.notion, "", false);
   return { letti, nuoviX };

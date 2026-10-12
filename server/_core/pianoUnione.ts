@@ -14,8 +14,8 @@
 //   - `nid` (l'ID del blocco in Notion) non si perde mai: se la copia che vince non ce l'ha, lo prende
 //     dall'altra.
 
-export type BloccoU = { id: number; mod?: number; nid?: string; children?: BloccoU[]; [k: string]: unknown };
-export type PaginaU = { id: string; mod?: number; blocks?: BloccoU[]; tomb?: Record<string, number>; [k: string]: unknown };
+export type BloccoU = { id: number; mod?: number | undefined; nid?: string | undefined; children?: BloccoU[] | undefined; [k: string]: unknown };
+export type PaginaU = { id: string; mod?: number | undefined; blocks?: BloccoU[] | undefined; tomb?: Record<string, number> | undefined; [k: string]: unknown };
 export type QuadernoU = { pages: PaginaU[]; trash?: PaginaU[]; favorites?: string[]; [k: string]: unknown };
 
 const TRENTA_GIORNI = 30 * 24 * 3600 * 1000;
@@ -57,7 +57,7 @@ export function timbra(prima: BloccoU[], dopo: BloccoU[], tomb: Record<string, n
   return { blocks, tomb: nt };
 }
 
-const ora = (b: { mod?: number } | undefined) => b?.mod ?? 0;
+const ora = (b: { mod?: number | undefined } | undefined) => b?.mod ?? 0;
 
 type Posto = { padre: number | null; prima: number | null };
 function posti(list: BloccoU[], padre: number | null, out = new Map<number, Posto>()): Map<number, Posto> {
