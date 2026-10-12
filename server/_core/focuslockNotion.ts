@@ -98,10 +98,11 @@ async function figli(id: string, aOgniPagina?: (nb: BloccoN[]) => void): Promise
 const NON_SCENDERE = new Set(["child_page", "child_database", "column_list", "column", "table", "synced_block", "link_to_page", "unsupported", "template"]);
 
 // ---------------------------------------------------------------- l'ombra
-type Voce = { pid: number; hp: string; hn: string; hpv?: string; par: string; prv: string | null; ro?: 1; t?: string };
+type Voce = { pid: number; hp: string; hn: string; hpv?: string; par: string; prv: string | null; ro?: 1; t?: string; w?: number };
 type Ombra = {
   notion: string; at: number; visto: string; scanInizio: number; scanAt: number;
   voci: Record<string, Voce>; x: string[]; fuori: number[];
+  via?: Record<string, number>; // i blocchi che il job ha cancellato in Notion (10 minuti): una lettura cominciata prima li vede ancora
   ferma?: string; // la sync di questa pagina si e' fermata da sola: serve un'occhiata prima di ripartire
 };
 type Stato = { giri: number; ultimo?: number; errore?: string; registro: string[]; prova?: string[]; conti?: Record<string, number> };
@@ -289,22 +290,27 @@ const descrivi = (op: Op, p: Pagina): string => {
   }
 };
 
-type Lettura = "mai" | "se-serve" | "sempre";
-async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"): Promise<void> {
+// Una lettura di Notion fatta SENZA lucchetto (dura decine di secondi), da applicare dopo, sotto il lucchetto.
+type Letta = { letti: Map<string, LettoN>; nuoviX: string[]; inizio: number; visto: string; durata: number };
+async function giro(k: string, paginaId: string, letta: Letta | null): Promise<void> {
   const riga = await leggiRiga(k, paginaId); if (!riga?.ombra) return;
   const o = riga.ombra, stato = riga.stato;
   if (o.ferma) return;
   const prova = modo() === "prova";
   stato.giri++; stato.ultimo = Date.now();
   try {
-    // 1. Notion: si rilegge solo se la pagina e' cambiata (l'ora di Notion va al minuto: se il minuto
-    //    di quell'ora non era finito quando abbiamo letto l'ultima volta, si rilegge ancora)
-    const pg = lettura === "mai" ? null : await api("GET", `/pages/${o.notion}`);
-    const serve = !!pg && (lettura === "sempre" || pg.last_edited_time !== o.visto || Date.parse(pg.last_edited_time) + 60_000 > o.scanInizio || Date.now() - o.scanAt > SCANSIONE_COMUNQUE);
-    let letti: Map<string, LettoN> | null = null;
+    // 1. Notion, com'era nella lettura (se c'e'). I blocchi che il job ha scritto in Notion DOPO l'inizio
+    //    di quella lettura non si guardano: la lettura li ha visti com'erano prima, e li riporterebbe indietro
     const inizio = Date.now();
-    let durata = -1;
-    if (serve) { const s = await scansiona(o); letti = s.letti; durata = Date.now() - inizio; if (!prova && s.nuoviX.length) o.x.push(...s.nuoviX); }
+    const durata = letta ? letta.durata : -1;
+    if (o.via) for (const [n, t] of Object.entries(o.via)) if (inizio - t > 10 * 60_000) delete o.via[n];
+    let letti: Map<string, LettoN> | null = null;
+    const nonCreduti = new Set<string>();
+    if (letta) {
+      letti = letta.letti;
+      Object.entries(o.voci).forEach(([nid, v]) => { if (v.w && v.w >= letta.inizio) nonCreduti.add(nid); });
+      if (!prova && letta.nuoviX.length) { const xs = new Set(o.x); o.x.push(...letta.nuoviX.filter(id => !xs.has(id) && !o.voci[id])); }
+    }
 
     // 2. il piano, adesso
     const q = await leggiQuaderno(k); if (!q) throw new Error("quaderno vuoto");
@@ -326,8 +332,9 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
     const daRifare = new Set<string>(); // cancellati in Notion per essere ricreati (spostati, cambiati di tipo)
     for (const [nid, v] of Object.entries(o.voci)) {
       const x = perNid.get(nid); const pb = x?.b;
-      const ln = letti ? letti.get(nid) : undefined; const nb = ln?.n;
-      const nVia = !!letti && !ln;
+      const creduto = !!letti && !nonCreduti.has(nid);
+      const ln = creduto ? letti!.get(nid) : undefined; const nb = ln?.n;
+      const nVia = creduto && !ln;
       // un blocco che manca nel piano e' cancellato SOLO se il piano lo dice (tomb). Senza lapide e' una
       // copia vecchia del quaderno (un'app non aggiornata): il blocco torna dal lato di Notion
       const lapide = p.tomb?.[String(v.pid)];
@@ -390,7 +397,7 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
     const fuori = new Set(o.fuori);
     for (const x of posti) if (!(x.b.nid && o.voci[x.b.nid]) && !fuori.has(x.b.id) && (SINCRONIZZABILE(x.b.kind) || (x.b.kind === "image" && /^https:/.test(String(x.b["src"] ?? ""))))) ops.push({ t: "nuovo", pid: x.b.id });
     // nuovi in Notion
-    if (letti) for (const [nid, ln] of Array.from(letti)) if (!o.voci[nid] && !ops.some(op => op.t === "metti" && op.n.id === nid)) ops.push({ t: "metti", n: ln.n, par: ln.par, prv: ln.prv });
+    if (letti) for (const [nid, ln] of Array.from(letti)) if (!o.voci[nid] && !o.x.includes(nid) && !o.via?.[nid] && !ops.some(op => op.t === "metti" && op.n.id === nid)) ops.push({ t: "metti", n: ln.n, par: ln.par, prv: ln.prv });
 
     if (prova) {
       stato.prova = ops.slice(0, 400).map(op => descrivi(op, p));
@@ -406,10 +413,11 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
     for (const op of ops) {
       if (op.t === "via") {
         try { await api("DELETE", `/blocks/${op.nid}`); } catch (e: any) { if (e.status !== 404 && !/archived/i.test(e.message)) throw e; }
+        (o.via = o.via ?? {})[op.nid] = Date.now();
         delete o.voci[op.nid]; scrivi(stato, descrivi(op, p)); await salva();
       } else if (op.t === "agg") {
         const r = await api("PATCH", `/blocks/${op.nid}`, { [op.tipo]: op.body });
-        const v = o.voci[op.nid]!; v.hp = op.hp; v.hn = impN(r); delete v.hpv; scrivi(stato, descrivi(op, p));
+        const v = o.voci[op.nid]!; v.hp = op.hp; v.hn = impN(r); v.w = Date.now(); delete v.hpv; scrivi(stato, descrivi(op, p));
       }
     }
     await salva();
@@ -432,7 +440,7 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
         await salva(); throw new Error(o.ferma);
       }
       x.b.nid = nuovo.id; perNid.set(nuovo.id, x);
-      o.voci[nuovo.id] = { pid: x.b.id, hp: impP(x.b), hn: impN(nuovo), par, prv: after, t: nuovo.type, ...(x.b.kind === "image" ? { ro: 1 as const } : {}) };
+      o.voci[nuovo.id] = { pid: x.b.id, hp: impP(x.b), hn: impN(nuovo), par, prv: after, t: nuovo.type, w: Date.now(), ...(x.b.kind === "image" ? { ro: 1 as const } : {}) };
       assegnati.push([x.b.id, nuovo.id]);
       await salva(); // SUBITO: un giro interrotto qui non deve ricreare il blocco
       scrivi(stato, descrivi(op, p) + " = " + nuovo.id);
@@ -493,8 +501,8 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
       });
     }
     // le voci che hanno cambiato posto in Notion senza cambiare altro: il posto nuovo
-    if (letti) for (const [nid, ln] of Array.from(letti)) { const v = o.voci[nid]; if (v && !ops.some(op => (op.t === "sposta") && op.nid === nid)) { v.par = ln.par; v.prv = ln.prv; } }
-    if (serve && pg) { o.visto = pg.last_edited_time; o.scanInizio = inizio; o.scanAt = Date.now(); }
+    if (letti) for (const [nid, ln] of Array.from(letti)) { const v = o.voci[nid]; if (v && !nonCreduti.has(nid) && !ops.some(op => (op.t === "sposta") && op.nid === nid)) { v.par = ln.par; v.prv = ln.prv; } }
+    if (letta) { o.visto = letta.visto; o.scanInizio = letta.inizio; o.scanAt = Date.now(); }
     await salva();
     delete stato.errore;
     stato.conti = { operazioni: ops.length, voci: Object.keys(o.voci).length, letti: letti?.size ?? -1, chiamate, letturaMs: durata, giroMs: Date.now() - inizio, latenzaMediaMs: chiamate ? Math.round(msInRete / chiamate) : 0, turnoMedioMs: chiamate ? Math.round(attesaTurno / chiamate) : 0 };
@@ -508,15 +516,43 @@ async function giro(k: string, paginaId: string, lettura: Lettura = "se-serve"):
 }
 
 // ---------------------------------------------------------------- il ciclo e le rotte
-// una pagina alla volta per se', le pagine fra loro in parallelo. Prima si spinge in Notion quello che e'
-// cambiato nel piano (veloce, senza rileggere Notion), poi si rilegge Notion se la pagina e' cambiata:
-// cosi' una rilettura lunga non fa aspettare le modifiche fatte nell'app.
-const inCorso = new Set<string>();
-function unaVolta(k: string, pagina: string, fn: () => Promise<void>): Promise<void> {
+// Per ogni pagina due strade:
+//   - la SPINTA (ogni 10 s): quello che e' cambiato nel piano va in Notion. Veloce, sotto il lucchetto.
+//   - la LETTURA: se la pagina di Notion e' cambiata, si rilegge tutto l'albero SENZA lucchetto (decine di
+//     secondi), poi il confronto si fa sotto il lucchetto. Cosi' una rilettura lunga non fa aspettare le
+//     modifiche fatte nell'app. L'ombra si tocca solo sotto il lucchetto: due giri insieme sulla stessa
+//     ombra perderebbero le voci dei blocchi appena creati, e al giro dopo li creerebbero di nuovo.
+const lucchetti = new Map<string, Promise<unknown>>();
+function conLucchetto<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prima = lucchetti.get(id) ?? Promise.resolve();
+  const qui = prima.catch(() => undefined).then(fn);
+  lucchetti.set(id, qui);
+  void qui.catch(() => undefined).then(() => { if (lucchetti.get(id) === qui) lucchetti.delete(id); });
+  return qui;
+}
+const spinte = new Set<string>(), letture = new Set<string>();
+function unaVolta(insieme: Set<string>, id: string, fn: () => Promise<void>): Promise<void> {
+  if (insieme.has(id)) return Promise.resolve();
+  insieme.add(id);
+  return fn().finally(() => insieme.delete(id));
+}
+async function leggiSeServe(k: string, pagina: string, sempre = false): Promise<void> {
   const id = k + "/" + pagina;
-  if (inCorso.has(id)) return Promise.resolve();
-  inCorso.add(id);
-  return fn().finally(() => inCorso.delete(id));
+  const riga = await leggiRiga(k, pagina); const o = riga?.ombra; if (!o || o.ferma) return;
+  const pg = await api("GET", `/pages/${o.notion}`);
+  // l'ora di Notion va al minuto: se il minuto di quell'ora non era finito quando e' cominciata l'ultima
+  // lettura, si rilegge ancora (una modifica nello stesso minuto non cambierebbe l'ora)
+  const serve = sempre || pg.last_edited_time !== o.visto || Date.parse(pg.last_edited_time) + 60_000 > o.scanInizio || Date.now() - o.scanAt > SCANSIONE_COMUNQUE;
+  if (!serve) return;
+  const inizio = Date.now();
+  let s: Awaited<ReturnType<typeof scansiona>>;
+  try { s = await scansiona(o); }
+  catch (e: any) {
+    await conLucchetto(id, async () => { const r = await leggiRiga(k, pagina); if (r) { r.stato.errore = "lettura di Notion: " + String(e?.message || e); scrivi(r.stato, "ERRORE " + r.stato.errore); await salvaStato(k, pagina, r.stato); } });
+    return;
+  }
+  const letta: Letta = { letti: s.letti, nuoviX: s.nuoviX, inizio, visto: pg.last_edited_time, durata: Date.now() - inizio };
+  await conLucchetto(id, () => giro(k, pagina, letta));
 }
 async function ciclo() {
   if (!token() || (modo() !== "on" && modo() !== "prova")) return;
@@ -524,8 +560,9 @@ async function ciclo() {
     await tabelle();
     const r = await rows(sql`SELECT chiave, pagina FROM focuslock_notion WHERE ombra IS NOT NULL`);
     for (const x of r) {
-      const k = String(x.chiave), pg = String(x.pagina);
-      void unaVolta(k, pg, async () => { await giro(k, pg, "mai"); await giro(k, pg, "se-serve"); }).catch(e => console.error("[notion-sync]", e));
+      const k = String(x.chiave), pg = String(x.pagina), id = k + "/" + pg;
+      void unaVolta(spinte, id, () => conLucchetto(id, () => giro(k, pg, null))).catch(e => console.error("[notion-sync]", e));
+      void unaVolta(letture, id, () => leggiSeServe(k, pg)).catch(e => console.error("[notion-sync]", e));
     }
   } catch (e) { console.error("[notion-sync]", e); }
 }
@@ -559,7 +596,7 @@ export function registerFocusLockNotionRoutes(app: Express) {
     try {
       await tabelle();
       const stato = (await leggiRiga(k, pagina))?.stato ?? { giri: 0, registro: [] };
-      const conti = await aggancia(k, pagina, trattini(notion), stato);
+      const conti = await conLucchetto(k + "/" + pagina, () => aggancia(k, pagina, trattini(notion), stato));
       await salvaStato(k, pagina, stato);
       res.json({ ok: true, conti });
     } catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
@@ -571,7 +608,7 @@ export function registerFocusLockNotionRoutes(app: Express) {
     const pagina = String(req.body?.pagina || "");
     if (!CHIAVE.test(k) || !pagina) { res.status(400).json({ error: "servono chiave e pagina" }); return; }
     if (modo() !== "on" && modo() !== "prova") { res.status(409).json({ error: "NOTION_SYNC non e' acceso" }); return; }
-    try { await tabelle(); await unaVolta(k, pagina, () => giro(k, pagina, "sempre")); res.json({ ok: true, stato: (await leggiRiga(k, pagina))?.stato }); }
+    try { await tabelle(); await unaVolta(letture, k + "/" + pagina, () => leggiSeServe(k, pagina, true)); res.json({ ok: true, stato: (await leggiRiga(k, pagina))?.stato }); }
     catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
 
@@ -579,7 +616,7 @@ export function registerFocusLockNotionRoutes(app: Express) {
   app.post("/api/focuslock/notion/:k/stacca", async (req: Request, res: Response) => {
     const k = String(req.params.k || ""); const pagina = String(req.body?.pagina || "");
     if (!CHIAVE.test(k) || !pagina) { res.status(400).json({ error: "servono chiave e pagina" }); return; }
-    try { await tabelle(); await rows(sql`DELETE FROM focuslock_notion WHERE chiave = ${k} AND pagina = ${pagina}`); res.json({ ok: true }); }
+    try { await tabelle(); await conLucchetto(k + "/" + pagina, () => rows(sql`DELETE FROM focuslock_notion WHERE chiave = ${k} AND pagina = ${pagina}`)); res.json({ ok: true }); }
     catch (e: any) { res.status(500).json({ error: String(e?.message || e) }); }
   });
 }
