@@ -14,9 +14,10 @@ class Finto {
   b = new Map<string, NB>();
   pagina = { id: "pagina-0000-0000-0000-000000000000", figli: [] as string[], t: Date.now() };
   n = 0;
+  ultimoDa = "andrea"; // chi ha fatto l'ultima modifica: le chiamate del job sono «bot»
   nuovoId() { this.n++; return `00000000-0000-0000-0000-${String(this.n).padStart(12, "0")}`; }
   lista(par: string) { return par === this.pagina.id ? this.pagina.figli : this.b.get(par)!.figli; }
-  tocca(id: string) { const t = Date.now(); let x = this.b.get(id); while (x) { x.t = t; x = this.b.get(x.parent); } this.pagina.t = t; }
+  tocca(id: string) { this.ultimoDa = "andrea"; const t = Date.now(); let x = this.b.get(id); while (x) { x.t = t; x = this.b.get(x.parent); } this.pagina.t = t; }
   crea(par: string, type: string, testo: string, dopo: string | null | "fine" = "fine", checked?: boolean): string {
     const id = this.nuovoId();
     this.b.set(id, { id, type, testo, checked, parent: par, figli: [], t: Date.now() });
@@ -34,10 +35,16 @@ class Finto {
   }
   albero(par = this.pagina.id, d = 0): string[] { return this.lista(par).flatMap(id => [`${d}:${this.b.get(id)!.testo}`, ...this.albero(id, d + 1)]); }
   async fetch(url: string, init: any): Promise<Response> {
+    const r = await this.risposta(url, init);
+    if ((init?.method ?? "GET") !== "GET") this.ultimoDa = "bot"; // le scritture del job
+    return r;
+  }
+  async risposta(url: string, init: any): Promise<Response> {
     const u = new URL(url); const m = init?.method ?? "GET"; const body = init?.body ? JSON.parse(init.body) : null;
     const ok = (j: unknown) => new Response(JSON.stringify(j), { status: 200 });
     let r: RegExpExecArray | null;
-    if ((r = /\/v1\/pages\/([^/]+)$/.exec(u.pathname))) return ok({ id: r[1], last_edited_time: new Date(Math.floor(this.pagina.t / 60000) * 60000).toISOString() });
+    if (u.pathname === "/v1/users/me") return ok({ id: "bot" });
+    if ((r = /\/v1\/pages\/([^/]+)$/.exec(u.pathname))) return ok({ id: r[1], last_edited_by: { id: this.ultimoDa }, last_edited_time: new Date(Math.floor(this.pagina.t / 60000) * 60000).toISOString() });
     if ((r = /\/v1\/blocks\/([^/]+)\/children$/.exec(u.pathname))) {
       const par = r[1]!;
       if (m === "GET") {
@@ -178,6 +185,22 @@ describe("sync piano <-> Notion (Notion finto)", () => {
     const tutti = notion.albero();
     expect(new Set(tutti).size).toBe(tutti.length);
     expect(pianoAlbero()).toEqual(tutti);
+  });
+
+  it("una modifica fatta dal job non fa rileggere Notion, una di Andrea si'", async () => {
+    await __prova.aggancia(K, "pg", notion.pagina.id, { giri: 0, registro: [] });
+    const riletture = () => registro().filter(r => r.includes("riletta")).length;
+    const prima = riletture();
+    app(l => { l[0]!.text = "uno dal piano"; return l; });
+    await __prova.giro(K, "pg", null);              // il job scrive in Notion
+    await __prova.leggiSeServe(K, "pg", false);
+    await __prova.leggiSeServe(K, "pg", false);
+    expect(riletture()).toBe(prima);
+    const due = notion.lista(notion.pagina.id)[1]!;
+    notion.b.get(due)!.testo = "due da Andrea"; notion.tocca(due);
+    await __prova.leggiSeServe(K, "pg", false);
+    expect(riletture()).toBe(prima + 1);
+    expect(pianoAlbero()[1]).toBe("0:due da Andrea");
   });
 
   it("la valvola: un giro che vuole ricreare troppi blocchi si ferma", async () => {

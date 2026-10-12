@@ -31,7 +31,7 @@ import {
 
 const NV = "2022-06-28";
 const OGNI = 10_000;
-const SCANSIONE_COMUNQUE = 10 * 60_000; // anche senza segnali, una rilettura completa ogni 10 minuti
+const SCANSIONE_COMUNQUE = 5 * 60_000; // anche senza segnali, una rilettura completa ogni 5 minuti
 const modo = () => (process.env.NOTION_SYNC || "").trim().toLowerCase();
 const token = () => (process.env.NOTION_TOKEN || "").trim();
 const CHIAVE = /^[A-Za-z0-9_-]{32,64}$/;
@@ -44,6 +44,7 @@ const trattini = (id: string) => { const x = id.replace(/-/g, "").toLowerCase();
 // 70 ms, al massimo 12 in volo; al primo 429 TUTTE le chiamate si fermano per il tempo che dice Notion.
 let ultima = 0, inVolo = 0, fermiFino = 0;
 let chiamate = 0, msInRete = 0, attesaTurno = 0;
+let botId = "";
 const pausa = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function turno() {
   for (;;) {
@@ -595,9 +596,14 @@ async function leggiSeServe(k: string, pagina: string, sempre = false): Promise<
   const id = k + "/" + pagina;
   const riga = await dep.leggiRiga(k, pagina); const o = riga?.ombra; if (!o || o.ferma) return;
   const pg = await api("GET", `/pages/${o.notion}`);
+  // l'ultima modifica della pagina l'ha fatta il job stesso (l'integrazione): niente rilettura, che costa
+  // ~300 chiamate di una quota di ~3 al secondo. Una modifica di Andrea nello stesso minuto, prima della
+  // nostra, la prende la rilettura di sicurezza (SCANSIONE_COMUNQUE)
+  if (!botId) botId = (await api("GET", "/users/me").catch(() => null))?.id ?? "";
+  const nostra = !!botId && pg.last_edited_by?.id === botId;
   // l'ora di Notion va al minuto: se il minuto di quell'ora non era finito quando e' cominciata l'ultima
   // lettura, si rilegge ancora (una modifica nello stesso minuto non cambierebbe l'ora)
-  const serve = sempre || pg.last_edited_time !== o.visto || Date.parse(pg.last_edited_time) + 60_000 > o.scanInizio || Date.now() - o.scanAt > SCANSIONE_COMUNQUE;
+  const serve = sempre || Date.now() - o.scanAt > SCANSIONE_COMUNQUE || (!nostra && (pg.last_edited_time !== o.visto || Date.parse(pg.last_edited_time) + 60_000 > o.scanInizio));
   if (!serve) return;
   const inizio = Date.now();
   let s: Awaited<ReturnType<typeof scansiona>>;
