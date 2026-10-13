@@ -97,6 +97,37 @@ function ensureTables(): Promise<void> {
         UNIQUE KEY uniq_dev (dev, causa, norma),
         KEY idx_causa (causa, norma)
       )`);
+      /* app 0.9.242: gli allegati della chat (foto, PDF, testo) in base64, legati al messaggio */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_agent_allegati (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        msgId INT NOT NULL,
+        googleSub VARCHAR(64) NOT NULL,
+        tipo VARCHAR(8) NOT NULL,
+        mime VARCHAR(64) NOT NULL,
+        nome VARCHAR(120),
+        dati LONGTEXT NOT NULL,
+        createdAt TIMESTAMP NULL,
+        KEY idx_msg (msgId)
+      )`);
+      /* app 0.9.242: i consumi per messaggio (token e modello), per la pagina «Consumi» */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_agent_consumi (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        googleSub VARCHAR(64) NOT NULL,
+        msgId INT NULL,
+        modello VARCHAR(64) NOT NULL,
+        inTok INT NOT NULL DEFAULT 0,
+        outTok INT NOT NULL DEFAULT 0,
+        cacheRead INT NOT NULL DEFAULT 0,
+        cacheWrite INT NOT NULL DEFAULT 0,
+        createdAt TIMESTAMP NULL,
+        KEY idx_user (googleSub, createdAt)
+      )`);
+      /* app 0.9.242: il modello scelto dall'utente per la chat («veloce» o «profondo») */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_agent_pref (
+        googleSub VARCHAR(64) NOT NULL PRIMARY KEY,
+        modello VARCHAR(16) NOT NULL,
+        updatedAt TIMESTAMP NULL
+      )`);
     })().catch((e) => { ready = null; throw e; });
   }
   return ready;
@@ -225,31 +256,153 @@ function eRoadmap(testo: string, primo: boolean): boolean {
   return primo || /roadmap|ricalcol|piano|orizzont|itinerar|rifai la strada/i.test(testo);
 }
 
+/* ---------------------------------------------------------------------------------------
+ * LA SCELTA DEL MODELLO (app 0.9.242). Solo i modelli che il server usa già: «veloce» è il
+ * modello della chat (AGENT_CHAT_MODEL, Haiku 4.5), «profondo» quello della roadmap
+ * (AGENT_ROADMAP_MODEL, Opus 5.5). Con Gemini c'è un modello solo, quindi niente scelta.
+ * Un messaggio «profondo» costa AGENT_CREDITI_PROFONDO crediti (di serie 3).
+ * --------------------------------------------------------------------------------------- */
+type SceltaModello = "veloce" | "profondo";
+const CREDITI_PROFONDO = Math.max(1, Math.floor(Number(process.env.AGENT_CREDITI_PROFONDO || 3)));
+function modelloChat(): string { return process.env.AGENT_CHAT_MODEL || "claude-haiku-4-5"; }
+function modelloPiano(): string { return process.env.AGENT_ROADMAP_MODEL || "claude-opus-5-5"; }
+function sceltaValida(x: unknown): SceltaModello | null { return x === "veloce" || x === "profondo" ? x : null; }
+function modelliDisponibili() {
+  if (fornitore() === "gemini") return [{ id: "veloce", modello: process.env.GEMINI_MODEL || "gemini-3.1-flash-lite", crediti: 1 }];
+  return [
+    { id: "veloce", modello: modelloChat(), crediti: 1 },
+    { id: "profondo", modello: modelloPiano(), crediti: CREDITI_PROFONDO },
+  ];
+}
+async function sceltaDi(sub: string): Promise<SceltaModello> {
+  const r = await rows(sql`SELECT modello FROM focuslock_agent_pref WHERE googleSub = ${sub} LIMIT 1`);
+  return sceltaValida(r[0]?.modello) || "veloce";
+}
+
+/* ---------------------------------------------------------------------------------------
+ * I PREZZI PER LA STIMA DEI CONSUMI, in dollari per milione di token (listino Anthropic,
+ * ottobre 2026). Cache: lettura circa 0,1 volte l'input, scrittura 1,25 volte. È una STIMA: per
+ * gli account del Max il costo vero è l'abbonamento, e i modelli fuori listino restano senza prezzo.
+ * --------------------------------------------------------------------------------------- */
+const PREZZI: Record<string, { in: number; out: number; cr: number; cw: number }> = {
+  "claude-haiku-4-5": { in: 1, out: 5, cr: 0.1, cw: 1.25 },
+  "claude-haiku-5-5": { in: 0.1, out: 0.5, cr: 0.01, cw: 0.125 },
+  "claude-sonnet-5-5": { in: 2, out: 10, cr: 0.2, cw: 2.5 },
+  "claude-sonnet-5": { in: 2, out: 10, cr: 0.2, cw: 2.5 },
+  "claude-sonnet-4-6": { in: 3, out: 15, cr: 0.3, cw: 3.75 },
+  "claude-opus-5-5": { in: 4, out: 20, cr: 0.2, cw: 5 },
+  "claude-opus-5": { in: 5, out: 25, cr: 0.5, cw: 6.25 },
+  "claude-opus-4-8": { in: 5, out: 25, cr: 0.5, cw: 6.25 },
+  "claude-fable-5-1": { in: 10, out: 50, cr: 0.25, cw: 12.5 },
+};
+function prezzoDi(modello: string) {
+  const m = String(modello || "").toLowerCase().replace(/^anthropic\./, "").replace(/-\d{8}$/, "");
+  return PREZZI[m] || null;
+}
+type Uso = { modello: string; inTok: number; outTok: number; cacheRead: number; cacheWrite: number };
+async function registraUso(sub: string, msgId: number | null, u: Uso | null) {
+  if (!u || !u.modello) return;
+  const n = (x: unknown) => Math.max(0, Math.min(2_000_000_000, Math.floor(Number(x) || 0)));
+  try {
+    await rows(sql`INSERT INTO focuslock_agent_consumi (googleSub, msgId, modello, inTok, outTok, cacheRead, cacheWrite, createdAt)
+      VALUES (${sub}, ${msgId}, ${String(u.modello).slice(0, 64)}, ${n(u.inTok)}, ${n(u.outTok)}, ${n(u.cacheRead)}, ${n(u.cacheWrite)}, NOW())`);
+  } catch (e: any) { console.warn("[focuslock-chat] consumi:", e?.message || e); }
+}
+
+/* ---------------------------------------------------------------------------------------
+ * GLI ALLEGATI (app 0.9.242): foto (jpeg, png, webp, gif), PDF e file di testo, in base64.
+ * Si controllano il tipo, la firma dei primi byte e la grandezza. Al modello arrivano come
+ * blocchi veri: «image» per le foto, «document» per PDF e testo (Gemini: inlineData).
+ * --------------------------------------------------------------------------------------- */
+type Allegato = { tipo: "image" | "pdf" | "text"; mime: string; nome: string; dati: string };
+const ALL_MAX = 4;
+const ALL_MAX_IMG = 5 * 1024 * 1024;       // il limite di Claude per immagine
+const ALL_MAX_PDF = 10 * 1024 * 1024;
+const ALL_MAX_TXT = 300 * 1024;
+const ALL_MAX_TOT = 20 * 1024 * 1024;
+const MIME_IMG = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const MIME_TXT = ["text/plain", "text/markdown", "text/csv"];
+function firmaOk(mime: string, b: Buffer): boolean {
+  if (mime === "image/jpeg") return b[0] === 0xff && b[1] === 0xd8;
+  if (mime === "image/png") return b.subarray(0, 4).toString("hex") === "89504e47";
+  if (mime === "image/gif") return b.subarray(0, 3).toString("ascii") === "GIF";
+  if (mime === "image/webp") return b.subarray(0, 4).toString("ascii") === "RIFF" && b.subarray(8, 12).toString("ascii") === "WEBP";
+  if (mime === "application/pdf") return b.subarray(0, 5).toString("ascii") === "%PDF-";
+  return !b.includes(0);                      // testo: niente byte zero
+}
+/** Valida gli allegati del corpo. Torna la lista pulita, o un errore da mandare all'app. */
+function allegatiDa(x: unknown): { lista: Allegato[]; errore?: string } {
+  if (x == null) return { lista: [] };
+  if (!Array.isArray(x)) return { lista: [], errore: "allegati non validi" };
+  if (x.length > ALL_MAX) return { lista: [], errore: "troppi allegati" };
+  const lista: Allegato[] = [];
+  let tot = 0;
+  for (const a of x) {
+    const mime = String(a?.mime || "").toLowerCase().trim();
+    const dati = String(a?.dati || "").replace(/^data:[^,]*,/, "").replace(/\s+/g, "");
+    const nome = String(a?.nome || "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 120) || "allegato";
+    if (!dati || !/^[A-Za-z0-9+/]+=*$/.test(dati)) return { lista: [], errore: "allegato non valido" };
+    const tipo: Allegato["tipo"] | null = MIME_IMG.includes(mime) ? "image" : mime === "application/pdf" ? "pdf" : MIME_TXT.includes(mime) ? "text" : null;
+    if (!tipo) return { lista: [], errore: "tipo di file non supportato" };
+    const buf = Buffer.from(dati, "base64");
+    const max = tipo === "image" ? ALL_MAX_IMG : tipo === "pdf" ? ALL_MAX_PDF : ALL_MAX_TXT;
+    if (!buf.length || buf.length > max) return { lista: [], errore: "allegato troppo grande" };
+    if (!firmaOk(mime, buf)) return { lista: [], errore: "il file non corrisponde al suo tipo" };
+    tot += buf.length;
+    if (tot > ALL_MAX_TOT) return { lista: [], errore: "allegati troppo grandi" };
+    lista.push({ tipo, mime, nome, dati });
+  }
+  return { lista };
+}
+async function allegatiDel(msgId: number): Promise<Allegato[]> {
+  const r = await rows(sql`SELECT tipo, mime, nome, dati FROM focuslock_agent_allegati WHERE msgId = ${msgId} ORDER BY id ASC`);
+  return r.map((a: any) => ({ tipo: a.tipo, mime: String(a.mime), nome: String(a.nome || ""), dati: String(a.dati) }));
+}
+/** I blocchi Claude per gli allegati, da mettere PRIMA del testo del messaggio. */
+function blocchiClaude(lista: Allegato[]): any[] {
+  return lista.map((a) => a.tipo === "image"
+    ? { type: "image", source: { type: "base64", media_type: a.mime, data: a.dati } }
+    : a.tipo === "pdf"
+      ? { type: "document", title: a.nome, source: { type: "base64", media_type: "application/pdf", data: a.dati } }
+      : { type: "document", title: a.nome, source: { type: "text", media_type: "text/plain", data: Buffer.from(a.dati, "base64").toString("utf8") } });
+}
+
 /** Una chiamata al modello: messaggi alternati user/assistant, la persona come istruzione di sistema.
- *  `piano` = roadmap o scomposizione (Opus 5.5); altrimenti chat (Haiku 4.5). */
-async function chiamaModello(messaggi: { role: string; content: string }[], piano = false): Promise<string> {
+ *  `piano` = roadmap o scomposizione (Opus 5.5); altrimenti chat (Haiku 4.5, oppure il modello
+ *  della roadmap se l'utente ha scelto «profondo»). Gli allegati vanno nell'ultimo messaggio
+ *  dell'utente. Torna il testo e i token usati (per la pagina «Consumi»). */
+async function chiamaModello(messaggi: { role: string; content: string }[], piano = false,
+  opz: { allegati?: Allegato[]; scelta?: SceltaModello } = {}): Promise<{ testo: string; uso: Uso | null }> {
   const f = fornitore();
+  const allegati = opz.allegati || [];
   if (f === "anthropic") {
     /* 0.9.230: le immagini allegate dal piano (link alle immagini del piano su questo server) arrivano
      * al modello come immagini vere, non solo come testo */
     const IMG = /https:\/\/meta-ai-media-buyer-production\.up\.railway\.app\/api\/focuslock\/piano\/img\/[a-f0-9]{32}/g;
-    const msgs = messaggi.map((m) => {
+    const ultimoUser = messaggi.map((m) => m.role).lastIndexOf("user");
+    const msgs: Anthropic.MessageParam[] = messaggi.map((m, i) => {
       const role = m.role === "assistant" ? "assistant" as const : "user" as const;
       const urls = role === "user" ? Array.from(new Set(m.content.match(IMG) || [])).slice(0, 6) : [];
-      if (!urls.length) return { role, content: m.content };
-      return { role, content: [...urls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })), { type: "text" as const, text: m.content }] };
+      const extra = role === "user" && i === ultimoUser ? blocchiClaude(allegati) : [];
+      if (!urls.length && !extra.length) return { role, content: m.content };
+      return { role, content: [...extra, ...urls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })), { type: "text" as const, text: m.content }] };
     });
     const system = [{ type: "text" as const, text: PERSONA, cache_control: { type: "ephemeral" as const } }];
-    /* Haiku 4.5 non accetta `effort`: il parametro va solo al modello del piano */
-    const r = piano
-      ? await claude().messages.create({ model: process.env.AGENT_ROADMAP_MODEL || "claude-opus-5-5", max_tokens: 16000,
-          output_config: { effort: "high" }, system, messages: msgs })
-      : await claude().messages.create({ model: process.env.AGENT_CHAT_MODEL || "claude-haiku-4-5", max_tokens: 2000,
+    /* Haiku 4.5 non accetta `effort`: il parametro va solo al modello del piano. La chat
+     * «profonda» usa lo stesso modello del piano con effort medio. */
+    const profondo = !piano && opz.scelta === "profondo";
+    const modello = piano || profondo ? modelloPiano() : modelloChat();
+    const r = piano || profondo
+      ? await claude().messages.create({ model: modello, max_tokens: 16000,
+          output_config: { effort: piano ? "high" : "medium" }, system, messages: msgs })
+      : await claude().messages.create({ model: modello, max_tokens: 2000,
           system, messages: msgs });
     if (r.stop_reason === "refusal") throw new Error("claude: rifiuto " + JSON.stringify(r.stop_details || null).slice(0, 200));
     const testo = r.content.filter((b) => b.type === "text").map((b) => (b.type === "text" ? b.text : "")).join("\n").trim();
     if (!testo) throw new Error("claude: risposta vuota (" + r.stop_reason + ")");
-    return testo;
+    const u: any = r.usage || {};
+    return { testo, uso: { modello: String(r.model || modello), inTok: u.input_tokens, outTok: u.output_tokens,
+      cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0 } };
   }
   if (f === "gemini") {
     const modello = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
@@ -258,14 +411,18 @@ async function chiamaModello(messaggi: { role: string; content: string }[], pian
       headers: { "x-goog-api-key": String(process.env.AGENT_GEMINI_KEY), "content-type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: PERSONA }] },
-        contents: messaggi.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
+        contents: messaggi.map((m, i) => ({ role: m.role === "assistant" ? "model" : "user",
+          parts: [...(m.role !== "assistant" && i === messaggi.map((x) => x.role).lastIndexOf("user")
+            ? allegati.map((a) => ({ inlineData: { mimeType: a.tipo === "text" ? "text/plain" : a.mime, data: a.dati } })) : []), { text: m.content }] })),
         generationConfig: { maxOutputTokens: LLM_MAX_OUT, temperature: 0.7 },
       }),
     });
     const j: any = await r.json();
     const testo = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim();
     if (!r.ok || !testo) throw new Error("gemini " + r.status + " " + JSON.stringify(j?.error || j?.promptFeedback || "").slice(0, 200));
-    return testo;
+    const um = j?.usageMetadata || {};
+    return { testo, uso: { modello, inTok: Math.max(0, (um.promptTokenCount || 0) - (um.cachedContentTokenCount || 0)),
+      outTok: (um.candidatesTokenCount || 0) + (um.thoughtsTokenCount || 0), cacheRead: um.cachedContentTokenCount || 0, cacheWrite: 0 } };
   }
   throw new Error("nessun fornitore configurato");
 }
@@ -307,11 +464,16 @@ function tagliaPiano(testo: string): { testo: string; azioni: any } {
 /** Risponde a un messaggio con il fornitore a crediti. Mai per gli account del Max. */
 async function rispondiACrediti(id: number): Promise<void> {
   if (!llmAcceso()) return;
-  const r = await rows(sql`SELECT id, googleSub, email, canale, testo FROM focuslock_agent_msgs WHERE id = ${id} AND direzione = 'in' AND stato = 'attesa' LIMIT 1`);
+  const r = await rows(sql`SELECT id, googleSub, email, canale, testo, azioni FROM focuslock_agent_msgs WHERE id = ${id} AND direzione = 'in' AND stato = 'attesa' LIMIT 1`);
   if (!r.length) return;
   const m = r[0];
   if (emailMax().includes(String(m.email || "").trim().toLowerCase())) return;        // quelli li serve il VPS
   const sub = String(m.googleSub);
+  /* 0.9.242: il modello scelto per questo messaggio (dall'app) o, per Telegram e WhatsApp, quello
+   * delle impostazioni; e gli allegati, se ce ne sono */
+  const azIn: any = parse(m.azioni) || {};
+  const scelta: SceltaModello = sceltaValida(azIn.modello) || (m.canale === "app" ? "veloce" : await sceltaDi(sub));
+  const allegati = Array.isArray(azIn.allegati) && azIn.allegati.length ? await allegatiDel(id) : [];
   const consegna = m.canale === "telegram" ? "daconsegnare" : "fatto";
   await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'lavoro' WHERE id = ${id}`);
   await saldo(sub, m.email ?? null);
@@ -321,7 +483,8 @@ async function rispondiACrediti(id: number): Promise<void> {
   const umore = eUmore(m.testo);
   const piano = ePiano(m.testo);
   const roadmap = !piano && !scomponi && !iofuturo && !umore && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
-  const costo = piano ? 1 : iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : 1));
+  const profondo = !piano && !scomponi && !iofuturo && !umore && !roadmap && scelta === "profondo" && fornitore() === "anthropic";
+  const costo = piano ? 1 : iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : (profondo ? CREDITI_PROFONDO : 1)));
   if (!(await scala(sub, costo))) {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'crediti' WHERE id = ${id}`);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out",
@@ -367,7 +530,9 @@ async function rispondiACrediti(id: number): Promise<void> {
     const domanda = `${chi} Oggi è ${new Date().toISOString().slice(0, 10)}. Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\nMESSAGGIO:\n${richiesta}`;
     if (messaggi.length && messaggi[messaggi.length - 1].role === "user") messaggi[messaggi.length - 1].content += "\n\n" + domanda;
     else messaggi.push({ role: "user", content: domanda });
-    const testo = await chiamaModello(messaggi, roadmap || scomponi || iofuturo);
+    const risposta = await chiamaModello(messaggi, roadmap || scomponi || iofuturo, { allegati, scelta: profondo ? "profondo" : "veloce" });
+    await registraUso(sub, id, risposta.uso);
+    const testo = risposta.testo;
     const t = piano ? { testo: testo.trim(), azioni: { pianoAi: true } } : umore ? { testo: testo.trim(), azioni: { umore: true } } : tagliaPiano(testo);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out", t.testo, t.azioni, id, umore || piano ? "fatto" : consegna);
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
@@ -609,7 +774,12 @@ export function registerFocusLockChatRoutes(app: Express) {
 
   app.post("/api/focuslock/agent/chat", async (req: Request, res: Response) => {
     const who = await utente(req, res); if (!who) return;
-    const testo = pulisci((req.body ?? {}).testo);
+    /* 0.9.242: gli allegati (foto, PDF, testo) e il modello scelto per questo messaggio */
+    const all = allegatiDa((req.body ?? {}).allegati);
+    if (all.errore) { res.status(400).json({ error: all.errore }); return; }
+    const scelta = sceltaValida((req.body ?? {}).modello);
+    let testo = pulisci((req.body ?? {}).testo);
+    if (!testo && all.lista.length) testo = all.lista.length === 1 ? "Guarda l'allegato." : "Guarda gli allegati.";
     if (!testo) { res.status(400).json({ error: "testo is required" }); return; }
     try {
       await ensureTables();
@@ -623,7 +793,19 @@ export function registerFocusLockChatRoutes(app: Express) {
           ON DUPLICATE KEY UPDATE brief = IF(VALUES(brief) = '', brief, VALUES(brief)),
             nome = IF(${nome} = '', nome, ${nome}), updatedAt = NOW()`);
       }
-      const id = await inserisci(who.sub, who.email, "app", "in", testo, null, null, "attesa");
+      /* il messaggio nasce «sospeso» finche' gli allegati non sono salvati: cosi' ne' il VPS ne'
+       * il fornitore a crediti lo prendono a meta' */
+      const azIn = scelta || all.lista.length
+        ? { ...(scelta ? { modello: scelta } : {}), ...(all.lista.length ? { allegati: all.lista.map((a) => ({ tipo: a.tipo, mime: a.mime, nome: a.nome })) } : {}) }
+        : null;
+      const id = await inserisci(who.sub, who.email, "app", "in", testo, azIn, null, all.lista.length ? "sospeso" : "attesa");
+      if (all.lista.length) {
+        try {
+          for (const a of all.lista) await rows(sql`INSERT INTO focuslock_agent_allegati (msgId, googleSub, tipo, mime, nome, dati, createdAt)
+            VALUES (${id}, ${who.sub}, ${a.tipo}, ${a.mime}, ${a.nome}, ${a.dati}, NOW())`);
+        } catch (e) { await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'errore' WHERE id = ${id}`); throw e; }
+        await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'attesa' WHERE id = ${id} AND stato = 'sospeso'`);
+      }
       lanciaCrediti(id);
       res.json({ id });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
@@ -654,6 +836,76 @@ export function registerFocusLockChatRoutes(app: Express) {
       await ensureTables();
       const max = emailMax().includes(String(who.email || "").trim().toLowerCase());
       res.json({ illimitato: max, saldo: max ? null : await saldo(who.sub, who.email), acceso: max || llmAcceso() });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+
+  /* 0.9.242: LA SCELTA DEL MODELLO. GET -> { scelta, modelli: [{ id, modello, crediti }] };
+   * POST { scelta: "veloce"|"profondo" } la salva (vale anche per Telegram e WhatsApp). */
+  app.get("/api/focuslock/agent/chat/modello", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    try {
+      await ensureTables();
+      const modelli = modelliDisponibili();
+      const s = await sceltaDi(who.sub);
+      res.json({ scelta: modelli.some((m) => m.id === s) ? s : "veloce", modelli });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+  app.post("/api/focuslock/agent/chat/modello", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const scelta = sceltaValida((req.body ?? {}).scelta);
+    if (!scelta || !modelliDisponibili().some((m) => m.id === scelta)) { res.status(400).json({ error: "modello non disponibile" }); return; }
+    try {
+      await ensureTables();
+      await rows(sql`INSERT INTO focuslock_agent_pref (googleSub, modello, updatedAt) VALUES (${who.sub}, ${scelta}, NOW())
+        ON DUPLICATE KEY UPDATE modello = VALUES(modello), updatedAt = NOW()`);
+      res.json({ ok: true, scelta });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+
+  /* 0.9.242: I CONSUMI dell'agente personale negli ultimi N giorni (di serie 30, massimo 90):
+   * messaggi, token, cache, costo STIMATO dal listino (PREZZI) per giorno e per modello. */
+  app.get("/api/focuslock/agent/chat/consumi", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const giorni = Math.max(1, Math.min(90, Math.floor(Number(req.query.giorni || 30)) || 30));
+    try {
+      await ensureTables();
+      const giorno = (d: unknown) => d instanceof Date ? d.toISOString().slice(0, 10) : String(d || "").slice(0, 10);
+      const uso = await rows(sql`SELECT DATE(createdAt) AS d, modello, COUNT(*) AS n, SUM(inTok) AS i, SUM(outTok) AS o,
+          SUM(cacheRead) AS cr, SUM(cacheWrite) AS cw
+        FROM focuslock_agent_consumi WHERE googleSub = ${who.sub} AND createdAt >= (CURDATE() - INTERVAL ${giorni - 1} DAY)
+        GROUP BY DATE(createdAt), modello`);
+      const scritti = await rows(sql`SELECT DATE(createdAt) AS d, COUNT(*) AS n FROM focuslock_agent_msgs
+        WHERE googleSub = ${who.sub} AND direzione = 'in' AND createdAt >= (CURDATE() - INTERVAL ${giorni - 1} DAY)
+        GROUP BY DATE(createdAt)`);
+      const perGiorno: Record<string, { costo: number; messaggi: number }> = {};
+      const oggi = new Date();
+      for (let k = giorni - 1; k >= 0; k--) {
+        const d = new Date(Date.UTC(oggi.getUTCFullYear(), oggi.getUTCMonth(), oggi.getUTCDate() - k));
+        perGiorno[d.toISOString().slice(0, 10)] = { costo: 0, messaggi: 0 };
+      }
+      const perModello: Record<string, { modello: string; chiamate: number; in: number; out: number; cacheLetti: number; cacheScritti: number; costo: number; prezzoNoto: boolean }> = {};
+      const tot = { costo: 0, messaggi: 0, chiamate: 0, in: 0, out: 0, cacheLetti: 0, cacheScritti: 0 };
+      for (const r of uso) {
+        const p = prezzoDi(String(r.modello));
+        const i = Number(r.i || 0), o = Number(r.o || 0), cr = Number(r.cr || 0), cw = Number(r.cw || 0), n = Number(r.n || 0);
+        const costo = p ? (i * p.in + o * p.out + cr * p.cr + cw * p.cw) / 1e6 : 0;
+        const g = perGiorno[giorno(r.d)]; if (g) g.costo += costo;
+        const m = perModello[String(r.modello)] || (perModello[String(r.modello)] = { modello: String(r.modello), chiamate: 0, in: 0, out: 0, cacheLetti: 0, cacheScritti: 0, costo: 0, prezzoNoto: !!p });
+        m.chiamate += n; m.in += i; m.out += o; m.cacheLetti += cr; m.cacheScritti += cw; m.costo += costo;
+        tot.chiamate += n; tot.in += i; tot.out += o; tot.cacheLetti += cr; tot.cacheScritti += cw; tot.costo += costo;
+      }
+      for (const r of scritti) { const g = perGiorno[giorno(r.d)]; const n = Number(r.n || 0); if (g) g.messaggi += n; tot.messaggi += n; }
+      const ingresso = tot.in + tot.cacheLetti + tot.cacheScritti;
+      const max = emailMax().includes(String(who.email || "").trim().toLowerCase());
+      res.json({
+        giorni,
+        stima: true,
+        valuta: "USD",
+        abbonamento: max,                       // gli account del Max: il costo vero è l'abbonamento
+        totale: { ...tot, cachePct: ingresso ? Math.round((tot.cacheLetti / ingresso) * 1000) / 10 : 0 },
+        perGiorno: Object.keys(perGiorno).map((d) => ({ data: d, costo: perGiorno[d].costo, messaggi: perGiorno[d].messaggi })),
+        perModello: Object.values(perModello).sort((a, b) => b.costo - a.costo || b.chiamate - a.chiamate),
+      });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
 
@@ -707,7 +959,7 @@ export function registerFocusLockChatRoutes(app: Express) {
         WHERE stato = 'lavoro' AND createdAt < (NOW() - INTERVAL 10 MINUTE)`);
       const max = emailMax();
       if (!max.length) { res.json({ messaggi: [] }); return; }
-      const lista = (await rows(sql`SELECT id, googleSub, email, canale, testo, createdAt FROM focuslock_agent_msgs
+      const lista = (await rows(sql`SELECT id, googleSub, email, canale, testo, azioni, createdAt FROM focuslock_agent_msgs
         WHERE direzione = 'in' AND stato = 'attesa' ORDER BY id ASC LIMIT 20`))
         .filter((m: any) => max.includes(String(m.email || "").trim().toLowerCase())).slice(0, 5);
       const out: any[] = [];
@@ -723,7 +975,12 @@ export function registerFocusLockChatRoutes(app: Express) {
                 AND (azioni IS NULL OR (azioni NOT LIKE '%"umore"%' AND azioni NOT LIKE '%"pianoAi"%')) ORDER BY id DESC LIMIT 12`);
         const link = await rows(sql`SELECT esterno FROM focuslock_agent_links
           WHERE googleSub = ${m.googleSub} AND canale = ${m.canale} AND collegatoAt IS NOT NULL LIMIT 1`);
+        /* 0.9.242: gli allegati in base64 ({ tipo, mime, nome, dati }) e il modello scelto
+         * («veloce»/«profondo»): il lavoratore li usa se sa farlo, altrimenti li ignora */
+        const azIn: any = parse(m.azioni) || {};
+        const allegati = Array.isArray(azIn.allegati) && azIn.allegati.length ? await allegatiDel(Number(m.id)) : [];
         out.push({ id: Number(m.id), canale: m.canale, email: m.email,
+          allegati, modello: sceltaValida(azIn.modello) || await sceltaDi(String(m.googleSub)),
           testo: eUmore(m.testo) ? "CONTROLLO DELL'UMORE DI OGGI: " + String(m.testo).slice(PREFISSO_UMORE.length) + "\n\n" + ISTRUZIONE_UMORE : m.testo,
           nome: prof[0]?.nome || "Genio",
           /* le regole di scrittura viaggiano in coda al brief, così il lavoratore sul VPS le
@@ -767,6 +1024,11 @@ export function registerFocusLockChatRoutes(app: Express) {
       if (ePiano(o.testo)) azioni = { ...(azioni || {}), pianoAi: true };
       const outId = await inserisci(String(o.googleSub), o.email ?? null, o.canale as Canale, "out", testo, azioni, id, "fatto");
       await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
+      /* 0.9.242: se il lavoratore manda anche i token usati (uso: { modello, input_tokens,
+       * output_tokens, cache_read_input_tokens, cache_creation_input_tokens }), finiscono nei consumi */
+      const u = body.uso && typeof body.uso === "object" ? body.uso : null;
+      if (u && u.modello) await registraUso(String(o.googleSub), id, { modello: String(u.modello), inTok: u.input_tokens, outTok: u.output_tokens,
+        cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens });
       let consegnato = false;
       if (o.canale === "whatsapp") {
         const link = await rows(sql`SELECT esterno FROM focuslock_agent_links
