@@ -549,6 +549,11 @@ export function registerFocusLockChatRoutes(app: Express) {
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
+  /* 0.9.241: chi ha creato l'app (le email dell'abbonamento Max) vede le anteprime da admin */
+  app.get("/api/focuslock/agent/admin", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    res.json({ admin: emailMax().includes(String(who.email || "").trim().toLowerCase()) });
+  });
   /* il quaderno di questa persona, per un dispositivo che non ce l'ha ancora (il PC, un telefono nuovo) */
   app.get("/api/focuslock/agent/piano/chiave", async (req: Request, res: Response) => {
     const who = await utente(req, res); if (!who) return;
