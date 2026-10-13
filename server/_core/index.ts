@@ -25,6 +25,7 @@ import { registerFocusLockArenaRoutes } from "./focuslockArena";
 import { registerFocusLockGenioRoutes } from "./focuslockGenio";
 import { registerFocusLockAgentTools } from "./focuslockAgentTools";
 import { registerFocusLockIoFuturoRoutes } from "./focuslockIoFuturo";
+import { registerFocusLockSocialProofRoutes } from "./focuslockSocialProof";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
@@ -682,6 +683,7 @@ async function startServer() {
   registerFocusLockGenioRoutes(app);
   registerFocusLockAgentTools(app);
   registerFocusLockIoFuturoRoutes(app);
+  registerFocusLockSocialProofRoutes(app); // prova sociale e catena dei sogni accesi
   registerWatchlistRoutes(app);
   registerImageProxy(app);
   registerResearchRoutes(app);
