@@ -426,6 +426,31 @@ async function chiamaModello(messaggi: { role: string; content: string }[], pian
   }
   throw new Error("nessun fornitore configurato");
 }
+const APPUNTI_ISTRUZIONI = "Sei un correttore di appunti dettati a voce. Ricevi la trascrizione grezza di quello che una persona ha detto al telefono. Restituisci SOLO il testo sistemato, nella stessa lingua: punteggiatura e maiuscole giuste, a capo dove cambia argomento, un elenco puntato (-) se la persona elenca delle cose, via le esitazioni (ehm, cioè ripetuto, le parole dette due volte di fila). Non aggiungere parole, non riassumere, non commentare, non mettere un titolo. Le parole restano le sue.";
+async function appuntiAI(testo: string): Promise<{ testo: string; uso: Uso | null }> {
+  const f = fornitore();
+  if (f === "anthropic") {
+    const modello = modelloChat();
+    const r = await claude().messages.create({ model: modello, max_tokens: 2000, system: APPUNTI_ISTRUZIONI,
+      messages: [{ role: "user", content: testo }] });
+    const out = r.content.filter((b) => b.type === "text").map((b) => (b.type === "text" ? b.text : "")).join("\n").trim();
+    const u: any = r.usage || {};
+    return { testo: out, uso: { modello: String(r.model || modello), inTok: u.input_tokens, outTok: u.output_tokens, cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0 } };
+  }
+  if (f === "gemini") {
+    const modello = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+      method: "POST", headers: { "x-goog-api-key": String(process.env.AGENT_GEMINI_KEY), "content-type": "application/json" },
+      body: JSON.stringify({ systemInstruction: { parts: [{ text: APPUNTI_ISTRUZIONI }] }, contents: [{ role: "user", parts: [{ text: testo }] }], generationConfig: { maxOutputTokens: 2000, temperature: 0.2 } }),
+    });
+    const jj: any = await r.json();
+    const out = (jj?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim();
+    if (!r.ok) throw new Error("gemini " + r.status);
+    const um = jj?.usageMetadata || {};
+    return { testo: out, uso: { modello, inTok: um.promptTokenCount || 0, outTok: um.candidatesTokenCount || 0, cacheRead: 0, cacheWrite: 0 } };
+  }
+  return { testo, uso: null };
+}
 function meseOra(): string { const d = new Date(); return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0"); }
 
 /** Il saldo, con il dono del mese applicato una volta per mese. */
@@ -850,6 +875,20 @@ export function registerFocusLockChatRoutes(app: Express) {
       res.json({ scelta: modelli.some((m) => m.id === s) ? s : "veloce", modelli });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
+  /* app 0.9.254: GLI APPUNTI AI. La frase dettata torna con punteggiatura, a capo ed elenchi;
+   * le parole restano quelle della persona. Modello veloce, nessun messaggio salvato. */
+  app.post("/api/focuslock/agent/chat/appunti", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const testo = pulisci((req.body ?? {}).testo, 6000);
+    if (!testo) { res.status(400).json({ error: "testo is required" }); return; }
+    if (!llmAcceso()) { res.json({ testo }); return; }
+    try {
+      const r = await appuntiAI(testo);
+      try { await ensureTables(); await registraUso(who.sub, null, r.uso); } catch { /* i consumi non fermano gli appunti */ }
+      res.json({ testo: r.testo || testo });
+    } catch (e: any) { res.json({ testo, errore: String(e?.message || e).slice(0, 120) }); }
+  });
+
   app.post("/api/focuslock/agent/chat/modello", async (req: Request, res: Response) => {
     const who = await utente(req, res); if (!who) return;
     const scelta = sceltaValida((req.body ?? {}).scelta);
