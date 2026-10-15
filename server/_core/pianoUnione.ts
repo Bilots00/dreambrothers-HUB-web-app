@@ -166,5 +166,12 @@ export function unisciQuaderni<S extends QuadernoU>(qui: S, la: S, adesso = Date
   const ordine = [...prima[0]!.pages.map(p => p.id), ...prima[1]!.pages.map(p => p.id)].filter((id, i, a) => a.indexOf(id) === i && tutte.has(id));
   const fav = n(la['favAt']) > n(qui['favAt']) ? la.favorites ?? [] : n(qui['favAt']) > n(la['favAt']) ? qui.favorites ?? [] : [...(qui.favorites ?? []), ...(la.favorites ?? [])];
   const pref = fav.filter((id, i, a) => a.indexOf(id) === i && tutte.has(id));
-  return { ...qui, pages: ordine.map(id => tutte.get(id)!), trash: Array.from(cestino.values()), favorites: pref, ordineAt: Math.max(n(qui['ordineAt']), n(la['ordineAt'])), favAt: Math.max(n(qui['favAt']), n(la['favAt'])), uv: perBlocco ? 2 : qui['uv'] } as S;
+  // 0.9.271: le righe mandate al caveau dal sito (sul computer il caveau non c'e': sta nell'app). Si uniscono per
+  // id da tutte e due le copie; quelle che l'app ha gia' messo nel caveau (caveauDati: id -> ora) non tornano.
+  const dati: Record<string, number> = {};
+  [qui, la].forEach(q => Object.entries((q['caveauDati'] as Record<string, number> | undefined) ?? {}).forEach(([id, t]) => { if (adesso - t < TRENTA_GIORNI && (dati[id] ?? 0) < t) dati[id] = t; }));
+  const inArrivo = new Map<string, { id: string; t: string; at: number }>();
+  [qui, la].forEach(q => ((q['caveauIn'] as { id: string; t: string; at: number }[] | undefined) ?? []).forEach(x => { if (x && x.id && !dati[x.id] && adesso - (x.at || 0) < TRENTA_GIORNI) inArrivo.set(x.id, x); }));
+  const caveau = { caveauIn: Array.from(inArrivo.values()), caveauDati: dati };
+  return { ...qui, ...caveau, pages: ordine.map(id => tutte.get(id)!), trash: Array.from(cestino.values()), favorites: pref, ordineAt: Math.max(n(qui['ordineAt']), n(la['ordineAt'])), favAt: Math.max(n(qui['favAt']), n(la['favAt'])), uv: perBlocco ? 2 : qui['uv'] } as S;
 }
