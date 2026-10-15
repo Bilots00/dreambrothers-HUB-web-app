@@ -352,7 +352,75 @@ async function aiutoPensa(task: string, domanda: string, ctx: any): Promise<any 
   } catch { return null; }
 }
 
+/* ---------------------------------------------------------------------------------------
+ * LE FRASI SUL TUO OBIETTIVO, PER LA SCHERMATA DI BLOCCO DEL TELEFONO (0.9.264, Premium)
+ * Andrea: niente frasi preimpostate. Le scrive l'AI partendo da quello che la persona ha scritto (il sogno,
+ * chi sara', il suo perche', i prossimi passi): frasi sull'identita' di chi ci arriva e sulle azioni che
+ * fa. Ventuno, una al giorno per tre settimane: la scorta del telefono (LockQuote) va avanti da sola.
+ * --------------------------------------------------------------------------------------- */
+const SCHEMA_FRASI = {
+  type: "object",
+  properties: { frasi: { type: "array", items: { type: "string" } } },
+  required: ["frasi"],
+  additionalProperties: false,
+};
+const FRASI_USI = new Map<string, { g: string; n: number }>();
+async function frasiObiettivo(ctx: any): Promise<string[] | null> {
+  const sys = [
+    "Scrivi le frasi che una persona vedra' ogni mattina sulla schermata di blocco del telefono, una al giorno.",
+    "Sono in italiano, con il tu, corte (al massimo 110 caratteri), da leggere in tre secondi.",
+    "Ogni frase deve essere SU MISURA per il sogno di questa persona: parla di chi diventa per arrivarci (come si vede, come agisce, cosa crede) o delle azioni concrete che quella persona fa ogni giorno.",
+    "Usa le sue parole e il suo mondo, mai frasi motivazionali generiche che andrebbero bene per chiunque. Niente citazioni di autori, niente nomi propri inventati.",
+    "Vietato: la forma 'non e' X, e' Y'; i punti esclamativi a raffica; le virgolette; gli emoji; il tono da guru.",
+    "Varia: alcune sull'identita' ('Chi costruisce ... la mattina ...'), alcune sulle azioni di oggi, alcune sul perche'. Nessuna ripete l'attacco di un'altra.",
+  ].join("\n");
+  const testo = [
+    ctx.sogno ? "Il suo sogno, scritto da lui: " + String(ctx.sogno).slice(0, 300) : "",
+    ctx.chi ? "Chi sara' quando ci arriva: " + String(ctx.chi).slice(0, 200) : "",
+    ctx.perche ? "Il suo perche': " + String(ctx.perche).slice(0, 400) : "",
+    ctx.passi ? "I suoi prossimi passi: " + String(ctx.passi).slice(0, 500) : "",
+    ctx.freni ? "Cosa lo frena: " + String(ctx.freni).slice(0, 300) : "",
+    "Scrivi 21 frasi.",
+  ].filter(Boolean).join("\n");
+  const r: any = await (claude().beta.messages.create as any)({
+    model: process.env.GENIO_MODEL || "claude-opus-5-5",
+    max_tokens: 2500,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA_FRASI } },
+    system: sys,
+    messages: [{ role: "user", content: testo }],
+  });
+  if (!r || r.stop_reason === "refusal" || r.stop_reason === "max_tokens") return null;
+  const t = (r.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+  try {
+    const j = JSON.parse(t);
+    const out = (Array.isArray(j.frasi) ? j.frasi : []).map((x: any) => String(x).replace(/["«»“”]/g, "").trim().slice(0, 140)).filter((x: string) => x.length > 8);
+    return out.length ? out.slice(0, 21) : null;
+  } catch { return null; }
+}
+
 export function registerFocusLockGenioRoutes(app: Express) {
+  app.post("/api/focuslock/frasi-obiettivo", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const ctx = b.contesto || {};
+    if (!device || !String(ctx.sogno || "").trim()) { res.status(400).json({ error: "manca il sogno" }); return; }
+    if (!process.env.AGENT_LLM_KEY) { res.status(503).json({ error: "l'agente non e' acceso su questo server" }); return; }
+    const g = new Date().toISOString().slice(0, 10);
+    const u = FRASI_USI.get(device);
+    const n = u && u.g === g ? u.n : 0;
+    if (n >= 3) { res.status(429).json({ error: "per oggi le frasi sono gia' state scritte" }); return; }
+    FRASI_USI.set(device, { g, n: n + 1 });
+    try {
+      const frasi = await frasiObiettivo(ctx);
+      if (!frasi) { res.status(502).json({ error: "l'agente non ha risposto" }); return; }
+      res.json({ frasi });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "frasi non disponibili" });
+    }
+  });
+
   app.post("/api/focuslock/aiuto", async (req: Request, res: Response) => {
     const b = req.body || {};
     const device = String(b.device || "").slice(0, 64);
