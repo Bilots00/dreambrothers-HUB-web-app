@@ -176,6 +176,7 @@ const REGOLE_SCRITTURA = [
   "NON IMPONI IL MODO DI FARE IL LAVORO. Il modo lo sceglie lui. Se una cosa si può fare in più modi (per esempio un video si può girare con il telefono, oppure creare con strumenti di intelligenza artificiale come Higgsfield, senza mettersi davanti alla telecamera), proponi le possibilità in due righe o chiedigli quale preferisce.",
   "IL TONO. Lui ti consulta perché vuole una mano a rimettere in piedi il suo percorso: non lo sgridi, non gli fai la predica, non gli chiedi conto di cosa ha sbagliato. La scelta e il beneficio sono suoi.",
   "QUANDO SEGNALA UN OSTACOLO (il pulsante «Segnala un ostacolo», o un imprevisto, un inciampo, un problema incontrato lungo il percorso): fai come un bravo psicologo, UNA domanda per messaggio, e aspetti la risposta. 1) Cosa è successo, con parole sue. 2) Cosa c'era subito prima: il momento, il posto, cosa provava (il grilletto). 3) Se è stata un'app o un'abitudine, cosa lo ha tenuto lì. Poi gli proponi da due a quattro contromisure concrete, numerate, fra cui scegliere (se c'entra un'app, una è bloccarla o limitarla in DreamMap nelle ore di lavoro), più la possibilità di non cambiare niente, e per ognuna una riga su cosa cambia per il suo percorso. Quando ha scelto, scrivete insieme il patto nella forma «Se succede…, allora io…». Alla fine ricalcoli la roadmap tenendo conto dell'ostacolo, con il blocco json.",
+  "I BLOCCHI E I LIMITI LI CREI TU, DENTRO DREAMMAP. L'app sa: bloccare app, siti e parole in certe ore e giorni (o tutto il giorno), e limitare il tempo su un'app (minuti all'ora e/o minuti al giorno, poi l'app si blocca). Quando ti chiede di bloccare o limitare qualcosa (per esempio «Instagram al massimo 10 minuti all'ora e mezz'ora al giorno»), NON spiegare le impostazioni del telefono e non dire che non puoi: lo crei. Rispondi in una o due righe con quello che hai impostato, e chiudi con un blocco ```json con {\"programma\": {\"nome\": \"Instagram a piccole dosi\", \"app\": [\"Instagram\"], \"siti\": [\"instagram.com\"], \"parole\": [], \"minutiOra\": 10, \"minutiGiorno\": 30}} ``` e niente dopo. Per un blocco a orario usa \"dalle\": \"21:00\", \"alle\": \"23:00\" (e \"giorni\": 7 valori veri/falsi da lunedì, se non sono tutti i giorni) al posto dei minuti. Le app con il loro nome comune. Se manca un dato che cambia davvero il programma, fai UNA domanda; altrimenti scegli tu il valore più ragionevole e dillo.",
 ].join("\n");
 const PERSONA = [
   "Sei l'agente personale di un utente di The Dream Map (Focus2Dream), l'app che porta una persona dal sogno alla destinazione un passo alla volta.",
@@ -1060,9 +1061,12 @@ export function registerFocusLockChatRoutes(app: Express) {
       if (!orig.length) { res.status(404).json({ error: "message not found" }); return; }
       const o = orig[0];
       let azioni = body.azioni && typeof body.azioni === "object" ? body.azioni : null;
+      /* 0.9.279: anche il lavoratore sul VPS chiude con il blocco ```json (roadmap o programma): si stacca qui */
+      let testoOut = testo;
+      if (!azioni) { const t = tagliaPiano(testo); if (t.azioni) { azioni = t.azioni; testoOut = t.testo; } }
       if (eUmore(o.testo)) azioni = { ...(azioni || {}), umore: true };
       if (ePiano(o.testo)) azioni = { ...(azioni || {}), pianoAi: true };
-      const outId = await inserisci(String(o.googleSub), o.email ?? null, o.canale as Canale, "out", testo, azioni, id, "fatto");
+      const outId = await inserisci(String(o.googleSub), o.email ?? null, o.canale as Canale, "out", testoOut, azioni, id, "fatto");
       await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'fatto' WHERE id = ${id}`);
       /* 0.9.242: se il lavoratore manda anche i token usati (uso: { modello, input_tokens,
        * output_tokens, cache_read_input_tokens, cache_creation_input_tokens }), finiscono nei consumi */
@@ -1074,7 +1078,7 @@ export function registerFocusLockChatRoutes(app: Express) {
         const link = await rows(sql`SELECT esterno FROM focuslock_agent_links
           WHERE googleSub = ${String(o.googleSub)} AND canale = 'whatsapp' AND collegatoAt IS NOT NULL LIMIT 1`);
         if (link[0]?.esterno) consegnato = await mandaWhatsapp(String(link[0].esterno),
-          testo + (azioni && (azioni as any).piano ? "\n\n(La roadmap proposta la trovi nell'app, con il pulsante «Applica».)" : ""));
+          testoOut + (azioni && (azioni as any).piano ? "\n\n(La roadmap proposta la trovi nell'app, con il pulsante «Applica».)" : ""));
       }
       res.json({ saved: true, id: outId, consegnato });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
