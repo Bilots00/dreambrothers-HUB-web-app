@@ -39,7 +39,7 @@ export function classeP(b: BloccoP): string {
 export const normale = (t: string) => t.replace(/\s+/g, " ").trim();
 
 // ---------------------------------------------------------------- testo formattato
-type RT = { type: string; plain_text?: string; text?: { content: string; link?: { url: string } | null }; href?: string | null; annotations?: Record<string, any> };
+type RT = { type: string; plain_text?: string; text?: { content: string; link?: { url: string } | null }; href?: string | null; annotations?: Record<string, any>; mention?: { type?: string; link_mention?: { href?: string; title?: string; link_provider?: string } } };
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const COLORE_P = (c: string) => c.replace(/_background$/, "_bg");
 const COLORE_N = (c: string) => c.replace(/_bg$/, "_background");
@@ -58,7 +58,14 @@ export function htmlDi(rt: RT[]): string | undefined {
     if (a.strikethrough) { s = `<s>${s}</s>`; formattato = true; }
     if (a.color && a.color !== "default") { s = `<span data-c="${COLORE_P(a.color)}">${s}</span>`; formattato = true; }
     const url = r.href ?? r.text?.link?.url;
-    if (url && /^(https?:|mailto:|tel:)/i.test(url)) { s = `<a href="${esc(url).replace(/"/g, "&quot;")}">${s}</a>`; formattato = true; }
+    /* 0.9.276: una menzione di link di Notion (icona, servizio, titolo) resta una menzione nel piano */
+    const lm = r.type === "mention" && r.mention?.type === "link_mention" ? r.mention.link_mention : null;
+    if (lm && url && /^https?:/i.test(url)) {
+      let host = ""; try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { host = ""; }
+      const prov = lm.link_provider ? `<span data-lp="1">${esc(lm.link_provider)}</span>` : "";
+      s = `<a href="${esc(url).replace(/"/g, "&quot;")}" data-lk="1"><img src="https://www.google.com/s2/favicons?domain=${host}&amp;sz=32" alt="">${prov}${esc(lm.title || r.plain_text || url)}</a>`;
+      formattato = true;
+    } else if (url && /^(https?:|mailto:|tel:)/i.test(url)) { s = `<a href="${esc(url).replace(/"/g, "&quot;")}">${s}</a>`; formattato = true; }
     return s;
   }).join("");
   return formattato ? h : undefined;
@@ -67,6 +74,8 @@ const ENT: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#3
 const deEnt = (t: string) => t.replace(/&(#\d+|#x[0-9a-f]+|\w+);/gi, (m, e: string) => ENT[e.toLowerCase()] ?? (e[0] === "#" ? String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10)) : m));
 /** L'HTML del piano come rich_text di Notion (pezzi da al massimo 2000 caratteri). */
 export function richDi(text: string, html?: string): any[] {
+  /* 0.9.276: il nome del servizio della menzione e l'icona sono solo del piano: in Notion torna il link col titolo */
+  if (html) html = html.replace(/<span data-lp="1">[^<]*<\/span>/g, "").replace(/(<a [^>]*data-lk="1"[^>]*>)<img [^>]*>/g, "$1");
   const pezzi: { t: string; a: Record<string, any>; url?: string }[] = [];
   if (!html) pezzi.push({ t: text ?? "", a: {} });
   else {
