@@ -168,7 +168,9 @@ export function struttura(blocks: BloccoP[]): Posto[] {
       out.push({ b, padre: p, fratelli: [...fr].reverse() });
       fr.push(b.id);
       pila[r] = b;
-      if (b.children?.length) giro(b.children, b.id);
+      // 0.9.272: il blocco sincronizzato del piano non va in Notion, e nemmeno quello che ha dentro (in Notion
+      // finirebbe come righe sciolte, una copia per ogni pagina dove e' incollato)
+      if (b.children?.length && b.kind !== "sincro") giro(b.children, b.id);
     }
   };
   giro(blocks, null);
