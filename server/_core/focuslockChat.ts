@@ -379,7 +379,7 @@ function blocchiClaude(lista: Allegato[]): any[] {
  *  della roadmap se l'utente ha scelto «profondo»). Gli allegati vanno nell'ultimo messaggio
  *  dell'utente. Torna il testo e i token usati (per la pagina «Consumi»). */
 async function chiamaModello(messaggi: { role: string; content: string }[], piano = false,
-  opz: { allegati?: Allegato[]; scelta?: SceltaModello } = {}): Promise<{ testo: string; uso: Uso | null }> {
+  opz: { allegati?: Allegato[]; scelta?: SceltaModello; effort?: "low" | "medium" | "high" } = {}): Promise<{ testo: string; uso: Uso | null }> {
   const f = fornitore();
   const allegati = opz.allegati || [];
   if (f === "anthropic") {
@@ -401,7 +401,7 @@ async function chiamaModello(messaggi: { role: string; content: string }[], pian
     const modello = piano || profondo ? modelloPiano() : modelloChat();
     const r = piano || profondo
       ? await claude().messages.create({ model: modello, max_tokens: 16000,
-          output_config: { effort: piano ? "high" : "medium" }, system, messages: msgs })
+          output_config: { effort: opz.effort || (piano ? "high" : "medium") }, system, messages: msgs })
       : await claude().messages.create({ model: modello, max_tokens: 2000,
           system, messages: msgs });
     if (r.stop_reason === "refusal") throw new Error("claude: rifiuto " + JSON.stringify(r.stop_details || null).slice(0, 200));
@@ -566,7 +566,11 @@ async function rispondiACrediti(id: number): Promise<void> {
     const domanda = `${chi} Oggi è ${new Date().toISOString().slice(0, 10)}. Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\nMESSAGGIO:\n${richiesta}`;
     if (messaggi.length && messaggi[messaggi.length - 1].role === "user") messaggi[messaggi.length - 1].content += "\n\n" + domanda;
     else messaggi.push({ role: "user", content: domanda });
-    const risposta = await chiamaModello(messaggi, roadmap || scomponi || iofuturo, { allegati, scelta: profondo ? "profondo" : "veloce" });
+    /* 0.9.282, Andrea: la prima domanda dell'intervista ci metteva troppo. Le domande si fanno con ragionamento basso
+     * (sono corte); dalla quinta risposta in poi, quando arriva il piano, il ragionamento torna alto. */
+    const risposteIntervista = intervista ? storico.filter((x: any) => x.direzione === "in" && String(x.testo || "").startsWith(PREFISSO_INTERVISTA)).length : 0;
+    const effort = intervista ? (risposteIntervista >= 5 ? "high" : "low") : undefined;
+    const risposta = await chiamaModello(messaggi, roadmap || scomponi || iofuturo, { allegati, scelta: profondo ? "profondo" : "veloce", effort });
     await registraUso(sub, id, risposta.uso);
     const testo = risposta.testo;
     const t = piano ? { testo: testo.trim(), azioni: { pianoAi: true } } : umore ? { testo: testo.trim(), azioni: { umore: true } } : tagliaPiano(testo);
