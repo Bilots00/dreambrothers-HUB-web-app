@@ -176,6 +176,8 @@ const REGOLE_SCRITTURA = [
   "NON IMPONI IL MODO DI FARE IL LAVORO. Il modo lo sceglie lui. Se una cosa si può fare in più modi (per esempio un video si può girare con il telefono, oppure creare con strumenti di intelligenza artificiale come Higgsfield, senza mettersi davanti alla telecamera), proponi le possibilità in due righe o chiedigli quale preferisce.",
   "IL TONO. Lui ti consulta perché vuole una mano a rimettere in piedi il suo percorso: non lo sgridi, non gli fai la predica, non gli chiedi conto di cosa ha sbagliato. La scelta e il beneficio sono suoi.",
   "QUANDO SEGNALA UN OSTACOLO (il pulsante «Segnala un ostacolo», o un imprevisto, un inciampo, un problema incontrato lungo il percorso): fai come un bravo psicologo, UNA domanda per messaggio, e aspetti la risposta. 1) Cosa è successo, con parole sue. 2) Cosa c'era subito prima: il momento, il posto, cosa provava (il grilletto). 3) Se è stata un'app o un'abitudine, cosa lo ha tenuto lì. Poi gli proponi da due a quattro contromisure concrete, numerate, fra cui scegliere (se c'entra un'app, una è bloccarla o limitarla in DreamMap nelle ore di lavoro), più la possibilità di non cambiare niente, e per ognuna una riga su cosa cambia per il suo percorso. Quando ha scelto, scrivete insieme il patto nella forma «Se succede…, allora io…». Alla fine ricalcoli la roadmap tenendo conto dell'ostacolo, con il blocco json.",
+  "L'INTERVISTA PER LA ROADMAP SU MISURA (app 0.9.280). Quando il messaggio comincia con [intervista], sei dentro un questionario guidato sulla schermata del Genio: la persona risponde e basta, non e' una chat. Fai da 5 a 7 domande in tutto, UNA per messaggio, scegliendo ogni domanda in base alle risposte di prima (niente copione). Devi arrivare a sapere: 1) il modello del progetto (per esempio negozio online di prodotti fisici, servizio, contenuti, lavoro dipendente, app) e cosa ha GIA' costruito; 2) cosa ha gia' provato, come e' andata e PERCHE' secondo lui non ha funzionato; 3) il vero collo di bottiglia (offerta, prodotto, traffico, pubblicita', tempo, costanza, identita'); 4) le ore vere a settimana e in quali momenti; 5) il primo risultato misurabile che vuole vedere entro 90 giorni; 6) cosa lo ha fatto mollare le altre volte (abitudini, perfezionismo, paura: il paradigma). Non proporre la roadmap prima di avere fatto almeno 5 domande, anche se te la chiede: in quel caso scrivi in una riga quante domande mancano e fai la prossima. Le risposte possono essere lunghe: leggile tutte e prendi sul serio quello che dice (se dice che il problema era l'offerta, il piano parte dall'offerta, non da quello che ha gia' provato). Ogni domanda: al massimo due frasi, niente premesse, e chiudi con ```json {\"intervista\": {\"n\": <numero di questa domanda>, \"di\": <quante domande pensi di fare in tutto>, \"esempi\": [\"tre risposte possibili, corte, nelle sue parole\"]}} ```. Dopo l'ultima risposta proponi la roadmap con il blocco del piano.",
+  "LA ROADMAP, SEMPRE: rispetta il modello del progetto. Un negozio online non e' network marketing: mai liste di nomi, mai scrivere a venti persone per vendere, mai tattiche porta a porta. Costruisci sopra quello che ha gia' fatto (se ha un'app quasi pronta che rende unica la sua offerta, l'app e' parte del piano, non qualcosa da rimandare) e non riportarlo alle strategie che ha gia' provato e che non hanno funzionato. Parti dal collo di bottiglia che ha indicato lui. Le durate fra parentesi: in minuti solo sotto le due ore (\"(45 minuti)\"); oltre, in ore (\"(3 ore)\"), giorni di lavoro (\"(4 giorni di lavoro)\") o settimane (\"(2 settimane)\"). Mai \"(3000 min)\".",
   "I BLOCCHI E I LIMITI LI CREI TU, DENTRO DREAMMAP. L'app sa: bloccare app, siti e parole in certe ore e giorni (o tutto il giorno), e limitare il tempo su un'app (minuti all'ora e/o minuti al giorno, poi l'app si blocca). Quando ti chiede di bloccare o limitare qualcosa (per esempio «Instagram al massimo 10 minuti all'ora e mezz'ora al giorno»), NON spiegare le impostazioni del telefono e non dire che non puoi: lo crei. Rispondi in una o due righe con quello che hai impostato, e chiudi con un blocco ```json con {\"programma\": {\"nome\": \"Instagram a piccole dosi\", \"app\": [\"Instagram\"], \"siti\": [\"instagram.com\"], \"parole\": [], \"minutiOra\": 10, \"minutiGiorno\": 30}} ``` e niente dopo. Per un blocco a orario usa \"dalle\": \"21:00\", \"alle\": \"23:00\" (e \"giorni\": 7 valori veri/falsi da lunedì, se non sono tutti i giorni) al posto dei minuti. Le app con il loro nome comune. Se manca un dato che cambia davvero il programma, fai UNA domanda; altrimenti scegli tu il valore più ragionevole e dillo.",
 ].join("\n");
 const PERSONA = [
@@ -251,6 +253,9 @@ function eUmore(testo: unknown): boolean { return String(testo || "").startsWith
  * le pagine) e la pagina viaggiano nel messaggio. Conversazione a parte: la chat dell'app non la vede
  * e lei non vede la chat. Per gli account del Max risponde il VPS, per gli altri il fornitore a crediti. */
 const PREFISSO_PIANO = "[piano] ";
+/* 0.9.280: l'intervista del piano su misura (intervista.js nell'app) */
+const PREFISSO_INTERVISTA = "[intervista] ";
+function eIntervista(testo: unknown): boolean { return String(testo || "").startsWith(PREFISSO_INTERVISTA); }
 function ePiano(testo: unknown): boolean { return String(testo || "").startsWith(PREFISSO_PIANO); }
 const ISTRUZIONE_SCOMPONI = "Scomponi questa cosa da fare in 3-5 passi piccoli e concreti, nell'ordine in cui si fanno, ognuno con un verbo all'inizio e i minuti fra parentesi scritti per intero (per esempio «(15 minuti)»), tarati sul suo tempo reale. Una riga di commento al massimo, poi SOLO il blocco ```json {\"scomponi\": {\"passi\": [\"…\"]}} ```.";
 /** È una richiesta di roadmap? La prima conversazione, o una domanda sul piano. */
@@ -509,9 +514,11 @@ async function rispondiACrediti(id: number): Promise<void> {
   const iofuturo = String(m.testo || "").startsWith(PREFISSO_IOFUTURO);
   const umore = eUmore(m.testo);
   const piano = ePiano(m.testo);
-  const roadmap = !piano && !scomponi && !iofuturo && !umore && eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0);
+  const intervista = eIntervista(m.testo);
+  const roadmap = !piano && !scomponi && !iofuturo && !umore && (intervista || eRoadmap(String(m.testo || ""), Number(precedenti[0]?.n || 0) === 0));
   const profondo = !piano && !scomponi && !iofuturo && !umore && !roadmap && scelta === "profondo" && fornitore() === "anthropic";
-  const costo = piano ? 1 : iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (roadmap ? CREDITI_ROADMAP : (profondo ? CREDITI_PROFONDO : 1)));
+  /* le domande dell'intervista costano un messaggio l'una: il piano finale lo scrive la stessa conversazione */
+  const costo = piano ? 1 : iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (intervista ? 1 : (roadmap ? CREDITI_ROADMAP : (profondo ? CREDITI_PROFONDO : 1))));
   if (!(await scala(sub, costo))) {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'crediti' WHERE id = ${id}`);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out",
@@ -528,14 +535,14 @@ async function rispondiACrediti(id: number): Promise<void> {
             AND ((direzione = 'in' AND testo LIKE '[umore]%') OR (direzione = 'out' AND azioni LIKE '%"umore"%')) ORDER BY id DESC LIMIT 12`)
       : await rows(sql`SELECT direzione, testo FROM focuslock_agent_msgs
           WHERE googleSub = ${sub} AND id < ${id} AND stato IN ('fatto', 'daconsegnare') AND testo NOT LIKE '[scomponi]%' AND testo NOT LIKE '[iofuturo]%' AND testo NOT LIKE '[umore]%' AND testo NOT LIKE '[piano]%'
-            AND (azioni IS NULL OR (azioni NOT LIKE '%"scomponi"%' AND azioni NOT LIKE '%"iofuturo"%' AND azioni NOT LIKE '%"umore"%' AND azioni NOT LIKE '%"pianoAi"%')) ORDER BY id DESC LIMIT 12`)).reverse();
+            AND (azioni IS NULL OR (azioni NOT LIKE '%"scomponi"%' AND azioni NOT LIKE '%"iofuturo"%' AND azioni NOT LIKE '%"umore"%' AND azioni NOT LIKE '%"pianoAi"%')) ORDER BY id DESC LIMIT ${intervista ? 20 : 12}`)).reverse();
     /* la voce dell'utente: i suoi ultimi messaggi veri, per la lettera dell'Io Futuro */
     const suoi = iofuturo ? (await rows(sql`SELECT testo FROM focuslock_agent_msgs WHERE googleSub = ${sub} AND direzione = 'in' AND testo NOT LIKE '[%' ORDER BY id DESC LIMIT 20`)).reverse() : [];
     const nome = prof[0]?.nome || "Genio";
     const messaggi: { role: string; content: string }[] = [];
     for (const s of storico) {
       const ruolo = s.direzione === "in" ? "user" : "assistant";
-      const testo = String(s.testo || "").replace(PREFISSO_UMORE, "").slice(0, 1500);
+      const testo = String(s.testo || "").replace(PREFISSO_UMORE, "").replace(PREFISSO_INTERVISTA, "").slice(0, intervista ? 3000 : 1500);
       if (messaggi.length && messaggi[messaggi.length - 1].role === ruolo) messaggi[messaggi.length - 1].content += "\n" + testo;
       else messaggi.push({ role: ruolo, content: testo });
     }
@@ -550,7 +557,9 @@ async function rispondiACrediti(id: number): Promise<void> {
           + "\n\n" + ISTRUZIONE_IOFUTURO
         : umore
           ? "CONTROLLO DELL'UMORE DI OGGI: " + String(m.testo).slice(PREFISSO_UMORE.length) + "\n\n" + ISTRUZIONE_UMORE
-          : String(m.testo);
+          : intervista
+            ? "[intervista] RISPOSTA (o richiesta di cominciare): " + String(m.testo).slice(PREFISSO_INTERVISTA.length) + "\n\nSegui le regole dell'INTERVISTA PER LA ROADMAP SU MISURA."
+            : String(m.testo);
     const chi = /^genio$/i.test(String(nome).trim())
       ? "Ti chiami Genio: sei il Genio dell'app."
       : `Ti chiami ${nome}: è il nome che l'utente ha scelto per te, e quando ti presenti usi questo.`;
