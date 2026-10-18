@@ -458,6 +458,67 @@ async function appuntiAI(testo: string): Promise<{ testo: string; uso: Uso | nul
   }
   return { testo, uso: null };
 }
+/* app 0.9.283, Andrea: IL ROMPICAPO AL POSTO DELL'APP. Chi in "Rientra in rotta" sceglie il rompicapo o il cruciverba
+ * come cambio, sulla schermata di blocco trova il pulsante che apre l'enigma in DreamMap. L'enigma e' alla Professor Layton,
+ * il cruciverba ha 5-6 parole; tutti e due parlano del suo obiettivo. Il cruciverba si controlla qui: le parole devono
+ * stare nella griglia, incrociarsi davvero e non scontrarsi su una casella. */
+const ENIGMA_ISTRUZIONI = `Sei un autore di enigmi nello stile del Professor Layton. Generi UN enigma logico o matematico autoconclusivo che richiede deduzione, pensiero laterale o calcolo intuitivo, risolvibile in 2-3 minuti a mente, senza carta e penna. In italiano.
+L'enigma e' tematizzato sull'OBIETTIVO della persona: finanza e business (investimenti, monete, startup, compravendite, dividendi); fitness e salute (ripetizioni, calorie, chilometri, integratori, tempi di recupero); studio e carriera (pagine, esami, progetti, gestione del tempo); per altri obiettivi scegli scenari di quel mondo.
+Regole: 1) apri con una piccola ambientazione narrativa o un dilemma; 2) la domanda finale e' chiarissima e chiede un numero, una parola sola o una scelta secca fra A, B, C, D; 3) niente domande di cultura generale: un vero enigma di logica o intuizione; 4) la soluzione svela il trucco in modo soddisfacente (l'effetto eureka). Controlla due volte che la risposta sia giusta e unica.
+Rispondi SOLO con un oggetto JSON, senza testo prima o dopo:
+{"titolo": "...", "testo_enigma": "...", "domanda": "...", "tipo_risposta": "numero" | "testo" | "scelta_multipla", "opzioni": ["A) ...", "B) ...", "C) ...", "D) ..."] oppure [], "risposta_corretta": "12" oppure "B" oppure una parola, "effetto_eureka": "..."}`;
+const CRUCI_ISTRUZIONI = `Crei un mini cruciverba in italiano, risolvibile in 2 minuti: da 4 a 6 parole in tutto, ognuna di 3-8 lettere, SOLO lettere A-Z maiuscole senza accenti e senza spazi. Tutte le parole parlano dell'OBIETTIVO della persona (palestra: SQUAT, PROTEINE, PESO; finanza: CASH, AZIONI, TASSO; e cosi' via).
+Regole: definizioni brevi e stimolanti; ogni parola ha la casella di partenza (x = colonna, y = riga, da 0,0 in alto a sinistra) e la direzione; ogni parola incrocia almeno un'altra condividendo la STESSA lettera nella stessa casella; due parole non possono mettere lettere diverse nella stessa casella; tutto sta dentro la griglia (al massimo 8x8). Prima di rispondere ricontrolla lettera per lettera ogni incrocio.
+Rispondi SOLO con un oggetto JSON, senza testo prima o dopo:
+{"griglia_dimensioni": {"righe": 6, "colonne": 6}, "parole": [{"id": 1, "direzione": "orizzontale", "x": 0, "y": 1, "definizione": "...", "risposta": "PAROLA", "lunghezza": 6}]}`;
+function jsonDa(t: string): any { const a = t.indexOf("{"), b = t.lastIndexOf("}"); if (a < 0 || b <= a) return null; try { return JSON.parse(t.slice(a, b + 1)); } catch { return null; } }
+/** Il cruciverba sta in piedi? Risponde l'errore da correggere, o "" se va bene. */
+export function cruciErrore(c: any): string {
+  const rr = Number(c?.griglia_dimensioni?.righe), cc = Number(c?.griglia_dimensioni?.colonne);
+  const pp: any[] = Array.isArray(c?.parole) ? c.parole : [];
+  if (!(rr >= 3 && rr <= 9 && cc >= 3 && cc <= 9)) return "griglia fuori misura";
+  if (pp.length < 3 || pp.length > 7) return "servono da 4 a 6 parole";
+  const g = new Map<string, string>(); const usi = new Map<string, number>();
+  for (const w of pp) {
+    const r = String(w.risposta || "").toUpperCase(); w.risposta = r; w.lunghezza = r.length;
+    if (!/^[A-Z]{2,9}$/.test(r)) return `la parola "${r}" non e' fatta solo di lettere A-Z`;
+    const o = String(w.direzione || "").toLowerCase().startsWith("o"); w.direzione = o ? "orizzontale" : "verticale";
+    for (let i = 0; i < r.length; i++) {
+      const x = Number(w.x) + (o ? i : 0), y = Number(w.y) + (o ? 0 : i);
+      if (x < 0 || y < 0 || x >= cc || y >= rr) return `la parola "${r}" esce dalla griglia`;
+      const k = x + "," + y, gia = g.get(k);
+      if (gia && gia !== r[i]) return `incrocio sbagliato nella casella ${k}: "${gia}" contro "${r[i]}" di "${r}"`;
+      g.set(k, r[i]!); usi.set(k, (usi.get(k) || 0) + 1);
+    }
+  }
+  for (const w of pp) {
+    const o = w.direzione === "orizzontale"; let incrocia = false;
+    for (let i = 0; i < w.risposta.length; i++) { const k = (Number(w.x) + (o ? i : 0)) + "," + (Number(w.y) + (o ? 0 : i)); if ((usi.get(k) || 0) > 1) incrocia = true; }
+    if (!incrocia) return `la parola "${w.risposta}" non incrocia nessun'altra`;
+  }
+  return "";
+}
+export async function rompicapoAI(tipo: "enigma" | "cruciverba", obiettivo: string): Promise<{ dato: any; uso: Uso | null }> {
+  if (fornitore() !== "anthropic") return { dato: null, uso: null };
+  const modello = process.env.AGENT_PUZZLE_MODEL || "claude-sonnet-5-5";
+  const sistema = tipo === "enigma" ? ENIGMA_ISTRUZIONI : CRUCI_ISTRUZIONI;
+  const msgs: { role: "user" | "assistant"; content: string }[] = [{ role: "user", content: `Obiettivo della persona: ${obiettivo || "costruire il proprio sogno"}` }];
+  let inTok = 0, outTok = 0; let uso: Uso | null = null;
+  for (let giro = 0; giro < 3; giro++) {
+    const r = await claude().messages.create({ model: modello, max_tokens: 2500, system: sistema, messages: msgs });
+    const out = r.content.filter((b) => b.type === "text").map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    const u: any = r.usage || {};
+    inTok += u.input_tokens || 0; outTok += u.output_tokens || 0; uso = { modello: String(r.model || modello), inTok, outTok, cacheRead: 0, cacheWrite: 0 };
+    const d = jsonDa(out);
+    if (!d) { msgs.push({ role: "assistant", content: out }, { role: "user", content: "Non era un JSON valido. Rispondi solo con l'oggetto JSON." }); continue; }
+    if (tipo === "cruciverba") {
+      const err = cruciErrore(d);
+      if (err) { msgs.push({ role: "assistant", content: out }, { role: "user", content: `Il cruciverba non va: ${err}. Correggilo e rispondi solo con il JSON.` }); continue; }
+    } else if (!d.domanda || !d.risposta_corretta || !d.testo_enigma) { msgs.push({ role: "assistant", content: out }, { role: "user", content: "Mancano dei campi. Rispondi con il JSON completo." }); continue; }
+    return { dato: d, uso };
+  }
+  return { dato: null, uso };
+}
 function meseOra(): string { const d = new Date(); return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0"); }
 
 /** Il saldo, con il dono del mese applicato una volta per mese. */
@@ -902,6 +963,25 @@ export function registerFocusLockChatRoutes(app: Express) {
       try { await ensureTables(); await registraUso(who.sub, null, r.uso); } catch { /* i consumi non fermano gli appunti */ }
       res.json({ testo: r.testo || testo });
     } catch (e: any) { res.json({ testo, errore: String(e?.message || e).slice(0, 120) }); }
+  });
+
+  /* app 0.9.283: il rompicapo (enigma alla Layton o mini cruciverba) sul tuo obiettivo. Al massimo 12 al giorno a persona. */
+  const rompicapiOggi = new Map<string, { g: string; n: number }>();
+  app.post("/api/focuslock/agent/chat/rompicapo", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const b = req.body ?? {};
+    const tipo = b.tipo === "cruciverba" ? "cruciverba" : "enigma";
+    const obiettivo = pulisci(b.obiettivo, 300);
+    if (!llmAcceso()) { res.json({ dato: null }); return; }
+    const g = new Date().toISOString().slice(0, 10); const c = rompicapiOggi.get(who.sub);
+    const n = c && c.g === g ? c.n : 0;
+    if (n >= 12) { res.json({ dato: null, errore: "limite di oggi" }); return; }
+    rompicapiOggi.set(who.sub, { g, n: n + 1 });
+    try {
+      const r = await rompicapoAI(tipo, obiettivo);
+      try { await ensureTables(); await registraUso(who.sub, null, r.uso); } catch { /* i consumi non fermano il rompicapo */ }
+      res.json({ dato: r.dato });
+    } catch (e: any) { res.json({ dato: null, errore: String(e?.message || e).slice(0, 120) }); }
   });
 
   app.post("/api/focuslock/agent/chat/modello", async (req: Request, res: Response) => {

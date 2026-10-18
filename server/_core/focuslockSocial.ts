@@ -71,6 +71,17 @@ export function ensureTables(): Promise<void> {
         createdAt TIMESTAMP NULL,
         PRIMARY KEY (device, friend)
       )`);
+      /* app 0.9.283: le vittorie vere della community (sessioni finite, idee nel caveau, arrivo anticipato). Si
+         mostrano SOLO vittorie vere di giocatori con un nome in classifica: niente nomi inventati. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_vittorie (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        device VARCHAR(64) NOT NULL,
+        tipo VARCHAR(16) NOT NULL,
+        valore INT NOT NULL DEFAULT 0,
+        cosa VARCHAR(60) NULL,
+        at TIMESTAMP NULL,
+        INDEX (at)
+      )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_diari (
         device VARCHAR(64) PRIMARY KEY,
         pubblico TINYINT NOT NULL DEFAULT 0,
@@ -118,6 +129,39 @@ export function registerFocusLockSocialRoutes(app: Express) {
   app.get("/api/focuslock/social/live", async (_req: Request, res: Response) => {
     try { await ensureTables(); res.json(await liveCounts()); }
     catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
+  });
+
+  /* app 0.9.283: LA RIPROVA SOCIALE, SOLO VITTORIE VERE. Il telefono manda le sue vittorie (al massimo 30 al giorno),
+   * il feed restituisce le ultime 24 ore degli altri, prima chi ha lo stesso obiettivo. Esce solo il nome della
+   * classifica (o il soprannome) e la vittoria, mai i testi personali. */
+  app.post("/api/focuslock/social/vittoria", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const tipo = ["ff", "caveau", "arrivo", "rompicapo", "serie"].includes(String(b.tipo || "")) ? String(b.tipo) : "";
+    if (!device || !tipo) { res.status(400).json({ error: "dati mancanti" }); return; }
+    try {
+      await ensureTables();
+      const oggi = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_vittorie WHERE device = ${device} AND at > (NOW() - INTERVAL 1 DAY)`);
+      if (Number(oggi[0]?.k || 0) >= 30) { res.json({ ok: false }); return; }
+      await rows(sql`INSERT INTO focuslock_vittorie (device, tipo, valore, cosa, at) VALUES (${device}, ${tipo}, ${n(b.valore, 100000)}, ${String(b.cosa || "").trim().slice(0, 60)}, NOW())`);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e?.message || "non salvata" }); }
+  });
+  app.get("/api/focuslock/social/vittorie", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    try {
+      await ensureTables();
+      const io = device ? await rows(sql`SELECT goal, categoria FROM focuslock_players WHERE device = ${device} LIMIT 1`) : [];
+      const goal = String(io[0]?.goal || ""), cat = String(io[0]?.categoria || "");
+      const l = await rows(sql`SELECT v.tipo, v.valore, v.cosa, v.at, p.name, p.nick, p.goal, p.categoria FROM focuslock_vittorie v
+        JOIN focuslock_players p ON p.device = v.device
+        WHERE v.at > (NOW() - INTERVAL 1 DAY) AND v.device <> ${device} AND p.name IS NOT NULL AND p.name <> ''
+        ORDER BY v.at DESC LIMIT 60`);
+      const out = l.map((r: any) => ({ nome: String(r.nick || r.name || "").split(" ")[0].slice(0, 16), tipo: String(r.tipo), valore: Number(r.valore || 0),
+        cosa: String(r.cosa || ""), at: r.at, stesso: (!!cat && String(r.categoria || "") === cat) || (!!goal && String(r.goal || "") === goal) }))
+        .sort((a: any, b: any) => Number(b.stesso) - Number(a.stesso)).slice(0, 20);
+      res.json({ vittorie: out });
+    } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
   });
 
   /* The player's numbers, in; their code and standing, out. */
