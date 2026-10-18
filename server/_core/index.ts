@@ -26,6 +26,8 @@ import { registerFocusLockGenioRoutes } from "./focuslockGenio";
 import { registerFocusLockAgentTools } from "./focuslockAgentTools";
 import { registerFocusLockIoFuturoRoutes } from "./focuslockIoFuturo";
 import { registerFocusLockSocialProofRoutes } from "./focuslockSocialProof";
+import { registerFocusLockCompagniRoutes } from "./focuslockCompagni";
+import { registerFocusLockPattiRoutes } from "./focuslockPatti";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
@@ -684,6 +686,8 @@ async function startServer() {
   registerFocusLockAgentTools(app);
   registerFocusLockIoFuturoRoutes(app);
   registerFocusLockSocialProofRoutes(app); // prova sociale e catena dei sogni accesi
+  registerFocusLockCompagniRoutes(app); // 0.9.285: le sessioni in coppia, come Focusmate
+  registerFocusLockPattiRoutes(app);    // 0.9.285: il patto con il tuo Dreambrother
   registerWatchlistRoutes(app);
   registerImageProxy(app);
   registerResearchRoutes(app);

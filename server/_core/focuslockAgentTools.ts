@@ -34,6 +34,8 @@ function ensureComandi(): Promise<void> {
   return ready;
 }
 
+/* i momenti che l'app vede da sola (www/js/regole-misura.js, RS_QUANDO) */
+const QUANDO = ["caveau", "deviazione", "tieniRighe", "taglia", "passo", "riga", "sessione", "mollata", "ceduto", "giornoSenzaDeviazioni", "giornoSenzaSessioni"];
 const TOOLS = [
   { name: "aggiorna_roadmap", description: "Scrive o aggiorna la roadmap su misura della persona: le prossime tappe, in ordine, ognuna con titolo, cosa fare e minuti previsti. Ogni testo in italiano intero, con verbo e oggetto, senza abbreviazioni né barre (no «1 video/giorno feriale», sì «Girare e pubblicare un video al giorno, dal lunedì al venerdì»).",
     input_schema: { type: "object", properties: { device: { type: "string" }, titolo: { type: "string" }, tappe: { type: "array", items: { type: "object", properties: { titolo: { type: "string" }, cosa: { type: "string" }, minuti: { type: "number" }, giorno: { type: "string", description: "AAAA-MM-GG, facoltativo" } }, required: ["titolo"] } } }, required: ["device", "tappe"] } },
@@ -41,8 +43,13 @@ const TOOLS = [
     input_schema: { type: "object", properties: { device: { type: "string" }, nome: { type: "string" }, app: { type: "array", items: { type: "string" }, description: "package Android" }, siti: { type: "array", items: { type: "string" } }, parole: { type: "array", items: { type: "string" } }, dove: { type: "string", enum: ["url", "dominio", "pagina"], description: "dove cercare le parole" }, dalle: { type: "string", description: "HH:MM" }, alle: { type: "string", description: "HH:MM" }, giorni: { type: "array", items: { type: "boolean" }, description: "7 valori, da lunedi'" }, tuttoIlGiorno: { type: "boolean" } }, required: ["device", "nome"] } },
   { name: "crea_blocco_rapido", description: "Fa partire subito un blocco di N minuti su app, siti o parole chiave.",
     input_schema: { type: "object", properties: { device: { type: "string" }, minuti: { type: "number" }, app: { type: "array", items: { type: "string" } }, siti: { type: "array", items: { type: "string" } }, parole: { type: "array", items: { type: "string" } }, dove: { type: "string", enum: ["url", "dominio", "pagina"] } }, required: ["device", "minuti"] } },
+  /* 0.9.285: le regole su misura della partita (il nuovo te contro il vecchio te) e l'imprevisto che sposta l'arrivo */
+  { name: "crea_regola_partita", description: "Aggiunge alla partita della persona (il nuovo te contro il vecchio te) una regola su misura per il suo obiettivo: un momento che l'app vede da sola, chi prende i punti e quanti. Una cosa che l'app non vede da sola non diventa una regola.",
+    input_schema: { type: "object", properties: { device: { type: "string" }, nome: { type: "string", description: "la regola in poche parole" }, quando: { type: "string", enum: QUANDO }, chi: { type: "string", enum: ["nuovo", "vecchio"] }, punti: { type: "number", description: "da 1 a 3" }, entro: { type: "string", description: "HH:MM, vale solo prima di quest'ora" }, dopo: { type: "string", description: "HH:MM, vale solo da quest'ora" }, parole: { type: "array", items: { type: "string" }, description: "vale solo se il testo contiene una di queste parole" }, perche: { type: "string" } }, required: ["device", "quando", "chi"] } },
+  { name: "segna_imprevisto", description: "Segna un imprevisto che porta via tempo al percorso (malattia, lavoro in piu', un viaggio): l'app ricalcola subito l'arrivo previsto.",
+    input_schema: { type: "object", properties: { device: { type: "string" }, giorni: { type: "number" }, ore: { type: "number", description: "ore di lavoro sul percorso che porta via" }, motivo: { type: "string" } }, required: ["device", "giorni"] } },
 ];
-const TIPO: Record<string, string> = { aggiorna_roadmap: "roadmap", crea_programma: "programma", crea_blocco_rapido: "blocco_rapido" };
+const TIPO: Record<string, string> = { aggiorna_roadmap: "roadmap", crea_programma: "programma", crea_blocco_rapido: "blocco_rapido", crea_regola_partita: "regola", segna_imprevisto: "imprevisto" };
 
 function chiave(req: Request): boolean {
   const k = String(process.env.AGENT_TOOLS_KEY || "");
@@ -78,6 +85,11 @@ export function registerFocusLockAgentTools(app: Express) {
       if (!payload.tappe.length) { res.status(400).json({ error: "nessuna tappa" }); return; }
     } else if (tool === "crea_programma") {
       payload = { nome: String(a.nome || "Dal tuo agente").slice(0, 60), app: lista(a.app), siti: lista(a.siti), parole: lista(a.parole), dove: ["url", "dominio", "pagina"].includes(String(a.dove)) ? String(a.dove) : "url", dalle: ora(a.dalle, "09:00"), alle: ora(a.alle, "18:00"), giorni: Array.isArray(a.giorni) && a.giorni.length === 7 ? a.giorni.map((x: any) => !!x) : [true, true, true, true, true, true, true], tuttoIlGiorno: !!a.tuttoIlGiorno };
+    } else if (tool === "crea_regola_partita") {
+      if (!QUANDO.includes(String(a.quando))) { res.status(400).json({ error: "momento sconosciuto: usa uno di " + QUANDO.join(", ") }); return; }
+      payload = { nome: String(a.nome || "").slice(0, 80), quando: String(a.quando), chi: String(a.chi) === "vecchio" ? "vecchio" : "nuovo", punti: Math.max(1, Math.min(3, Math.round(Number(a.punti) || 1))), entro: ora(a.entro, ""), dopo: ora(a.dopo, ""), parole: lista(a.parole, 8), perche: String(a.perche || "").slice(0, 200) };
+    } else if (tool === "segna_imprevisto") {
+      payload = { giorni: Math.max(1, Math.min(60, Math.round(Number(a.giorni) || 1))), ore: Math.max(0, Math.min(400, Number(a.ore) || 0)), motivo: String(a.motivo || "").slice(0, 160) };
     } else {
       payload = { minuti: Math.max(5, Math.min(480, Number(a.minuti) || 25)), app: lista(a.app), siti: lista(a.siti), parole: lista(a.parole), dove: ["url", "dominio", "pagina"].includes(String(a.dove)) ? String(a.dove) : "url" };
     }
