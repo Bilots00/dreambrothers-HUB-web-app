@@ -27,6 +27,14 @@ import { whoIs, isIdentity, rows } from "./focuslockRoutes";
 const MAX_TESTO = 4000;
 const MAX_AZIONI_BYTES = 32 * 1024;
 const MAX_AL_GIORNO = Number(process.env.FOCUSLOCK_AGENT_MAX_DAY || 10);
+/* app 0.9.286, Andrea: "cerco la foto dei turni e non parte niente". Il tetto di 10 messaggi al giorno valeva anche per
+ * l'account servito dal suo abbonamento Max (il lavoratore sul VPS): le richieste dell'app ([turni], [frasi], il
+ * rientro) lo finivano a meta' giornata e la foto dei turni tornava con un 429. Per gli account Max il tetto e' solo
+ * di sicurezza (un giro impazzito), non un limite d'uso. */
+const MAX_AL_GIORNO_MAX = Number(process.env.FOCUSLOCK_AGENT_MAX_DAY_MAX || 300);
+function tettoDi(email: string | null | undefined): number {
+  return emailMax().includes(String(email || "").trim().toLowerCase()) ? MAX_AL_GIORNO_MAX : MAX_AL_GIORNO;
+}
 const CANALI = ["app", "telegram", "whatsapp"] as const;
 type Canale = typeof CANALI[number];
 
@@ -885,7 +893,8 @@ export function registerFocusLockChatRoutes(app: Express) {
     if (!testo) { res.status(400).json({ error: "testo is required" }); return; }
     try {
       await ensureTables();
-      if ((await scrittiOggi(who.sub)) >= MAX_AL_GIORNO) { res.status(429).json({ error: "daily limit", limit: MAX_AL_GIORNO }); return; }
+      const tetto = tettoDi(who.email);
+      if ((await scrittiOggi(who.sub)) >= tetto) { res.status(429).json({ error: "daily limit", limit: tetto }); return; }
       const brief = pulisci((req.body ?? {}).brief, 12000);
       /* app 0.9.219: il nome che l'utente ha dato al suo agente («Genio» se parla con il Genio) */
       const nome = nomeAgente((req.body ?? {}).nomeAgente);
@@ -1242,7 +1251,7 @@ async function arrivato(body: any): Promise<{ status: number; body: any }> {
   if (!l.length) return { status: 200, body: { sconosciuto: true } };
   const sub = String(l[0].googleSub), email = l[0].email ?? null;
   if (!ammesso(email)) return { status: 200, body: { sconosciuto: true } };
-  if ((await scrittiOggi(sub)) >= MAX_AL_GIORNO) return { status: 200, body: { limite: true } };
+  if ((await scrittiOggi(sub)) >= tettoDi(email)) return { status: 200, body: { limite: true } };
   const id = await inserisci(sub, email, canale as Canale, "in", testo, null, null, "attesa");
   lanciaCrediti(id);
   return { status: 200, body: { id } };
