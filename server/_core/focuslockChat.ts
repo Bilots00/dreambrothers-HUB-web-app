@@ -410,7 +410,7 @@ async function chiamaModello(messaggi: { role: string; content: string }[], pian
     const modello = piano || profondo ? modelloPiano() : modelloChat();
     const r = piano || profondo
       ? await claude().messages.create({ model: modello, max_tokens: 16000,
-          output_config: { effort: opz.effort || (piano ? "high" : "medium") }, system, messages: msgs })
+          output_config: { effort: opz.effort || "medium" }, system, messages: msgs })
       : await claude().messages.create({ model: modello, max_tokens: 2000,
           system, messages: msgs });
     if (r.stop_reason === "refusal") throw new Error("claude: rifiuto " + JSON.stringify(r.stop_details || null).slice(0, 200));
@@ -639,7 +639,10 @@ async function rispondiACrediti(id: number): Promise<void> {
     /* 0.9.282, Andrea: la prima domanda dell'intervista ci metteva troppo. Le domande si fanno con ragionamento basso
      * (sono corte); dalla quinta risposta in poi, quando arriva il piano, il ragionamento torna alto. */
     const risposteIntervista = intervista ? storico.filter((x: any) => x.direzione === "in" && String(x.testo || "").startsWith(PREFISSO_INTERVISTA)).length : 0;
-    const effort = intervista ? (risposteIntervista >= 5 ? "high" : "low") : undefined;
+    /* 0.9.288, Andrea: "l'agente impiega troppo a costruire la roadmap, un utente non puo' aspettare 1-2 minuti". Con
+     * ragionamento "high" Opus 5.5 pensava a lungo prima di scrivere: il piano si fa con "medium" (il valore di serie
+     * del modello), piu' veloce e piu' economico; le domande dell'intervista restano "low". */
+    const effort = intervista ? (risposteIntervista >= 5 ? "medium" : "low") : undefined;
     const risposta = await chiamaModello(messaggi, roadmap || scomponi || iofuturo, { allegati, scelta: profondo ? "profondo" : "veloce", effort });
     await registraUso(sub, id, risposta.uso);
     const testo = risposta.testo;

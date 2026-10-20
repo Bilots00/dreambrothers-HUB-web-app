@@ -31,7 +31,20 @@ const PAGE_URL = "https://dreambrothers.it/pages/wishlist";
 /* Gli stessi due handle del tema, nello stesso ordine. */
 const HANDLES = ["daily-quotes", "wishlist"];
 const CACHE_MS = 6 * 60 * 60 * 1000;
-let cache: { at: number; body: any } | null = null;
+let cache: { at: number; day: string; body: any } | null = null;
+
+/* DreamMap 0.9.288, Andrea: "alle 8:18 c'e' ancora la frase di ieri". La memoria durava sei ore a prescindere dal
+   giorno: letta alle 23, alle 4 del mattino rispondeva ancora con la frase di ieri, e l'app la teneva per tutta la
+   giornata. Adesso la memoria vale solo dentro lo stesso giorno italiano, e nella prima mezz'ora del giorno nuovo
+   dura cinque minuti (la pagina del sito puo' metterci un attimo a cambiare). */
+function giornoRoma(t = Date.now()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
+}
+function minutiDallaMezzanotteRoma(t = Date.now()): number {
+  const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(t));
+  const h = +(p.find((x) => x.type === "hour")?.value || 0) % 24, m = +(p.find((x) => x.type === "minute")?.value || 0);
+  return h * 60 + m;
+}
 
 function decode(s: string): string {
   return s
@@ -116,7 +129,9 @@ async function listFromAdmin(): Promise<string[]> {
 
 export function registerFocusLockQuoteRoutes(app: Express) {
   app.get("/api/focuslock/quotes", async (_req: Request, res: Response) => {
-    if (cache && Date.now() - cache.at < CACHE_MS) { res.json({ ...cache.body, cached: true }); return; }
+    const oggi = giornoRoma();
+    const durata = minutiDallaMezzanotteRoma() < 30 ? 5 * 60 * 1000 : CACHE_MS;
+    if (cache && cache.day === oggi && Date.now() - cache.at < durata) { res.json({ ...cache.body, cached: true }); return; }
 
     let today: string | null = null;
     try { today = await readPage(); }
@@ -128,8 +143,8 @@ export function registerFocusLockQuoteRoutes(app: Express) {
 
     // Se la pagina ha risposto, quella è la frase di oggi, punto: l'elenco serve per i giorni
     // scorsi e come scorta offline, e non deve mai vincere sulla pagina.
-    const body = { today, quotes: quotes.length ? quotes : (today ? [today] : []), day: new Date().toISOString().slice(0, 10) };
-    if (today || quotes.length) cache = { at: Date.now(), body };
+    const body = { today, quotes: quotes.length ? quotes : (today ? [today] : []), day: oggi };
+    if (today || quotes.length) cache = { at: Date.now(), day: oggi, body };
     res.json(body);
   });
 }
