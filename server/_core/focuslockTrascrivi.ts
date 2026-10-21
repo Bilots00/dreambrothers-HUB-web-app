@@ -21,8 +21,8 @@ import { whoIs, isIdentity } from "./focuslockRoutes";
  * punteggiatura e pulizia in una chiamata sola. Il piano gratuito di Gemini NON si puo' usare per utenti europei (termini
  * Google: "only Paid Services ... in the European Economic Area"), quindi la chiave deve stare su un progetto con la
  * fatturazione attiva. Ordine: Gemini se c'e' la chiave, altrimenti (o se Gemini fallisce) Scribe. */
-const GEMINI_CHIAVE = () => process.env.FOCUSLOCK_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.GEMINI_API_KEY || "";
-const GEMINI_MODELLO = () => process.env.FOCUSLOCK_DETTATURA_MODELLO || "gemini-2.5-flash-lite";
+const GEMINI_CHIAVE = () => process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.GEMINI_API_KEY || "";
+const GEMINI_MODELLO = () => process.env.DREAMMAP_DETTATURA_MODELLO || "gemini-2.5-flash-lite";
 const ISTRUZIONI = "Trascrivi l'audio parola per parola, nella lingua in cui si parla (di solito italiano). Metti punteggiatura e maiuscole giuste. Togli solo le esitazioni (ehm, uhm), le false partenze e le parole ripetute due volte di fila. Non riassumere, non tradurre, non aggiungere niente, nessun commento e nessun titolo. Se nell'audio non si parla, rispondi con una stringa vuota.";
 async function conGemini(buf: Buffer, mime: string): Promise<{ testo: string; modello: string }> {
   const chiave = GEMINI_CHIAVE();

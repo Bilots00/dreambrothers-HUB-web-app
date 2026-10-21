@@ -148,7 +148,12 @@ function checkSecret(req: Request, res: Response): boolean {
   return true;
 }
 function aperto(): boolean { return /^(1|true|yes)$/i.test(String(process.env.FOCUSLOCK_AGENT_OPEN || "")); }
+/* 0.9.293, Andrea: "l'agente con il mio Claude Max lo posso usare solo io; tutti gli altri devono poter avere il proprio
+ * agente pagando l'abbonamento, e poi i crediti acquistabili, come Manus". L'agente si crea con qualunque account Google:
+ * a chi non e' nel Max ogni messaggio scala un credito (saldo, scala), e i crediti arrivano solo dall'abbonamento o dai
+ * pacchetti. Il Max resta solo per FOCUSLOCK_AGENT_MAX_EMAILS (emailMax): la coda del VPS non vede nessun altro. */
 function ammesso(email: string | null): boolean {
+  if (String(email || "").trim()) return true;
   if (aperto()) return true;
   const lista = String(process.env.FOCUSLOCK_AGENT_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   const mia = String(email || "").trim().toLowerCase();
