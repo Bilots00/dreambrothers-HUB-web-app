@@ -865,6 +865,103 @@ export function registerFocusLockChatRoutes(app: Express) {
     }
   });
 
+  /* ---- RIENTRA IN ROTTA, CONDOTTO DA UN MODELLO VELOCE (DreamMap 0.9.296) ----
+   * Andrea: "le domande senza filo logico rispetto alla risposta di prima mi frustrano". Il questionario scritto nel
+   * codice diventa una conversazione: a ogni risposta il modello sceglie la domanda dopo, con 2-4 opzioni che
+   * nascono da quella risposta e dai dati della giornata (tempo per app e per ora, sessioni, passi della roadmap).
+   * Alla fine non un patto a parole ma un programma di blocco (app, fascia, giorni) e la sostituzione dell'abitudine.
+   * L'app chiede in anticipo il passo dopo per ogni opzione, quindi le chiamate sono 3-5 per domanda: per questo il
+   * modello e' il piu' economico e veloce (Gemini Flash-Lite, altrimenti Claude Haiku), senza crediti ma con un tetto
+   * al giorno. Il testo non si salva. Senza chiavi 503, e l'app torna alle domande scritte. */
+  const RIENTRO_USATI = new Map<string, { g: string; n: number }>();
+  const RIENTRO_TETTO = Math.max(20, Number(process.env.DREAMMAP_RIENTRO_MAX_DAY || 400));
+  app.post("/api/focuslock/agent/rientro", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const b = req.body ?? {};
+    const g = new Date().toISOString().slice(0, 10);
+    const u = RIENTRO_USATI.get(who.sub); const n = u && u.g === g ? u.n : 0;
+    if (n >= RIENTRO_TETTO) { res.status(429).json({ error: "troppe domande oggi" }); return; }
+    RIENTRO_USATI.set(who.sub, { g, n: n + 1 });
+    const storia = (Array.isArray(b.storia) ? b.storia : []).slice(-12).map((x: any) => ({ d: pulisci(x?.d, 400), r: pulisci(x?.r, 600) }));
+    const risposta = pulisci(b.risposta, 1000), domanda = pulisci(b.domanda, 400);
+    let dati = "";
+    try { dati = JSON.stringify(b.dati ?? {}).slice(0, 9000); } catch { dati = "{}"; }
+    /* le app che si possono bloccare: solo quelle che l'app ha mandato, mai un pacchetto inventato */
+    const pacchetti = new Set<string>();
+    try {
+      const d = b.dati ?? {};
+      for (const l of [d.appGiorno, d.appTutte]) for (const a of (Array.isArray(l) ? l : [])) if (a && typeof a.pkg === "string") pacchetti.add(a.pkg);
+    } catch { /* niente app */ }
+    const turni = storia.length + (risposta ? 1 : 0);
+    const sistema = [
+      "Sei il Genio di DreamMap, un'app che aiuta una persona a restare sulla strada del suo sogno. La persona è uscita di rotta e tu la aiuti a rientrare con una conversazione breve, come uno psicologo pratico.",
+      "Obiettivo: trovare la CAUSA VERA (cosa è successo subito prima, cosa l'ha tenuta lì) e chiudere con UN programma di blocco concreto e una sostituzione dell'abitudine.",
+      "Regole della conversazione:",
+      "- Una domanda alla volta. Ogni domanda nasce dalla risposta appena data: riprendila con parole sue, mai cambiare argomento a caso.",
+      "- Usa i dati della giornata: nomina app, orari e minuti veri. Se c'è una caduta (dati.caduta) e la persona parla di una tentazione, la PRIMA domanda dopo mostra cosa c'era subito prima e subito dopo (metti \"mostraCaduta\": true) e chiede cosa l'ha spinta da lì all'app.",
+      "- Se la persona ha avuto un imprevisto, non farle la predica: chiedi cosa è successo e chiudi con un programma leggero o senza programma.",
+      "- Se non c'è niente da segnalare e i dati lo confermano, chiudi subito con un incoraggiamento e senza programma. Se i dati dicono altro, fallo notare con gentilezza e chiedi.",
+      "- Da 2 a 4 opzioni, brevi (massimo 9 parole), in prima persona, ognuna con una emoji. Concrete e diverse fra loro, mai \"altro\" (c'è già \"Lo scrivo io\").",
+      "- Dopo 3-5 domande chiudi. Al turno 6 chiudi per forza.",
+      "Copy: italiano semplice, frasi corte, verbo esplicito, mai vago (mai \"in quel momento\" senza dire quale, mai \"i numeri\"). Dai del tu. Virgolette solo \"\". Mai trattini lunghi. Metti fra asterischi *la parte importante* della domanda, una sola volta. Massimo 35 parole per testo.",
+      "La chiusura: \"programma\" con nome (massimo 4 parole), app (SOLO pacchetti presi da dati.appGiorno o dati.appTutte), dalle e alle in HH:MM che coprono l'ora in cui cade di solito, giorni (7 booleani da lunedì a domenica). \"sostituzione\": cosa fa al posto dell'app, in prima persona, un'azione da due minuti (puoi partire da dati.premi). \"patto\": una frase \"Se..., allora...\".",
+      "Rispondi SOLO in JSON, uno di questi due:",
+      "{\"tipo\":\"domanda\",\"testo\":\"...\",\"opzioni\":[{\"ico\":\"emoji\",\"t\":\"...\"}],\"mostraCaduta\":false}",
+      "{\"tipo\":\"fine\",\"testo\":\"...\",\"programma\":{\"nome\":\"...\",\"app\":[\"pacchetto\"],\"dalle\":\"HH:MM\",\"alle\":\"HH:MM\",\"giorni\":[true,true,true,true,true,true,true]} oppure null,\"sostituzione\":\"...\",\"patto\":\"Se..., allora...\"}",
+    ].join("\n");
+    const utenteTxt = "Dati della giornata (JSON):\n" + dati
+      + "\n\nLa conversazione finora:\n" + (storia.length ? storia.map((x: any, i: number) => (i + 1) + ". Genio: " + x.d + "\n   Persona: " + x.r).join("\n") : "(appena cominciata)")
+      + "\n\nLa domanda appena fatta: " + (domanda || "(nessuna)")
+      + "\nLa risposta appena data: " + (risposta || "(nessuna)")
+      + "\nTurno numero " + turni + (turni >= 6 ? ": CHIUDI ADESSO con tipo fine." : ".");
+    /* pulizia del copy e del programma: quello che il modello sbaglia non arriva a schermo */
+    const copy = (t: unknown, max: number) => String(t ?? "").replace(/[«»“”]/g, "\"").replace(/\s*[—–]\s*/g, ", ").replace(/\s+/g, " ").trim().slice(0, max);
+    const ora = (t: unknown) => { const m = String(t ?? "").match(/^(\d{1,2})[:.](\d{2})$/); return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
+    const leggi = (t: string) => {
+      const j = jsonDa(String(t || ""));
+      if (!j || typeof j !== "object") return null;
+      const testo = copy(j.testo, 300);
+      if (!testo) return null;
+      if (j.tipo === "fine" || turni >= 6) {
+        let programma: any = null;
+        const p = j.programma;
+        if (p && typeof p === "object") {
+          const app = (Array.isArray(p.app) ? p.app : []).map(String).filter((x: string) => pacchetti.has(x)).slice(0, 6);
+          const dalle = ora(p.dalle), alle = ora(p.alle);
+          const giorni = Array.isArray(p.giorni) && p.giorni.length === 7 ? p.giorni.map((x: any) => !!x) : [true, true, true, true, true, true, true];
+          if (app.length && dalle && alle && dalle !== alle) programma = { nome: copy(p.nome, 40) || "Il mio rientro", app, dalle, alle, giorni };
+        }
+        return { tipo: "fine", testo, programma, sostituzione: copy(j.sostituzione, 120), patto: copy(j.patto, 200) };
+      }
+      const opzioni = (Array.isArray(j.opzioni) ? j.opzioni : []).map((o: any) => ({ ico: copy(o?.ico, 8) || "•", t: copy(o?.t, 70) })).filter((o: any) => o.t).slice(0, 4);
+      if (opzioni.length < 2) return null;
+      return { tipo: "domanda", testo, opzioni, mostraCaduta: !!j.mostraCaduta };
+    };
+    const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
+    try {
+      if (chiaveG) {
+        const modello = process.env.DREAMMAP_RIENTRO_MODELLO || process.env.DREAMMAP_VAR_MODELLO || "gemini-2.5-flash-lite";
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+          method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt }] }],
+            generationConfig: { temperature: 0.5, maxOutputTokens: 500, responseMimeType: "application/json", thinkingConfig: { thinkingBudget: 0 } } }),
+        });
+        const j: any = await r.json().catch(() => ({}));
+        const v = r.ok ? leggi((j?.candidates?.[0]?.content?.parts || []).map((x: any) => x.text || "").join("")) : null;
+        if (v) { res.json({ ...v, modello }); return; }
+      }
+      if (process.env.AGENT_LLM_KEY) {
+        const modello = process.env.DREAMMAP_RIENTRO_CLAUDE || process.env.DREAMMAP_VAR_CLAUDE || "claude-haiku-5-5";
+        const r = await claude().messages.create({ model: modello, max_tokens: 500, temperature: 0.5, system: sistema, messages: [{ role: "user", content: utenteTxt }] });
+        const v = leggi(r.content.filter((x) => x.type === "text").map((x) => (x.type === "text" ? x.text : "")).join(""));
+        if (v) { res.json({ ...v, modello }); return; }
+      }
+      res.status(503).json({ error: "il rientro non ha un modello acceso", spento: !chiaveG && !process.env.AGENT_LLM_KEY });
+    } catch (e: any) {
+      res.status(502).json({ error: "rientro: " + (e?.message || String(e)) });
+    }
+  });
+
   app.get("/api/focuslock/agent/chat/enabled", async (req: Request, res: Response) => {
     const who = await whoIs(req);
     if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
