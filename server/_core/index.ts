@@ -31,6 +31,7 @@ import { registerFocusLockPattiRoutes } from "./focuslockPatti";
 import { registerFocusLockVitaRoutes } from "./focuslockVita";
 import { registerFocusLockTutorialRoutes } from "./focuslockTutorial";
 import { registerFocusLockTrascriviRoutes } from "./focuslockTrascrivi";
+import { registerFocusLockUnsplashRoutes } from "./focuslockUnsplash";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
@@ -694,6 +695,7 @@ async function startServer() {
   registerFocusLockVitaRoutes(app);     // 0.9.286: la vita in settimane, le pagine viste dagli amici
   registerFocusLockTutorialRoutes(app);   // 0.9.290: il tutorial con un video vero (la ricerca nella cornice e' spenta)
   registerFocusLockTrascriviRoutes(app);   // 0.9.290: la dettatura con ElevenLabs Scribe v2
+  registerFocusLockUnsplashRoutes(app);    // 0.9.298: le foto di Unsplash per il piano (copertina e blocco immagine)
   registerWatchlistRoutes(app);
   registerImageProxy(app);
   registerResearchRoutes(app);

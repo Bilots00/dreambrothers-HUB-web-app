@@ -962,6 +962,66 @@ export function registerFocusLockChatRoutes(app: Express) {
     }
   });
 
+  /* ---- L'IDENTITA' DEL NUOVO TE (DreamMap 0.9.298) ----
+   * Il livello "Il tuo Io Futuro ti sta chiamando": dal sogno, dal blocco principale del Sabotatore invisibile e dalle
+   * risposte, l'agente scrive chi e' gia' il nuovo te (Atomic Habits: l'identita' prima dei risultati). Una chiamata
+   * per livello, il modello economico. L'app valida il JSON e, se non va, usa i suoi modelli. Il testo non si salva. */
+  const IDENTITA_USATI = new Map<string, { g: string; n: number }>();
+  app.post("/api/focuslock/agent/identita", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const b = req.body ?? {};
+    const g = new Date().toISOString().slice(0, 10);
+    const u = IDENTITA_USATI.get(who.sub); const n = u && u.g === g ? u.n : 0;
+    if (n >= 20) { res.status(429).json({ error: "troppe identita' oggi" }); return; }
+    IDENTITA_USATI.set(who.sub, { g, n: n + 1 });
+    let risposte = "{}"; try { risposte = JSON.stringify(b.risposte ?? {}).slice(0, 3000); } catch { /* vuote */ }
+    const sistema = [
+      "Trasformi il sogno di una persona in un'IDENTITA': chi e' gia' il suo nuovo me, non una lista di cose da fare (Atomic Habits di James Clear, Psicocibernetica di Maltz).",
+      "Formula: \"Sono una persona che...\" + 2-3 tratti osservabili. Presente indicativo, positivo, verificabile con le azioni, credibile oggi (mai \"sono milionario\").",
+      "L'identita' contiene l'antidoto al blocco principale (denaro: rapporto sano con i soldi; dispersione: una cosa alla volta; imparare: imparo facendo; valore: agisco prima di sentirmi pronto; passato: riparto ogni giorno; paura: agisco con la paura; sguardi: scelgo la mia strada; tempo: il tempo me lo prendo).",
+      "Tono: complice, caldo, frasi brevi. MAI \"devi\", \"dovresti\", \"bisogna\", \"e' necessario\", mai la parola AI. Italiano, virgolette solo \"\", mai trattini lunghi.",
+      "vote_actions: tre azioni minime da 2-25 minuti, in prima persona al presente. affirmations: 30 frasi brevi al presente. credenze: 3. nonPiu: 2-3 frasi \"Non ... piu'\".",
+      "Rispondi SOLO in JSON: {\"identity_statement\":\"Sono una persona che...\",\"traits\":[\"\",\"\",\"\"],\"old_self_line\":\"Prima dicevo: \\\"sto cercando di...\\\"\",\"new_self_line\":\"Ora dico: \\\"sono una persona che...\\\"\",\"vote_actions\":[\"\",\"\",\"\"],\"affirmations\":[\"...\"],\"credenze\":[\"\"],\"nonPiu\":[\"\"]}",
+    ].join("\n");
+    const utenteTxt = "Il sogno: " + pulisci(b.sogno, 300) + "\nLa categoria: " + pulisci(b.categoria, 40) + "\nIl blocco principale del Sabotatore: " + pulisci(b.blocco, 40) + "\nLe risposte: " + risposte;
+    const copy = (t: unknown, max: number) => String(t ?? "").replace(/[«»“”]/g, "\"").replace(/\s*[—–]\s*/g, ", ").replace(/\s+/g, " ").trim().slice(0, max);
+    const lista = (l: unknown, n: number, max: number) => (Array.isArray(l) ? l : []).map((x) => copy(x, max)).filter(Boolean).slice(0, n);
+    const leggi = (t: string) => {
+      const j = jsonDa(String(t || ""));
+      if (!j || typeof j !== "object") return null;
+      const id = copy(j.identity_statement, 260);
+      if (!/^Sono una persona che/i.test(id)) return null;
+      const out = { identity_statement: id, traits: lista(j.traits, 3, 120), old_self_line: copy(j.old_self_line, 160), new_self_line: copy(j.new_self_line, 160),
+        vote_actions: lista(j.vote_actions, 3, 120), affirmations: lista(j.affirmations, 30, 140), credenze: lista(j.credenze, 4, 140), nonPiu: lista(j.nonPiu, 3, 140) };
+      if (out.traits.length < 2 || out.vote_actions.length < 2 || !out.affirmations.length) return null;
+      if (/\bdevi\b|\bdovresti\b|\bbisogna\b/i.test(JSON.stringify(out))) return null;
+      return out;
+    };
+    const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
+    try {
+      if (chiaveG) {
+        const modello = process.env.DREAMMAP_RIENTRO_MODELLO || process.env.DREAMMAP_VAR_MODELLO || "gemini-2.5-flash-lite";
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+          method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 1800, responseMimeType: "application/json", thinkingConfig: { thinkingBudget: 0 } } }),
+        });
+        const j: any = await r.json().catch(() => ({}));
+        const v = r.ok ? leggi((j?.candidates?.[0]?.content?.parts || []).map((x: any) => x.text || "").join("")) : null;
+        if (v) { res.json({ identita: v, modello }); return; }
+      }
+      if (process.env.AGENT_LLM_KEY) {
+        const modello = process.env.DREAMMAP_RIENTRO_CLAUDE || process.env.DREAMMAP_VAR_CLAUDE || "claude-haiku-5-5";
+        const r = await claude().messages.create({ model: modello, max_tokens: 1800, temperature: 0.7, system: sistema, messages: [{ role: "user", content: utenteTxt }] });
+        const v = leggi(r.content.filter((x) => x.type === "text").map((x) => (x.type === "text" ? x.text : "")).join(""));
+        if (v) { res.json({ identita: v, modello }); return; }
+      }
+      res.status(503).json({ error: "l'identita' non ha un modello acceso", spento: !chiaveG && !process.env.AGENT_LLM_KEY });
+    } catch (e: any) {
+      res.status(502).json({ error: "identita: " + (e?.message || String(e)) });
+    }
+  });
+
   app.get("/api/focuslock/agent/chat/enabled", async (req: Request, res: Response) => {
     const who = await whoIs(req);
     if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
