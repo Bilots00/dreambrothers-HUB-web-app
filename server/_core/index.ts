@@ -13,6 +13,7 @@ import { registerFocusLockRoutes } from "./focuslockRoutes";
 import { registerFocusLockFeedbackRoutes } from "./focuslockFeedback";
 import { registerFocusLockAgentRoutes } from "./focuslockAgent";
 import { registerFocusLockChatRoutes } from "./focuslockChat";
+import { registerFocusLockConversaRoutes } from "./focuslockConversa";
 import { registerFocusLockPianoRoutes } from "./focuslockPiano";
 import { registerFocusLockNotionRoutes } from "./focuslockNotion";
 import { registerFocusLockPianoAiRoutes } from "./focuslockPianoAi";
@@ -32,6 +33,7 @@ import { registerFocusLockVitaRoutes } from "./focuslockVita";
 import { registerFocusLockTutorialRoutes } from "./focuslockTutorial";
 import { registerFocusLockTrascriviRoutes } from "./focuslockTrascrivi";
 import { registerFocusLockUnsplashRoutes } from "./focuslockUnsplash";
+import { registerFocusLockRitrattoRoutes } from "./focuslockRitratto";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
@@ -677,6 +679,7 @@ async function startServer() {
   registerFocusLockFeedbackRoutes(app);
   registerFocusLockAgentRoutes(app);
   registerFocusLockChatRoutes(app);
+  registerFocusLockConversaRoutes(app);   // 0.9.301: la revisione e il Rientra in rotta in chat con il tuo agente, e i dati anonimi che insegnano al Genio
   registerFocusLockPianoRoutes(app);
   registerFocusLockNotionRoutes(app);
   registerFocusLockPianoAiRoutes(app);
@@ -696,6 +699,7 @@ async function startServer() {
   registerFocusLockTutorialRoutes(app);   // 0.9.290: il tutorial con un video vero (la ricerca nella cornice e' spenta)
   registerFocusLockTrascriviRoutes(app);   // 0.9.290: la dettatura con ElevenLabs Scribe v2
   registerFocusLockUnsplashRoutes(app);    // 0.9.298: le foto di Unsplash per il piano (copertina e blocco immagine)
+  registerFocusLockRitrattoRoutes(app);    // 0.9.301: il ritratto dell'Io Futuro dal selfie (Gemini, niente si conserva)
   registerWatchlistRoutes(app);
   registerImageProxy(app);
   registerResearchRoutes(app);
