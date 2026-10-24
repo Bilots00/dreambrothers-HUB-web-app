@@ -51,7 +51,10 @@ export function ensureTables(): Promise<void> {
         "tier VARCHAR(12) NOT NULL DEFAULT 'bronzo'", "sfide TEXT NULL",
         // 0.9.205: cosa sta facendo adesso (ff | severa | app) e le impronte SHA-256 di mail e numero,
         // per farsi trovare dai contatti senza che la rubrica lasci il telefono
-        "attivita VARCHAR(12) NOT NULL DEFAULT ''", "emailHash VARCHAR(64) NOT NULL DEFAULT ''", "telHash VARCHAR(64) NOT NULL DEFAULT ''"]) {
+        "attivita VARCHAR(12) NOT NULL DEFAULT ''", "emailHash VARCHAR(64) NOT NULL DEFAULT ''", "telHash VARCHAR(64) NOT NULL DEFAULT ''",
+        // app 0.9.300: i numeri del confronto fra amici e in lega (tappe, severa, Full Focus, serie e, solo se
+        // la persona lo condivide, il tempo di schermo), per oggi, da lunedi' e dal primo del mese
+        "metriche TEXT NULL"]) {
         try { await db.execute(sql.raw("ALTER TABLE focuslock_players ADD COLUMN " + col)); } catch { /* already there */ }
       }
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_friends (
@@ -106,6 +109,24 @@ function code(): string {
   return s;
 }
 const n = (v: any, max = 1e7) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
+/* app 0.9.300: le metriche del confronto, ripulite. Ogni periodo ha la sua data (giorno, lunedi', mese) scritta dal
+ * telefono: chi le legge sa se valgono per oggi. Il tempo di schermo arriva solo se la persona lo condivide. */
+export function metricheDi(m: any): string | null {
+  if (!m || typeof m !== "object") return null;
+  const data = (v: any, re: RegExp) => (re.test(String(v || "")) ? String(v) : "");
+  const tre = (x: any, max: number) => (x && typeof x === "object" ? { g: n(x.g, max), s: n(x.s, max), m: n(x.m, max) } : null);
+  const out = {
+    v: 1,
+    giorno: data(m.giorno, /^\d{4}-\d{2}-\d{2}$/), lunedi: data(m.lunedi, /^\d{4}-\d{2}-\d{2}$/), mese: data(m.mese, /^\d{4}-\d{2}$/),
+    tappe: tre(m.tappe, 10000), severa: tre(m.severa, 31), ff: tre(m.ff, 44640), schermo: tre(m.schermo, 44640), serie: n(m.serie, 5000),
+  };
+  if (!out.giorno) return null;
+  return JSON.stringify(out);
+}
+export function metricheLeggi(s: any): any {
+  if (!s) return null;
+  try { const o = JSON.parse(String(s)); return o && typeof o === "object" ? o : null; } catch { return null; }
+}
 function score7Of(p: { ffMin7: number; blocks7: number; streak: number }): number {
   return p.ffMin7 * 2 + p.blocks7 + p.streak * 5;
 }
@@ -184,6 +205,7 @@ export function registerFocusLockSocialRoutes(app: Express) {
       attivita: ["ff", "severa", "app"].includes(String(b.attivita || "")) ? String(b.attivita) : "app",
       emailHash: /^[0-9a-f]{64}$/.test(String(b.emailHash || "")) ? String(b.emailHash) : "",
       telHash: /^[0-9a-f]{64}$/.test(String(b.telHash || "")) ? String(b.telHash) : "",
+      metriche: metricheDi(b.metriche),
       sfide: Array.isArray(b.sfide) ? JSON.stringify(b.sfide.slice(0, 20).map((s: any) => ({ id: String(s?.id || "").slice(0, 40), stato: String(s?.stato || "").slice(0, 12) }))) : null };
     const score7 = score7Of(p);
     try {
@@ -205,6 +227,8 @@ export function registerFocusLockSocialRoutes(app: Express) {
       }
       /* gli aggregati sociali e i punti della lega: colonne aggiunte dopo, si aggiornano a parte */
       try {
+        /* le metriche del confronto: se il telefono non le manda (app vecchia) restano quelle di prima */
+        if (p.metriche) await rows(sql`UPDATE focuslock_players SET metriche = ${p.metriche} WHERE device = ${device}`);
         await rows(sql`UPDATE focuslock_players SET nick = ${p.nick}, ffStreak = ${p.ffStreak}, neo = ${p.neo}, old = ${p.old}, prevScore7 = ${p.prevScore7},
           legaPunti = ${p.legaPunti}, legaSettimana = ${p.legaSettimana}, sfide = ${p.sfide}, attivita = ${p.attivita},
           emailHash = IF(${p.emailHash} = '', emailHash, ${p.emailHash}), telHash = IF(${p.telHash} = '', telHash, ${p.telHash}) WHERE device = ${device}`);

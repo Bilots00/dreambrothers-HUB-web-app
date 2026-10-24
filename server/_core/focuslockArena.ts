@@ -1,15 +1,16 @@
 import type { Express, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { rows, ensureTables as ensureSocial } from "./focuslockSocial";
+import { rows, ensureTables as ensureSocial, metricheLeggi } from "./focuslockSocial";
 
 /* FocusLock / The Dream Map — l'arena: gli amici con i loro numeri, le reazioni, il Focus
  * insieme, le leghe settimanali e il conteggio di chi partecipa a una sfida.
  *
  * Stessa identita' della classifica (l'id casuale del telefono, focuslock_players): niente
  * email, niente contatti. Agli amici arrivano SOLO gli aggregati: ore di concentrazione della
- * settimana, giorni di fila, punteggio vecchio te / nuovo te, delta settimanale. Mai il nome
- * di un'app, mai il tempo di schermo, mai la rotta.
+ * settimana, giorni di fila, punteggio vecchio te / nuovo te, delta settimanale e (app 0.9.300) le
+ * metriche del confronto: tappe, giorni di severa, Full Focus, serie. Mai il nome di un'app, mai la
+ * rotta; il tempo di schermo solo se la persona accende "Condividi anche il tempo di schermo".
  *
  * LEGHE. Settimana da lunedi' a domenica; la chiusura la fa il server la prima volta che
  * qualcuno chiede la lega dopo la mezzanotte UTC di domenica. Fino a trenta persone per lega,
@@ -246,7 +247,7 @@ export function registerFocusLockArenaRoutes(app: Express) {
     if (!device) { res.status(400).json({ error: "device mancante" }); return; }
     try {
       await ensureArena();
-      const list = await rows(sql`SELECT p.device, p.name, p.nick, p.level, p.ffMin7, p.streak, p.ffStreak, p.neo, p.old, p.score7, p.prevScore7, p.tier, p.updatedAt, p.attivita,
+      const list = await rows(sql`SELECT p.device, p.name, p.nick, p.level, p.ffMin7, p.streak, p.ffStreak, p.neo, p.old, p.score7, p.prevScore7, p.tier, p.updatedAt, p.attivita, p.metriche,
         (p.updatedAt > (NOW() - INTERVAL 10 MINUTE)) AS online
         FROM focuslock_friends f JOIN focuslock_players p ON p.device = f.friend WHERE f.device = ${device} ORDER BY p.score7 DESC, p.updatedAt DESC LIMIT 100`);
       const oggi = await rows(sql`SELECT a, tipo FROM focuslock_reazioni WHERE da = ${device} AND giorno = UTC_DATE()`);
@@ -260,6 +261,8 @@ export function registerFocusLockArenaRoutes(app: Express) {
         reazioniOggi: mandate[String(r.device)] || [],
         /* online = ha parlato col server negli ultimi dieci minuti; attivita = cosa stava facendo */
         online: !!Number(r.online), attivita: String(r.attivita || "app"),
+        /* app 0.9.300: i numeri del confronto (Oggi / Settimana / Mese / Serie) */
+        metriche: metricheLeggi(r.metriche),
       }));
       const ricevute = await rows(sql`SELECT r.tipo, COUNT(*) AS n FROM focuslock_reazioni r WHERE r.a = ${device} AND r.createdAt > (NOW() - INTERVAL 7 DAY) GROUP BY r.tipo`);
       const ultime = await rows(sql`SELECT r.tipo, r.createdAt, p.name, p.nick FROM focuslock_reazioni r JOIN focuslock_players p ON p.device = r.da WHERE r.a = ${device} ORDER BY r.createdAt DESC LIMIT 12`);
@@ -425,8 +428,10 @@ export function registerFocusLockArenaRoutes(app: Express) {
       if (!Number(me.legaOptIn)) { res.json({ optIn: true && false, giocatore: true, tier: String(me.tier || "bronzo"), fine: fineSettimana(), risultato }); return; }
       const legaId = await assegnaLega(device, String(me.goal || ""), String(me.tier || "bronzo"), String(me.nick || ""), settimana, String(me.categoria || ""));
       const lega = (await rows(sql`SELECT id, goal, tier FROM focuslock_leghe WHERE id = ${legaId}`))[0];
-      const membri = await rows(sql`SELECT m.device, m.nick, m.punti, p.name, p.updatedAt FROM focuslock_lega_membri m JOIN focuslock_players p ON p.device = m.device WHERE m.legaId = ${legaId} ORDER BY m.punti DESC, m.device ASC`);
-      const out = membri.map((m, i) => ({ device: String(m.device), nome: nomeDi(m), punti: Number(m.punti || 0), posizione: i + 1, me: String(m.device) === device }));
+      const membri = await rows(sql`SELECT m.device, m.nick, m.punti, p.name, p.updatedAt, p.metriche FROM focuslock_lega_membri m JOIN focuslock_players p ON p.device = m.device WHERE m.legaId = ${legaId} ORDER BY m.punti DESC, m.device ASC`);
+      const out = membri.map((m, i) => ({ device: String(m.device), nome: nomeDi(m), punti: Number(m.punti || 0), posizione: i + 1, me: String(m.device) === device,
+        /* app 0.9.300: per ordinare la lega anche per tappe, Full Focus, schermo, severa, serie */
+        metriche: metricheLeggi(m.metriche) }));
       const mio = out.filter((x) => x.me)[0] || null;
       res.json({ optIn: true, giocatore: true, settimana, fine: fineSettimana(), tier: String(lega?.tier || me.tier || "bronzo"), goal: String(lega?.goal || "*"),
         categoria: String(me.categoria || ""), stato: out.length < LEGA_MIN ? "formazione" : "ok", minimo: LEGA_MIN, membri: out, mio, risultato });
