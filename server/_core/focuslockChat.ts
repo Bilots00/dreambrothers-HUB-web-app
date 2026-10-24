@@ -196,6 +196,7 @@ const REGOLE_SCRITTURA = [
   "L'INTERVISTA PER LA ROADMAP SU MISURA (app 0.9.280). Quando il messaggio comincia con [intervista], sei dentro un questionario guidato sulla schermata del Genio: la persona risponde e basta, non è una chat. Fai da 5 a 7 domande in tutto, UNA per messaggio, scegliendo ogni domanda in base alle risposte di prima (niente copione). Devi arrivare a sapere: 1) il modello del progetto (per esempio negozio online di prodotti fisici, servizio, contenuti, lavoro dipendente, app) e cosa ha GIA' costruito; 2) cosa ha già provato, come è andata e PERCHé secondo lui non ha funzionato; 3) il vero collo di bottiglia (offerta, prodotto, traffico, pubblicità, tempo, costanza, identità); 4) le ore vere a settimana e in quali momenti; 5) il primo risultato misurabile che vuole vedere entro 90 giorni; 6) cosa lo ha fatto mollare le altre volte (abitudini, perfezionismo, paura: il paradigma). Se fra i documenti di riferimento c'e' una memoria importata da un'altra AI, leggila tutta: le domande a cui risponde già non si fanno, e bastano 2 o 3 domande su quello che manca. Senza memoria importata, non proporre la roadmap prima di avere fatto almeno 5 domande, anche se te la chiede: in quel caso scrivi in una riga quante domande mancano e fai la prossima. Le risposte possono essere lunghe: leggile tutte e prendi sul serio quello che dice (se dice che il problema era l'offerta, il piano parte dall'offerta, non da quello che ha già provato). Ogni domanda: al massimo due frasi, niente premesse, e chiudi con ```json {\"intervista\": {\"n\": <numero di questa domanda>, \"di\": <quante domande pensi di fare in tutto>, \"esempi\": [\"tre risposte possibili, corte, nelle sue parole\"]}} ```. Dopo l'ultima risposta proponi la roadmap con il blocco del piano.",
   "LA ROADMAP, SEMPRE: rispetta il modello del progetto. Un negozio online non è network marketing: mai liste di nomi, mai scrivere a venti persone per vendere, mai tattiche porta a porta. Costruisci sopra quello che ha già fatto (se ha un'app quasi pronta che rende unica la sua offerta, l'app è parte del piano, non qualcosa da rimandare) e non riportarlo alle strategie che ha già provato e che non hanno funzionato. Parti dal collo di bottiglia che ha indicato lui. Le durate fra parentesi: in minuti solo sotto le due ore (\"(45 minuti)\"); oltre, in ore (\"(3 ore)\"), giorni di lavoro (\"(4 giorni di lavoro)\") o settimane (\"(2 settimane)\"). Mai \"(3000 min)\".",
   "LE REGOLE DELLA PARTITA (app 0.9.285). Ogni giorno la persona gioca una partita contro il vecchio te: l'app dà punti al nuovo te o al vecchio te quando vede certi momenti. Tu fai da arbitro e da VAR: quando ti racconta un'abitudine o un'idea che la frena, o ti chiede una regola, la trasformi in una o più regole su misura per il suo obiettivo, ognuna su un momento che l'app vede da sola. I momenti (scrivi esattamente il codice): caveau (mette un'idea nel caveau), deviazione (aggiunge una cosa fuori dalla roadmap: una funzione, una pagina, un'idea nuova), tieniRighe (tiene nel foglio righe nuove con la priorità ancora aperta), taglia (taglia un'idea), passo (chiude un passo della roadmap), riga (spunta una riga del foglio), sessione (porta a termine una sessione di Full Focus), mollata (molla una sessione a metà), ceduto (interrompe un blocco), giornoSenzaDeviazioni (chiude la giornata senza aggiunte fuori rotta), giornoSenzaSessioni (chiude la giornata senza una sessione). Dalla app 0.9.290 ci sono anche: umore (segna il suo umore; condizioni votoMax o votoMin da 1 a 5), respiro (finisce un esercizio di respiro), tappa (completa una tappa della mappa), tempoTelefono (a fine giornata: il tempo passato sul telefono, con piuDi o menoDi in minuti), tempoApp (a fine giornata: il tempo su un'app, con \"app\" = il nome dell'app e piuDi o menoDi in minuti), giornoSessioni (a fine giornata: almeno N sessioni di Full Focus, con \"almeno\"). OGNI REGOLA È UN PICCOLO FLUSSO, come in n8n: QUANDO (il momento) + SE (le condizioni) + ALLORA (chi prende i punti e quanti). Le condizioni che puoi combinare: \"entro\" e \"dopo\" (un'ora, per esempio \"12:00\"), \"giorni\" (per esempio [\"lun\", \"mer\", \"ven\"]), \"parole\" (vale solo se il testo dell'idea, della riga o del passo contiene una di quelle parole), \"piuDi\" e \"menoDi\" (minuti: la durata della sessione o del respiro, il tempo sul telefono o sull'app), \"dallaVolta\" (vale dalla N-esima volta del giorno: per esempio la terza idea fuori rotta), \"maxGiorno\" (al massimo N volte al giorno). IL VAR (app 0.9.294): quando la regola deve giudicare il SENSO di un testo e non solo delle parole (per esempio: un'idea nel caveau vale solo se è un'idea vera della persona, concreta, legata ai suoi progetti, e non una frase copiata o messa lì per prendere il punto), aggiungi \"var\": true. L'app fa prima un filtro gratuito (almeno \"minParole\" parole, di serie 8; niente doppioni; il tetto del giorno con maxGiorno) e poi fa giudicare il testo da un arbitro di intelligenza artificiale economico, che dà il punto solo se è valido e altrimenti scrive \"fuorigioco\" con il motivo. Con var non servono le parole chiave: non mettere \"parole\" se non te le chiede lui. Una richiesta complicata diventa più regole insieme. Per ogni regola scegli chi prende i punti (\"nuovo\" o \"vecchio\") e quanti (da 1 a 3). Rispondi in due righe con la regola detta a parole e chiudi con ```json {\"regola\": {\"nome\": \"Le idee nuove vanno nel caveau\", \"quando\": \"caveau\", \"chi\": \"nuovo\", \"punti\": 2, \"perche\": \"una riga su come aiuta il suo obiettivo\"}} ``` (per più regole, \"regola\": [{...}, {...}]). Una cosa che l'app non vede da sola non diventa una regola: proponigli il momento più vicino.",
+  "LE STATISTICHE SU MISURA DELLA PARTITA (app 0.9.299). Nella pagina della partita ci sono le statistiche come a fine partita: vecchio te contro nuovo te. Quando ti chiede una statistica nuova (per esempio \"quante volte apro Instagram dopo le 22\" o \"i giorni in cui chiudo la priorità\"), crei una scheda con le metriche che l'app sa misurare da sola. Le chiavi (scrivi esattamente il codice): punti (i punti della partita), giorni_vinti, giorni_campo (i giorni con almeno un punto al nuovo te), sessioni (sessioni di Full Focus portate a termine contro mollate), tempo (minuti di lavoro contro minuti sulle app che distraggono), telefono (minuti sul telefono contro minuti di Full Focus), duelli (aperture delle app che distraggono contro le volte che il blocco l'ha fermato), blocchi (blocchi tenuti contro interrotti), pause (pause delle protezioni), priorita (giorni con la priorità chiusa), righe (righe del foglio spuntate contro ritirate), voti (azioni voto della sua identità contro punti al vecchio te), fuori_rotta (cose aggiunte fuori dalla roadmap), app_aperture e app_minuti (vogliono \"app\": il nome comune dell'app). Ogni voce può avere la fascia oraria \"dalle\" e \"alle\" (ore intere da 0 a 24). Rispondi in una riga con cosa misura la scheda e chiudi con ```json {\"statistica\": {\"titolo\": \"Instagram dopo le 22\", \"anelli\": [{\"k\": \"app_aperture\", \"app\": \"Instagram\", \"dalle\": 22, \"alle\": 24}], \"righe\": [{\"k\": \"app_aperture\", \"app\": \"Instagram\", \"dalle\": 22, \"alle\": 24}, {\"k\": \"app_minuti\", \"app\": \"Instagram\", \"dalle\": 22, \"alle\": 24}, {\"k\": \"sessioni\"}], \"nota\": \"una frase su cosa guardare\"}} ```. Una cosa che l'app non misura non diventa una scheda: diglielo e proponigli la metrica più vicina.",
   "I BLOCCHI E I LIMITI LI CREI TU, DENTRO DREAMMAP. L'app sa: bloccare app, siti e parole in certe ore e giorni (o tutto il giorno), e limitare il tempo su un'app (minuti all'ora e/o minuti al giorno, poi l'app si blocca). Quando ti chiede di bloccare o limitare qualcosa (per esempio \"Instagram al massimo 10 minuti all'ora e mezz'ora al giorno\"), NON spiegare le impostazioni del telefono e non dire che non puoi: lo crei. Rispondi in una o due righe con quello che hai impostato, e chiudi con un blocco ```json con {\"programma\": {\"nome\": \"Instagram a piccole dosi\", \"app\": [\"Instagram\"], \"siti\": [\"instagram.com\"], \"parole\": [], \"minutiOra\": 10, \"minutiGiorno\": 30}} ``` e niente dopo. Per un blocco a orario usa \"dalle\": \"21:00\", \"alle\": \"23:00\" (e \"giorni\": 7 valori veri/falsi da lunedì, se non sono tutti i giorni) al posto dei minuti. Le app con il loro nome comune. Se manca un dato che cambia davvero il programma, fai UNA domanda; altrimenti scegli tu il valore più ragionevole e dillo.",
   "LA MODALITÀ SEVERA NON LA SPEGNI TU (app 0.9.291). Se ti chiede di spegnere la Modalità severa, di togliere un blocco o di allentare un limite mentre è accesa, rifiuti con calma, in due righe: l'ha accesa lui per proteggersi proprio da questo momento. Poi gli dici che, se è una vera emergenza, c'è lo Sblocco di emergenza in Profilo › Aiuto e altro: se ha ancora il pass d'emergenza la spegne subito, senza domande; altrimenti passa da qualche domanda e da un'attesa sulla schermata che raddoppia ogni volta nel mese (1 minuto, poi 2, poi 4). Non proporre mai altre strade per aggirarla. Se ha già usato lo sblocco questo mese, aiutalo a trovare un metodo di uscita o regole più adatte, senza prediche.",
 ].join("\n");
@@ -1019,6 +1020,92 @@ export function registerFocusLockChatRoutes(app: Express) {
       res.status(503).json({ error: "l'identita' non ha un modello acceso", spento: !chiaveG && !process.env.AGENT_LLM_KEY });
     } catch (e: any) {
       res.status(502).json({ error: "identita: " + (e?.message || String(e)) });
+    }
+  });
+
+  /* ---- LE STATISTICHE SU MISURA DELLA PARTITA (DreamMap 0.9.299) ----
+   * Nella pagina della partita, la scheda "+": la persona scrive cosa vuole misurare ("quante volte apro Instagram dopo
+   * le 22") e l'app manda la richiesta con il CATALOGO delle metriche che sa calcolare da sola (partita-stats.js, PST_CAT:
+   * chiave, nome, come si calcola, se vuole il nome di un'app). Qui si sceglie solo QUALI metriche: i valori li calcola il
+   * telefono con i dati veri. Se la richiesta non si misura con il catalogo: misurabile = false, un messaggio e la scheda
+   * con la metrica piu' vicina. Senza modello acceso: 503 con spento, e l'app abbina per parole chiave. Non si salva niente. */
+  const STAT_USATI = new Map<string, { g: string; n: number }>();
+  app.post("/api/focuslock/agent/statistiche", async (req: Request, res: Response) => {
+    const who = await utente(req, res); if (!who) return;
+    const b = req.body ?? {};
+    const richiesta = pulisci(b.richiesta, 300);
+    if (richiesta.length < 3) { res.status(400).json({ error: "richiesta vuota" }); return; }
+    const cat = (Array.isArray(b.catalogo) ? b.catalogo : []).slice(0, 60)
+      .map((m: any) => ({ k: String(m?.k ?? "").replace(/[^a-z0-9_]/gi, "").slice(0, 40), n: pulisci(m?.n, 80), d: pulisci(m?.d, 240), app: !!m?.app }))
+      .filter((m: { k: string }) => !!m.k);
+    if (!cat.length) { res.status(400).json({ error: "catalogo vuoto" }); return; }
+    const g = new Date().toISOString().slice(0, 10);
+    const u = STAT_USATI.get(who.sub); const n = u && u.g === g ? u.n : 0;
+    if (n >= 30) { res.status(429).json({ error: "troppe schede oggi" }); return; }
+    STAT_USATI.set(who.sub, { g, n: n + 1 });
+    const chiavi = new Set<string>(cat.map((m: { k: string }) => m.k));
+    const conApp = new Set<string>(cat.filter((m: { app: boolean }) => m.app).map((m: { k: string }) => m.k));
+    const sistema = [
+      "Costruisci una SCHEDA di statistiche per la partita fra il vecchio te e il nuovo te di DreamMap. La persona scrive cosa vuole misurare; tu scegli dal catalogo le metriche che lo misurano davvero. I valori li calcola l'app: tu scegli solo le chiavi.",
+      "Ogni metrica del catalogo ha due lati: il vecchio te (quello che frena) e il nuovo te (quello che avanza). Usa SOLO le chiavi del catalogo, scritte esattamente. Le metriche segnate (app) vogliono \"app\" con il nome comune dell'app (Instagram, TikTok, YouTube).",
+      "Fascia oraria facoltativa su ogni voce: \"dalle\" e \"alle\" in ore intere da 0 a 24 (dopo le 22 = dalle 22 alle 24; prima delle 12 = dalle 0 alle 12; di notte = dalle 23 alle 6).",
+      "La scheda: \"titolo\" corto (al massimo 26 caratteri, per esempio \"Instagram dopo le 22\"), \"anelli\": 1-3 voci (la prima e' la piu' importante), \"righe\": 3-6 voci (la prima risponde alla domanda, poi le metriche vicine che aiutano a leggerla), \"nota\": una frase di massimo 14 parole su cosa guardare.",
+      "Se la richiesta NON si misura con il catalogo: \"misurabile\": false, \"messaggio\" (una o due frasi, tono complice) che lo dice e propone la metrica piu' vicina, e la \"scheda\" costruita con quella metrica. Mai inventare chiavi.",
+      "Italiano, virgolette solo \"\", mai trattini lunghi, mai la parola AI, mai \"devi\".",
+      "Rispondi SOLO in JSON: {\"misurabile\":true,\"messaggio\":\"\",\"scheda\":{\"titolo\":\"\",\"anelli\":[{\"k\":\"\"}],\"righe\":[{\"k\":\"\",\"app\":\"\",\"dalle\":22,\"alle\":24}],\"nota\":\"\"}}",
+    ].join("\n");
+    const utenteTxt = "La richiesta: " + richiesta + "\nIl catalogo:\n" + cat.map((m: { k: string; n: string; d: string; app: boolean }) => "- " + m.k + (m.app ? " (app)" : "") + ": " + m.n + ". " + m.d).join("\n");
+    const copy = (t: unknown, max: number) => String(t ?? "").replace(/[«»“”]/g, "\"").replace(/\s*[—–]\s*/g, ", ").replace(/\s+/g, " ").trim().slice(0, max);
+    const ora = (v: unknown) => { if (v === null || v === undefined || v === "") return undefined; const x = Math.round(Number(v)); return Number.isFinite(x) ? Math.max(0, Math.min(24, x)) : undefined; };
+    const voci = (l: unknown, max: number) => {
+      const out: any[] = []; const visti = new Set<string>();
+      (Array.isArray(l) ? l : []).forEach((x: any) => {
+        const k = String(typeof x === "string" ? x : (x?.k ?? "")).trim();
+        if (!chiavi.has(k)) return;
+        const o: any = { k };
+        if (conApp.has(k)) { const a = copy(x?.app, 30); if (!a) return; o.app = a; }
+        const da = ora(x?.dalle), al = ora(x?.alle);
+        if (da !== undefined) o.dalle = da; if (al !== undefined) o.alle = al;
+        const firma = JSON.stringify(o); if (visti.has(firma)) return; visti.add(firma);
+        out.push(o);
+      });
+      return out.slice(0, max);
+    };
+    const leggi = (t: string) => {
+      const j = jsonDa(String(t || ""));
+      if (!j || typeof j !== "object") return null;
+      const sc = (j.scheda && typeof j.scheda === "object") ? j.scheda : {};
+      let righe = voci(sc.righe, 6), anelli = voci(sc.anelli, 3);
+      if (!righe.length && !anelli.length) return null;
+      if (!anelli.length) anelli = [righe[0]];
+      if (!righe.length) righe = anelli.slice();
+      const out = { misurabile: j.misurabile !== false, messaggio: copy(j.messaggio, 280),
+        scheda: { titolo: copy(sc.titolo, 28) || copy(richiesta, 28), anelli, righe, nota: copy(sc.nota, 140) } };
+      if (/\bdevi\b|\bdovresti\b|\bbisogna\b/i.test(JSON.stringify(out))) out.messaggio = "";
+      return out;
+    };
+    const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
+    try {
+      if (chiaveG) {
+        const modello = process.env.DREAMMAP_RIENTRO_MODELLO || process.env.DREAMMAP_VAR_MODELLO || "gemini-2.5-flash-lite";
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+          method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt }] }],
+            generationConfig: { temperature: 0.2, maxOutputTokens: 700, responseMimeType: "application/json", thinkingConfig: { thinkingBudget: 0 } } }),
+        });
+        const j: any = await r.json().catch(() => ({}));
+        const v = r.ok ? leggi((j?.candidates?.[0]?.content?.parts || []).map((x: any) => x.text || "").join("")) : null;
+        if (v) { res.json({ ...v, modello }); return; }
+      }
+      if (process.env.AGENT_LLM_KEY) {
+        const modello = process.env.DREAMMAP_RIENTRO_CLAUDE || process.env.DREAMMAP_VAR_CLAUDE || "claude-haiku-5-5";
+        const r = await claude().messages.create({ model: modello, max_tokens: 700, temperature: 0.2, system: sistema, messages: [{ role: "user", content: utenteTxt }] });
+        const v = leggi(r.content.filter((x) => x.type === "text").map((x) => (x.type === "text" ? x.text : "")).join(""));
+        if (v) { res.json({ ...v, modello }); return; }
+      }
+      res.status(503).json({ error: "le statistiche non hanno un modello acceso", spento: !chiaveG && !process.env.AGENT_LLM_KEY });
+    } catch (e: any) {
+      res.status(502).json({ error: "statistiche: " + (e?.message || String(e)) });
     }
   });
 
