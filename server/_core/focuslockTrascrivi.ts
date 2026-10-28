@@ -22,7 +22,7 @@ import { whoIs, isIdentity } from "./focuslockRoutes";
  * Google: "only Paid Services ... in the European Economic Area"), quindi la chiave deve stare su un progetto con la
  * fatturazione attiva. Ordine: Gemini se c'e' la chiave, altrimenti (o se Gemini fallisce) Scribe. */
 const GEMINI_CHIAVE = () => process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.GEMINI_API_KEY || "";
-const GEMINI_MODELLO = () => process.env.DREAMMAP_DETTATURA_MODELLO || "gemini-2.5-flash-lite";
+const GEMINI_MODELLO = () => process.env.DREAMMAP_DETTATURA_MODELLO || "gemini-3.5-flash-lite";
 const ISTRUZIONI = "Trascrivi l'audio parola per parola, nella lingua in cui si parla (di solito italiano). Metti punteggiatura e maiuscole giuste. Togli solo le esitazioni (ehm, uhm), le false partenze e le parole ripetute due volte di fila. Non riassumere, non tradurre, non aggiungere niente, nessun commento e nessun titolo. Se nell'audio non si parla, rispondi con una stringa vuota.";
 async function conGemini(buf: Buffer, mime: string): Promise<{ testo: string; modello: string }> {
   const chiave = GEMINI_CHIAVE();
@@ -33,7 +33,7 @@ async function conGemini(buf: Buffer, mime: string): Promise<{ testo: string; mo
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: ISTRUZIONI }] },
       contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime.split(";")[0] || "audio/webm", data: buf.toString("base64") } }, { text: "Trascrivi." }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 4000, thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig: { temperature: 0, maxOutputTokens: 4000, thinkingConfig: { thinkingLevel: "minimal" } },
     }),
   });
   const j: any = await r.json().catch(() => ({}));

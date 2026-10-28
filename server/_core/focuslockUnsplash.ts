@@ -126,14 +126,14 @@ async function traduci(q: string): Promise<string> {
   const chiave = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
   if (!chiave) return q;
   try {
-    const modello = process.env.DREAMMAP_UNSPLASH_MODELLO || "gemini-2.5-flash-lite";
+    const modello = process.env.DREAMMAP_UNSPLASH_MODELLO || "gemini-3.5-flash-lite";
     const c = new AbortController(); const t = setTimeout(() => c.abort(), 4000);
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
       method: "POST", signal: c.signal, headers: { "x-goog-api-key": chiave, "content-type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: "You turn a photo search typed in any language (usually Italian) into the best short English search query for Unsplash: 1 to 4 words, lowercase, no punctuation, no quotes. If it is already English, return it unchanged. Example: libreria -> bookshelf library; casa al mare -> beach house. Reply with the query only." }] },
         contents: [{ role: "user", parts: [{ text: q }] }],
-        generationConfig: { temperature: 0, maxOutputTokens: 20, thinkingConfig: { thinkingBudget: 0 } },
+        generationConfig: { temperature: 0, maxOutputTokens: 20, thinkingConfig: { thinkingLevel: "minimal" } },
       }),
     }).finally(() => clearTimeout(t));
     const j: any = await r.json().catch(() => ({}));
