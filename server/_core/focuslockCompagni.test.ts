@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { scegliCompagno, slotValido, attivitaCompatibili, serie, primo, type Pren } from "./focuslockCompagni";
-import { giorniPrevisti, importoGiorno, scadenza, giornoDi, abitudineValida } from "./focuslockPatti";
+import { giorniPrevisti, importoGiorno, scadenza, giornoDi, abitudineValida, perBeneficenza } from "./focuslockPatti";
 
 const p = (id: number, sub: string, x: Partial<Pren> = {}): Pren => ({ id, googleSub: sub, slotAt: 1_800_000_000_000 - (1_800_000_000_000 % 900_000), durata: 50, attivita: "scrivania", silenzio: 0, preferiti: 0, stato: "attesa", createdAt: id, ...x });
 
@@ -53,5 +53,23 @@ describe("il patto: i giorni, la scadenza, il tetto", () => {
   it("un'abitudine senza giorni o senza verifica non vale", () => {
     expect(abitudineValida({ cosa: "x", giorni: [false, false, false, false, false, false, false], verifica: { tipo: "sessione" } })).toBeNull();
     expect(abitudineValida({ cosa: "x", giorni: [true, true, true, true, true, true, true], verifica: { tipo: "pensieri" } })).toBeNull();
+  });
+});
+
+describe("il patto del contratto di abitudine (0.9.302)", () => {
+  const base = { cosa: "Rispettare il contratto di abitudine", giorni: [true, true, true, true, true, true, true], entro: "23:59" };
+  it("accetta la verifica contratto, verso un amico o un ente", () => {
+    expect(abitudineValida({ ...base, verifica: { tipo: "contratto" } })?.verifica.tipo).toBe("contratto");
+    expect(abitudineValida({ ...base, verifica: { tipo: "contratto" } })?.destinazione).toBeUndefined();
+    const b = abitudineValida({ ...base, verifica: { tipo: "contratto" }, destinazione: { tipo: "beneficenza", ente: "  La Croce Rossa <di Roma>  " } });
+    expect(b?.destinazione).toEqual({ tipo: "beneficenza", ente: "La Croce Rossa di Roma" });
+  });
+  it("beneficenza senza ente non vale", () => {
+    expect(abitudineValida({ ...base, verifica: { tipo: "contratto" }, destinazione: { tipo: "beneficenza", ente: "  " } })).toBeNull();
+  });
+  it("riconosce un patto verso un ente", () => {
+    expect(perBeneficenza({ abitudine: JSON.stringify({ destinazione: { tipo: "beneficenza", ente: "Emergency" } }) })).toBe(true);
+    expect(perBeneficenza({ abitudine: JSON.stringify({ cosa: "x" }) })).toBe(false);
+    expect(perBeneficenza({ abitudine: "rotto" })).toBe(false);
   });
 });

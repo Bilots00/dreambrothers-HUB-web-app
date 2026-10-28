@@ -33,7 +33,8 @@ const GIORNO_IT = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", ye
 export function giornoDi(ms: number): string { return GIORNO_IT.format(new Date(ms)); }
 const GRAZIA_MS = 24 * 3600_000;            // dopo la scadenza: un giorno per mandare il verdetto
 const NESSUNDATO_VALE_MS = 48 * 3600_000;   // poi "nessun dato" vale come mancato
-export const VERIFICHE = ["sessione", "schermo", "passo", "riga", "coppia"];
+/* 0.9.302: "contratto" = nessuno sgarro al contratto di abitudine in quel giorno (lo decide il telefono, Contratto.java) */
+export const VERIFICHE = ["sessione", "schermo", "passo", "riga", "coppia", "contratto"];
 
 let ready: Promise<void> | null = null;
 function ensureTables(): Promise<void> {
@@ -82,7 +83,10 @@ function ensureTables(): Promise<void> {
 /* ---------------------------------------------------------------------------------------
    LE REGOLE, senza database (focuslockPatti.test.ts)
    --------------------------------------------------------------------------------------- */
-export type Abitudine = { cosa: string; dopoDi?: string; dove?: string; dueMinuti?: string; giorni: boolean[]; entro: string; verifica: { tipo: string; minuti?: number; ore?: number; parole?: string[] } };
+/* 0.9.302: la destinazione dei soldi. Di serie l'amico che fa da garante; "beneficenza" = un ente scritto da chi si
+   impegna, senza garante (il patto e' attivo subito) e senza addebiti finche' non c'e' un modo vero di donare. */
+export type Destinazione = { tipo: "amico" | "beneficenza"; ente?: string };
+export type Abitudine = { cosa: string; dopoDi?: string; dove?: string; dueMinuti?: string; giorni: boolean[]; entro: string; verifica: { tipo: string; minuti?: number; ore?: number; parole?: string[] }; destinazione?: Destinazione };
 /** I giorni in cui l'abitudine va fatta, da daGiorno a fino (compreso). giorni: 7 valori da lunedi'. */
 export function giorniPrevisti(ab: Abitudine, daGiorno: string, fino: string): string[] {
   const out: string[] = [];
@@ -119,8 +123,11 @@ export function abitudineValida(x: any): Abitudine | null {
   const tipo = String(x.verifica?.tipo || "");
   if (!cosa || !giorni || !giorni.some(Boolean) || !VERIFICHE.includes(tipo)) return null;
   const entro = /^\d{1,2}:\d{2}$/.test(String(x.entro || "")) ? String(x.entro) : "23:59";
+  const ente = String(x.destinazione?.ente || "").replace(/[\u0000-\u001f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  const destinazione: Destinazione | undefined = x.destinazione?.tipo === "beneficenza" ? (ente ? { tipo: "beneficenza", ente } : undefined) : undefined;
+  if (x.destinazione?.tipo === "beneficenza" && !destinazione) return null;
   return {
-    cosa, giorni, entro,
+    cosa, giorni, entro, ...(destinazione ? { destinazione } : {}),
     dopoDi: String(x.dopoDi || "").trim().slice(0, 120), dove: String(x.dove || "").trim().slice(0, 80), dueMinuti: String(x.dueMinuti || "").trim().slice(0, 120),
     verifica: { tipo, minuti: Math.max(0, Math.min(600, Number(x.verifica?.minuti) || 0)), ore: Math.max(0, Math.min(24, Number(x.verifica?.ore) || 0)),
       parole: (Array.isArray(x.verifica?.parole) ? x.verifica.parole : []).map((p: any) => String(p || "").trim().toLowerCase()).filter(Boolean).slice(0, 5) },
@@ -149,8 +156,13 @@ async function stripe(path: string, params: Record<string, any> = {}, method: "P
 }
 const BASE = () => String(process.env.PUBLIC_BASE_URL || "https://meta-ai-media-buyer-production.up.railway.app").replace(/\/+$/, "");
 
+export function perBeneficenza(p: any): boolean {
+  try { return JSON.parse(String(p?.abitudine || "{}"))?.destinazione?.tipo === "beneficenza"; } catch { return false; }
+}
 /** L'addebito di un giorno mancato: dalla carta di chi si impegna al conto del garante. */
 async function addebita(p: any, giorno: string, importo: number): Promise<{ id: string; stato: string }> {
+  /* 0.9.302: verso un ente non c'e' ancora nessun modo vero di mandare i soldi: l'impegno resta scritto, senza addebito */
+  if (perBeneficenza(p)) return { id: "", stato: "da_donare" };
   if (!stripeAcceso()) return { id: "", stato: "da_collegare" };
   if (!p.stripeCliente || !p.stripeMetodo) return { id: "", stato: "manca_carta" };
   if (!p.stripeConto) return { id: "", stato: "manca_conto" };
@@ -241,6 +253,7 @@ async function vistaPatto(p: any, sub: string) {
     id: Number(p.id), codice: p.codice, ruolo: p.autoreSub === sub ? "autore" : "garante",
     autore: p.autoreNome || "Chi si impegna", garante: p.garanteNome || null, firmato: !!p.garanteSub,
     abitudine: ab, posta: Number(p.posta), tetto: Number(p.tetto), daGiorno: p.daGiorno, aGiorno: p.aGiorno, stato: p.stato,
+    destinazione: ab?.destinazione?.tipo === "beneficenza" ? { tipo: "beneficenza", ente: String(ab.destinazione.ente || "") } : { tipo: "amico" },
     pagamenti: { acceso: stripeAcceso(), carta: !!p.stripeMetodo, conto: !!p.stripeConto },
     giorni: giorni.map((g: any) => ({ giorno: g.giorno, esito: g.esito, dettaglio: g.dettaglio || "", importo: Number(g.importo || 0), statoPagamento: g.statoPagamento || null })),
     totali: { mancati: giorni.filter((g: any) => g.esito === "mancato").length, rispettati: giorni.filter((g: any) => g.esito === "rispettato").length, inviati: pagati, dovuti },
@@ -251,7 +264,8 @@ export function registerFocusLockPattiRoutes(app: Express) {
   /* il controllo del server: ogni venti minuti, i giorni senza verdetto e i soldi da mandare */
   setInterval(() => { controllaPatti().catch(() => { /* il prossimo giro ci riprova */ }); }, 20 * 60_000);
 
-  /* un patto nuovo: { abitudine, posta (euro), tetto (euro al mese), durataGiorni, garanteNome, nome } */
+  /* un patto nuovo: { abitudine, posta (euro), tetto (euro al mese), durataGiorni, garanteNome, nome }
+     0.9.302: con abitudine.destinazione = { tipo: "beneficenza", ente } non c'e' garante: il patto e' attivo da domani */
   app.post("/api/focuslock/patti", async (req: Request, res: Response) => {
     const who = await chi(req, res); if (!who) return;
     const b = req.body || {};
@@ -265,8 +279,9 @@ export function registerFocusLockPattiRoutes(app: Express) {
     try {
       await ensureTables();
       const codice = randomBytes(6).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase() + String(Date.now() % 100).padStart(2, "0");
+      const benef = ab.destinazione?.tipo === "beneficenza";
       await rows(sql`INSERT INTO focuslock_patti (codice, autoreSub, autoreNome, autoreEmail, garanteNome, abitudine, posta, tetto, daGiorno, aGiorno, stato, createdAt)
-        VALUES (${codice}, ${who.sub}, ${pulisci(b.nome || who.name || "", 60) || null}, ${who.email}, ${pulisci(b.garanteNome, 60) || null}, ${JSON.stringify(ab)}, ${posta}, ${tetto}, ${daGiorno}, ${aGiorno}, 'attesa', NOW())`);
+        VALUES (${codice}, ${who.sub}, ${pulisci(b.nome || who.name || "", 60) || null}, ${who.email}, ${benef ? pulisci(ab.destinazione?.ente, 60) : (pulisci(b.garanteNome, 60) || null)}, ${JSON.stringify(ab)}, ${posta}, ${tetto}, ${daGiorno}, ${aGiorno}, ${benef ? "attivo" : "attesa"}, NOW())`);
       const p = await rows(sql`SELECT * FROM focuslock_patti WHERE codice = ${codice} LIMIT 1`);
       res.json({ patto: await vistaPatto(p[0], who.sub) });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
@@ -292,6 +307,7 @@ export function registerFocusLockPattiRoutes(app: Express) {
       const p = await rows(sql`SELECT * FROM focuslock_patti WHERE codice = ${String(req.params.codice || "").toUpperCase().slice(0, 12)} LIMIT 1`);
       if (!p.length || p[0].stato === "annullato") { res.status(404).json({ error: "patto non trovato" }); return; }
       if (p[0].autoreSub === who.sub) { res.status(409).json({ error: "questo e' il tuo patto: il garante deve essere un'altra persona" }); return; }
+      if (perBeneficenza(p[0])) { res.status(404).json({ error: "patto non trovato" }); return; }
       res.json({ patto: await vistaPatto(p[0], who.sub) });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
@@ -303,7 +319,7 @@ export function registerFocusLockPattiRoutes(app: Express) {
     try {
       await ensureTables();
       const p = await rows(sql`SELECT * FROM focuslock_patti WHERE codice = ${String(b.codice || "").toUpperCase().slice(0, 12)} LIMIT 1`);
-      if (!p.length || p[0].stato !== "attesa") { res.status(404).json({ error: "patto non trovato o gia' firmato" }); return; }
+      if (!p.length || p[0].stato !== "attesa" || perBeneficenza(p[0])) { res.status(404).json({ error: "patto non trovato o gia' firmato" }); return; }
       if (p[0].autoreSub === who.sub) { res.status(409).json({ error: "il garante deve essere un'altra persona" }); return; }
       await rows(sql`UPDATE focuslock_patti SET garanteSub = ${who.sub}, garanteNome = ${pulisci(b.nome || who.name || p[0].garanteNome || "", 60) || null}, garanteEmail = ${who.email}, stato = 'attivo', firmatoAt = NOW() WHERE id = ${p[0].id} AND stato = 'attesa'`);
       const q = await rows(sql`SELECT * FROM focuslock_patti WHERE id = ${p[0].id} LIMIT 1`);
@@ -351,9 +367,11 @@ export function registerFocusLockPattiRoutes(app: Express) {
       await ensureTables();
       const p = await rows(sql`SELECT * FROM focuslock_patti WHERE id = ${id} LIMIT 1`);
       if (!p.length) { res.status(404).json({ error: "patto non trovato" }); return; }
-      const autoreInAttesa = p[0].autoreSub === who.sub && p[0].stato === "attesa";
+      /* 0.9.302: un patto verso la beneficenza non ha garante: lo scioglie chi si impegna (nell'app, solo dopo l'attesa
+         del contratto di abitudine) */
+      const autoreInAttesa = p[0].autoreSub === who.sub && (p[0].stato === "attesa" || perBeneficenza(p[0]));
       if (p[0].garanteSub !== who.sub && !autoreInAttesa) { res.status(403).json({ error: "solo il garante scioglie un patto firmato" }); return; }
-      await rows(sql`UPDATE focuslock_patti SET stato = ${autoreInAttesa ? "annullato" : "sciolto"} WHERE id = ${id}`);
+      await rows(sql`UPDATE focuslock_patti SET stato = ${p[0].stato === "attesa" ? "annullato" : "sciolto"} WHERE id = ${id}`);
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
