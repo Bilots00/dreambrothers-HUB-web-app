@@ -271,6 +271,75 @@ export function registerFocusLockConversaRoutes(app: Express) {
     if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
     await verificaRispondi(req.body ?? {}, who.sub, res);
   });
+
+  /* ---- LA LETTURA DEL FUTURO PREPARATA IN ANTICIPO (0.9.304) ----
+   * Andrea: con Premium la lettura del Genio la fa il tuo agente. L'app chiama questa rotta appena si apre la lettura,
+   * mentre la persona conferma il sogno: quando arrivano le domande sono gia' pronte, legate al suo sogno.
+   * POST { sogno, tipo, nomeAgente, dati, domande: [{ id, t }], trigger: [{ id, t }] }
+   *   -> { persona, domande: { id: testo }, trigger: { id: testo }, modello } */
+  app.post("/api/focuslock/agent/lettura", async (req: Request, res: Response) => {
+    const who = await whoIs(req);
+    if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
+    await letturaRispondi(req.body ?? {}, who.sub, res);
+  });
+}
+
+/** La lettura del futuro con le parole del sogno: il tipo di persona che lo realizza e le domande riscritte (stesso senso). */
+export async function letturaRispondi(b: any, sub: string, res: Risposta) {
+  const g = new Date().toISOString().slice(0, 10);
+  const u = USATI.get(sub); const n = u && u.g === g ? u.n : 0;
+  if (n >= TETTO) { res.status(429).json({ error: "troppi messaggi oggi" }); return; }
+  USATI.set(sub, { g, n: n + 1 });
+  const sogno = pulisci(b.sogno, 300);
+  if (!sogno) { res.status(400).json({ error: "manca il sogno" }); return; }
+  const nome = pulisci(b.nomeAgente, 40).replace(/[<>{}\[\]`*_#|\\"]/g, "") || "Genio";
+  const tipo = pulisci(b.tipo, 16).replace(/[^a-z]/g, "");
+  const domande = (Array.isArray(b.domande) ? b.domande : []).slice(0, 24)
+    .map((x: any) => ({ id: pulisci(x?.id, 8), t: pulisci(x?.t, 200) })).filter((x: any) => /^q\d{1,2}$/.test(x.id) && x.t);
+  const trigger = (Array.isArray(b.trigger) ? b.trigger : []).slice(0, 10)
+    .map((x: any) => ({ id: pulisci(x?.id, 12), t: pulisci(x?.t, 120) })).filter((x: any) => /^[a-z]{2,12}$/.test(x.id) && x.t);
+  let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 4000); } catch { dati = "{}"; }
+  const sistema = [
+    `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap, l'app che la porta verso il suo sogno un passo alla volta.`,
+    "Stai per farle la lettura del futuro: un gioco come Akinator. Con domande chiuse e con i dati del telefono, alla fine le dici chi rischia di diventare se continua così, e che probabilità ha oggi di diventare la persona che realizza il suo sogno. Adesso prepari il testo in anticipo, mentre lei conferma il sogno.",
+    "1. \"persona\": il tipo di persona che realizza QUESTO sogno, descritta da un'abitudine concreta di tutti i giorni coerente con il sogno. Comincia con \"una persona che\", al massimo 14 parole. Esempio per il sogno \"aprire la mia palestra\": \"una persona che ogni mattina lavora al suo progetto prima di aprire il telefono\".",
+    "2. \"domande\": riscrivi ogni domanda della lettura in modo che parli del suo sogno, quando ha senso. Regole ferree: stesso significato e stesso verso (chi risponderebbe sì alla domanda originale deve rispondere sì anche alla tua); sempre una domanda chiusa, a cui si risponde Sì, Probabilmente sì, Non lo so, Probabilmente no o No; il soggetto e il momento detti per intero, mai \"in quel momento\" da solo; al massimo 120 caratteri; finisce con il punto di domanda. Se una domanda non si lega al sogno, lasciala uguale. Usa le stesse chiavi (q1, q2...).",
+    "3. \"trigger\": le risposte alla domanda \"In quale momento prendi il telefono senza pensarci?\". Riscrivile in prima persona, legate alla sua vita quando ha senso, con lo stesso significato, al massimo 60 caratteri, in modo che completino la domanda. Usa le stesse chiavi.",
+    "Italiano corretto e semplice, dai del tu. Accenti veri (è, perché, più). Virgolette solo \"\". Mai il trattino lungo, mai gergo inglese, mai \"noi\".",
+    "Rispondi SOLO in JSON: {\"persona\":\"una persona che ...\",\"domande\":{\"q1\":\"...\"},\"trigger\":{\"letto\":\"...\"}}",
+  ].join("\n\n");
+  const utente = "IL SUO SOGNO: " + sogno + (tipo ? "\nIL CAMPO DEL SOGNO: " + tipo : "")
+    + "\n\nQUELLO CHE L'APP SA DI LUI (JSON):\n" + dati
+    + "\n\nLE DOMANDE DELLA LETTURA:\n" + domande.map((x: any) => x.id + ": " + x.t).join("\n")
+    + "\n\nLE RISPOSTE ALLA DOMANDA SUL MOMENTO IN CUI PRENDE IL TELEFONO:\n" + trigger.map((x: any) => x.id + ": " + x.t).join("\n");
+  try {
+    const r = await modelloJson(sistema, utente, 1400);
+    if (!r) {
+      if (process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.AGENT_LLM_KEY) { res.status(502).json({ error: "il modello non ha risposto" }); return; }
+      res.status(503).json({ error: "la lettura non ha un modello acceso", spento: true }); return;
+    }
+    const j = jsonDa(r.testo);
+    if (!j || typeof j !== "object") { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
+    let persona = copy(j.persona, 140).replace(/[.!]+$/, "");
+    if (!/^una persona che /i.test(persona)) persona = "";
+    else persona = "una persona che " + persona.slice("una persona che ".length);
+    const outD: Record<string, string> = {};
+    const jd = j.domande && typeof j.domande === "object" ? j.domande : {};
+    for (const x of domande) {
+      const t = copy(jd[x.id], 160);
+      if (t && t.length >= 10 && t.endsWith("?")) outD[x.id] = t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    const outT: Record<string, string> = {};
+    const jt = j.trigger && typeof j.trigger === "object" ? j.trigger : {};
+    for (const x of trigger) {
+      const t = copy(jt[x.id], 80).replace(/[.?!]+$/, "");
+      if (t && t.length >= 4) outT[x.id] = t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    if (!persona && !Object.keys(outD).length) { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
+    res.json({ persona, domande: outD, trigger: outT, modello: r.modello });
+  } catch (e: any) {
+    res.status(502).json({ error: "lettura: " + (e?.message || String(e)) });
+  }
 }
 
 /** Il modello veloce (Gemini Flash-Lite, Claude Haiku di riserva): il testo JSON della risposta, o null. */
