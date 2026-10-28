@@ -35,6 +35,7 @@ import { addWatchlistChannel, refreshWatchlistChannel, refreshAllWatchlistChanne
 import { sincronizzaChargebacks, eAperto } from "./shopifyChargebacks";
 import { controllaCanali, giroWatchdog } from "./careWatchdog";
 import { dreamTeamStanza, dreamTeamAgenti, dreamTeamInvia } from "./dreamTeam";
+import { musicRouter } from "./music/router";
 import { getApifyBudget } from "./apifyBudget";
 import {
   refreshResearch, enrichPendingResearch, generateContentFromResearch,
@@ -142,6 +143,7 @@ function fmtWhen(d: Date | string): string {
 
 export const appRouter = router({
   system: systemRouter,
+  music: musicRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {

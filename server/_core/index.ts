@@ -44,6 +44,7 @@ import { registerAdsLibraryRoutes } from "./adsLibraryRoutes";
 import { registerFulfillmentRoutes } from "./fulfillmentRoutes";
 import { registerChargebackRoutes } from "./chargebackRoutes";
 import { registerDailySchedules } from "./scheduler";
+import { registerMusicRoutes } from "../music/routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -675,6 +676,7 @@ async function startServer() {
   registerSocialRoutes(app);
   registerVideoRoutes(app);
   registerClaudeRoutes(app);
+  registerMusicRoutes(app);
   registerFocusLockRoutes(app);
   registerFocusLockFeedbackRoutes(app);
   registerFocusLockAgentRoutes(app);

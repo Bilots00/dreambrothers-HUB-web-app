@@ -11,7 +11,7 @@ import {
   Sparkles, Target, Zap, MessageSquare, Calendar, PenSquare,
   Library, Images, Lightbulb, Settings as SettingsIcon, ClipboardList, Headset, Inbox, Radar, CheckCircle2,
   Newspaper, TrendingUp, Clapperboard, Moon, BookOpen, Star, Satellite, Brain, Menu, X, ShieldCheck, Users,
-  Landmark, Timer, EarOff, Wallet, CandlestickChart,
+  Landmark, Timer, EarOff, Wallet, CandlestickChart, Music, AudioLines,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -29,6 +29,11 @@ const META_ADS_ITEMS = [
   { icon: Zap, label: "Tracking", path: "/tracking", description: "Pixel & CAPI" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts", description: "Anomalie & Recovery" },
   { icon: Plug, label: "Connetti Account", path: "/connect", description: "META Business" },
+];
+
+const MUSIC_ITEMS = [
+  { icon: Music, label: "Studio", path: "/music/studio", description: "Crea musica & effetti" },
+  { icon: AudioLines, label: "Libreria", path: "/music/libreria", description: "Tracce, notte & Dream Map" },
 ];
 
 const VIDEO_ITEMS = [
@@ -89,7 +94,7 @@ const HIDDEN_ITEMS = [
 ];
 
 // Flat map for header lookup
-const ALL_ITEMS = [...META_ADS_ITEMS, ...VIDEO_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...SEO_ITEMS, ...CARE_ITEMS, ...CLAUDE_ITEMS, ...LIBRARY_ITEMS, ...FINANCE_ITEMS, ...HIDDEN_ITEMS];
+const ALL_ITEMS = [...META_ADS_ITEMS, ...MUSIC_ITEMS, ...VIDEO_ITEMS, ...GELATO_ITEMS, ...SOCIAL_ITEMS, ...SEO_ITEMS, ...CARE_ITEMS, ...CLAUDE_ITEMS, ...LIBRARY_ITEMS, ...FINANCE_ITEMS, ...HIDDEN_ITEMS];
 
 // ─── NavGroup component ───────────────────────────────────────────────────────
 function NavGroup({
@@ -187,6 +192,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const careUnread = (careConvos ?? []).filter((c) => c.unread).length;
   const { data: videoDrafts } = trpc.video.draftsList.useQuery(undefined, { enabled: !!user, refetchInterval: 60000 });
   const videoDaRevisionare = (videoDrafts ?? []).filter((d) => d.status === "draft").length;
+  const { data: musica } = trpc.music.list.useQuery(undefined, { enabled: !!user, refetchInterval: 120000 });
+  const musicNew = (musica ?? []).filter((t) => t.isNew).length;
   // I chargeback non nascono nell'app: arrivano da Shopify, che avvisa solo per
   // mail all'indirizzo proprietario dello store. Per questo il conteggio gira
   // anche qui, su ogni pagina, e non solo dentro /care/chargebacks.
@@ -291,6 +298,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             sidebarOpen={sidebarOpen}
             badges={{ "/alerts": unreadCount }}
             defaultOpen={true}
+          />
+
+          {/* MUSIC — sotto META Ads e sopra Video Editing, come chiesto da Andrea:
+              colonne sonore per le ads, loop per Dream Map, effetti da gioco. */}
+          <NavGroup
+            label="Music"
+            icon={Music}
+            color="oklch(0.7 0.17 300)"
+            items={MUSIC_ITEMS}
+            location={location}
+            navigate={navigate}
+            sidebarOpen={sidebarOpen}
+            badges={{ "/music/libreria": musicNew }}
+            defaultOpen={location.startsWith("/music")}
           />
 
           {/* VIDEO EDITING — sta tra META Ads e Print on Demand di proposito:

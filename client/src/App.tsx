@@ -23,6 +23,8 @@ import ConnectAccount from "./pages/ConnectAccount";
 import Home from "./pages/Home";
 import VideoCreative from "./pages/VideoCreative";
 import VideoAutomation from "./pages/VideoAutomation";
+import MusicStudio from "./pages/MusicStudio";
+import MusicLibrary from "./pages/MusicLibrary";
 import GelatoMaker from "./pages/GelatoMaker";
 import PodPartners from "./pages/PodPartners";
 import SocialMedia from "./pages/SocialMedia";
@@ -76,6 +78,9 @@ function AppRouter() {
       <Route path="/settings/brand">{withLayout(Settings)}</Route>
 
       {/* VIDEO EDITING */}
+      <Route path="/music/studio">{withLayout(MusicStudio)}</Route>
+      <Route path="/music/libreria">{withLayout(MusicLibrary)}</Route>
+      <Route path="/music">{withLayout(MusicStudio)}</Route>
       <Route path="/video/creative">{withLayout(VideoCreative)}</Route>
       <Route path="/video/automazione">{withLayout(VideoAutomation)}</Route>
       <Route path="/video">{() => { window.location.replace("/video/creative"); return null; }}</Route>

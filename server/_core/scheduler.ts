@@ -9,6 +9,7 @@ import { refreshAllBrands } from "../adsLibraryService";
 import { riprendiWallartAuto } from "../productArtistApprovals";
 import { sincronizzaChargebacks } from "../shopifyChargebacks";
 import { giroWatchdog } from "../careWatchdog";
+import { runNightlyBatch, resumeQueueOnBoot } from "../music/service";
 
 // Scheduler in-process (il server Railway è always-on): job giornalieri a orario
 // fisso italiano, indipendenti dai bottoni della UI e dal browser aperto.
@@ -65,6 +66,15 @@ export function registerDailySchedules() {
     console.log("[Scheduler] DATABASE_URL assente — scheduler spento (dev locale)");
     return;
   }
+
+  // Music Studio: il batch della notte (4 tracce in loop + 9 effetti da gioco),
+  // pronto in libreria al mattino con l'etichetta "New". Zero costi: e' tutta
+  // sintesi sul server. Al boot riprende i render interrotti da un deploy.
+  void resumeQueueOnBoot();
+  scheduleDaily(3, 30, "music-nightly", async () => {
+    const r = await runNightlyBatch();
+    console.log(`[Scheduler] music-nightly ${r.batch}: ${r.skipped ? "gia' fatto" : `${r.queued} brani in coda`}`);
+  });
 
   scheduleDaily(8, 45, "watchlist-refresh", async () => {
     const r = await refreshAllWatchlistChannels(OWNER_USER_ID);
