@@ -20,6 +20,7 @@ import { rows, ensureTables as ensureSocial, metricheLeggi } from "./focuslockSo
  * il telefono, con il tetto di 480 al giorno) + 30 per ogni passo della rotta spuntato. */
 
 const REAZIONI = ["cuore", "grande", "continua", "nonmollare", "centrato"];
+const DONI = ["pozione"];
 const TIERS = ["bronzo", "argento", "oro", "diamante"];
 const LEGA_MAX = 30;
 const LEGA_MIN = 5;
@@ -40,6 +41,19 @@ function ensureArena(): Promise<void> {
         giorno DATE NOT NULL,
         createdAt TIMESTAMP NULL,
         UNIQUE KEY uniq_r (da, a, tipo, giorno),
+        INDEX idx_a (a, createdAt)
+      )`);
+      /* app 0.9.305: i doni fra amici veri (la pozione della concentrazione). Uno al giorno per amico;
+         presoAt = quando chi l'ha ricevuto l'ha aperto (da li' partono i suoi 15 minuti di XP doppi). */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_doni (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NOT NULL,
+        tipo VARCHAR(12) NOT NULL,
+        giorno DATE NOT NULL,
+        createdAt TIMESTAMP NULL,
+        presoAt TIMESTAMP NULL,
+        UNIQUE KEY uniq_d (da, a, giorno),
         INDEX idx_a (a, createdAt)
       )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_insieme (
@@ -253,12 +267,17 @@ export function registerFocusLockArenaRoutes(app: Express) {
       const oggi = await rows(sql`SELECT a, tipo FROM focuslock_reazioni WHERE da = ${device} AND giorno = UTC_DATE()`);
       const mandate: Record<string, string[]> = {};
       for (const r of oggi) (mandate[String(r.a)] = mandate[String(r.a)] || []).push(String(r.tipo));
+      /* app 0.9.305: a chi ho gia' mandato un dono oggi, e i doni che ho ricevuto e non ho ancora aperto */
+      const doniOggi = new Set((await rows(sql`SELECT a FROM focuslock_doni WHERE da = ${device} AND giorno = UTC_DATE()`)).map((r) => String(r.a)));
+      const doniRicevuti = await rows(sql`SELECT d.id, d.tipo, d.da, d.createdAt, p.name, p.nick FROM focuslock_doni d JOIN focuslock_players p ON p.device = d.da
+        WHERE d.a = ${device} AND d.presoAt IS NULL AND d.createdAt > (NOW() - INTERVAL 3 DAY) ORDER BY d.id DESC LIMIT 10`);
       const amici = list.map((r) => ({
         device: String(r.device), nome: nomeDi(r), level: Number(r.level || 1),
         ffMin7: Number(r.ffMin7 || 0), streak: Number(r.streak || 0), ffStreak: Number(r.ffStreak || 0),
         neo: Number(r.neo || 0), old: Number(r.old || 0), score7: Number(r.score7 || 0), prevScore7: Number(r.prevScore7 || 0),
         tier: String(r.tier || "bronzo"), visto: r.updatedAt ? new Date(r.updatedAt).toISOString() : null,
         reazioniOggi: mandate[String(r.device)] || [],
+        donoOggi: doniOggi.has(String(r.device)),
         /* online = ha parlato col server negli ultimi dieci minuti; attivita = cosa stava facendo */
         online: !!Number(r.online), attivita: String(r.attivita || "app"),
         /* app 0.9.300: i numeri del confronto (Oggi / Settimana / Mese / Serie) */
@@ -272,7 +291,8 @@ export function registerFocusLockArenaRoutes(app: Express) {
         const c = await rows(sql`SELECT (SELECT COUNT(*) FROM focuslock_friends WHERE device = ${device}) AS seguiti, (SELECT COUNT(*) FROM focuslock_friends WHERE friend = ${device}) AS follower`);
         seguiti = Number(c[0]?.seguiti || 0); follower = Number(c[0]?.follower || 0);
       } catch (_) { /* senza contatori si vive */ }
-      res.json({ amici, seguiti, follower, reazioni: { totali: ricevute.map((x) => ({ tipo: String(x.tipo), n: Number(x.n) })), ultime: ultime.map((x) => ({ tipo: String(x.tipo), da: nomeDi(x), at: x.createdAt })) } });
+      res.json({ amici, seguiti, follower, reazioni: { totali: ricevute.map((x) => ({ tipo: String(x.tipo), n: Number(x.n) })), ultime: ultime.map((x) => ({ tipo: String(x.tipo), da: nomeDi(x), at: x.createdAt })) },
+        doni: doniRicevuti.map((x) => ({ id: Number(x.id), tipo: String(x.tipo), da: nomeDi(x), daDevice: String(x.da), at: x.createdAt })) });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "amici non disponibili" });
     }
@@ -292,6 +312,68 @@ export function registerFocusLockArenaRoutes(app: Express) {
       res.json({ ok: true, gia: false });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "reazione non salvata" });
+    }
+  });
+
+  /* ---- I DONI (app 0.9.305): la pozione della concentrazione, uno al giorno per amico ---- */
+  app.post("/api/focuslock/social/dono", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64), tipo = String(b.tipo || "pozione");
+    if (!device || !a || device === a || DONI.indexOf(tipo) < 0) { res.status(400).json({ error: "dono non valido" }); return; }
+    try {
+      await ensureArena();
+      if (!(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      const gia = await rows(sql`SELECT 1 AS k FROM focuslock_doni WHERE da = ${device} AND a = ${a} AND giorno = UTC_DATE() LIMIT 1`);
+      if (gia.length) { res.json({ ok: true, gia: true }); return; }
+      await rows(sql`INSERT IGNORE INTO focuslock_doni (da, a, tipo, giorno, createdAt) VALUES (${device}, ${a}, ${tipo}, UTC_DATE(), NOW())`);
+      res.json({ ok: true, gia: false });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "dono non salvato" });
+    }
+  });
+  /* Chi l'ha ricevuto lo apre: una volta sola (gia' = era gia' stato aperto, anche da un altro telefono). */
+  app.post("/api/focuslock/social/dono/apri", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), id = Number(b.id || 0);
+    if (!device || !(id > 0)) { res.status(400).json({ error: "dono non valido" }); return; }
+    try {
+      await ensureArena();
+      const d = await rows(sql`SELECT id, tipo, presoAt FROM focuslock_doni WHERE id = ${id} AND a = ${device} LIMIT 1`);
+      if (!d[0]) { res.status(404).json({ error: "dono non trovato" }); return; }
+      if (d[0].presoAt) { res.json({ ok: true, gia: true, tipo: String(d[0].tipo) }); return; }
+      await rows(sql`UPDATE focuslock_doni SET presoAt = NOW() WHERE id = ${id} AND a = ${device} AND presoAt IS NULL`);
+      res.json({ ok: true, gia: false, tipo: String(d[0].tipo) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "dono non aperto" });
+    }
+  });
+
+  /* LE NOVITA' PER LE NOTIFICHE (app 0.9.305). Il telefono non ha notifiche push: il servizio di
+     DreamMap (AmiciNovita.java) chiede qui ogni quarto d'ora cosa e' arrivato dopo l'ultimo id visto,
+     separato per reazioni (r) e doni (d). Con r o d negativo (la prima volta) non torna niente di
+     vecchio: solo i due id da cui ripartire, cosi' il primo giro non suona per una settimana di reazioni. */
+  app.get("/api/focuslock/social/novita", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    const r = Math.floor(Number(req.query.r ?? -1)), d = Math.floor(Number(req.query.d ?? -1));
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const maxR = Number((await rows(sql`SELECT COALESCE(MAX(id), 0) AS m FROM focuslock_reazioni WHERE a = ${device}`))[0]?.m || 0);
+      const maxD = Number((await rows(sql`SELECT COALESCE(MAX(id), 0) AS m FROM focuslock_doni WHERE a = ${device}`))[0]?.m || 0);
+      const eventi: any[] = [];
+      if (Number.isFinite(r) && r >= 0) {
+        const l = await rows(sql`SELECT x.id, x.tipo, x.da, x.createdAt, p.name, p.nick FROM focuslock_reazioni x JOIN focuslock_players p ON p.device = x.da
+          WHERE x.a = ${device} AND x.id > ${r} AND x.createdAt > (NOW() - INTERVAL 2 DAY) ORDER BY x.id ASC LIMIT 20`);
+        for (const x of l) eventi.push({ k: "reazione", id: Number(x.id), tipo: String(x.tipo), da: nomeDi(x), daDevice: String(x.da), at: x.createdAt });
+      }
+      if (Number.isFinite(d) && d >= 0) {
+        const l = await rows(sql`SELECT x.id, x.tipo, x.da, x.createdAt, p.name, p.nick FROM focuslock_doni x JOIN focuslock_players p ON p.device = x.da
+          WHERE x.a = ${device} AND x.id > ${d} AND x.presoAt IS NULL AND x.createdAt > (NOW() - INTERVAL 2 DAY) ORDER BY x.id ASC LIMIT 20`);
+        for (const x of l) eventi.push({ k: "dono", id: Number(x.id), tipo: String(x.tipo), da: nomeDi(x), daDevice: String(x.da), at: x.createdAt });
+      }
+      res.json({ eventi, r: maxR, d: maxD });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "novita non disponibili" });
     }
   });
 
