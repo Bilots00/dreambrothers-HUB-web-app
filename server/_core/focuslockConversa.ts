@@ -81,7 +81,46 @@ function troppe(chiave: string, max: number, ms: number): boolean {
 function pulisci(t: unknown, max: number): string { return String(t ?? "").replace(/\u0000/g, "").trim().slice(0, max); }
 /** Il copy che il modello sbaglia non arriva a schermo: virgolette normali, niente trattini lunghi. */
 function copy(t: unknown, max: number): string {
-  return String(t ?? "").replace(/[«»“”]/g, "\"").replace(/\s*[—–]\s*/g, ", ").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, max);
+  const s = String(t ?? "").replace(/[«»“”]/g, "\"").replace(/\s*[—–]\s*/g, ", ").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return cifre(accenti(s)).slice(0, max);
+}
+/* 0.9.303, Andrea: "novantaquattro minuti", "e'" al posto di "è". Il modello imitava gli apostrofi del prompt: il prompt
+ * adesso ha gli accenti veri, e quello che scappa lo sistema questo filtro prima dello schermo. */
+const ACCENTO: Record<string, string> = { a: "à", e: "è", i: "ì", o: "ò", u: "ù", A: "À", E: "È", I: "Ì", O: "Ò", U: "Ù" };
+function accenti(s: string): string {
+  /* gli apici singoli usati come virgolette ('segno zodiacale') diventano virgolette normali */
+  s = s.replace(/(^|[\s(:])'([^'\n]{2,80}?)'(?=[\s.,;:!?)]|$)/g, "$1\"$2\"");
+  /* la vocale con l'apostrofo in fondo alla parola e' una vocale accentata (tranne "po'"); "perche'" vuole l'acuto */
+  return s.replace(/\b([A-Za-zÀ-ÿ]*?)([aeiouAEIOU])'(?=[\s.,;:!?)"]|$)/g, (m, testa: string, v: string) => {
+    if (/^p$/i.test(testa) && /o/i.test(v)) return m;
+    if (/ch$/i.test(testa) && /e/i.test(v)) return testa + (v === "E" ? "É" : "é");
+    return testa + (ACCENTO[v] || v);
+  });
+}
+const UNITA: Record<string, number> = { due: 2, tre: 3, "tré": 3, quattro: 4, cinque: 5, sei: 6, sette: 7, otto: 8, nove: 9, uno: 1 };
+const DIECI: Record<string, number> = { dieci: 10, undici: 11, dodici: 12, tredici: 13, quattordici: 14, quindici: 15, sedici: 16, diciassette: 17, diciotto: 18, diciannove: 19 };
+const DECINE: Record<string, number> = { venti: 20, trenta: 30, quaranta: 40, cinquanta: 50, sessanta: 60, settanta: 70, ottanta: 80, novanta: 90 };
+/** "novantaquattro" -> 94 (da 2 a 99); null se non e' un numero scritto in lettere. */
+function numeroIt(w: string): number | null {
+  w = w.toLowerCase();
+  if (w in DIECI) return DIECI[w];
+  if (w in UNITA) return w === "uno" ? null : UNITA[w];
+  for (const d of Object.keys(DECINE)) {
+    const radice = d.slice(0, -1);
+    if (w === d) return DECINE[d];
+    if (!w.startsWith(radice)) continue;
+    let resto = w.slice(radice.length);
+    if (resto.startsWith(d.slice(-1))) resto = resto.slice(1);
+    if (resto in UNITA) return DECINE[d] + UNITA[resto];
+  }
+  return null;
+}
+/** I numeri davanti a minuti, ore, giorni... sempre in cifre: "94 minuti", "3 ore". */
+function cifre(s: string): string {
+  return s.replace(/\b([a-zà-ù]{3,16})\s+(minuti|ore|giorni|volte|settimane|mesi|anni|secondi)\b/gi, (m, w: string, u: string) => {
+    const n = numeroIt(w);
+    return n == null ? m : n + " " + u;
+  });
 }
 function jsonDa(t: string): any { const a = t.indexOf("{"), b = t.lastIndexOf("}"); if (a < 0 || b <= a) return null; try { return JSON.parse(t.slice(a, b + 1)); } catch { return null; } }
 let CLAUDE: Anthropic | null = null;
@@ -92,39 +131,46 @@ function claude(): Anthropic { if (!CLAUDE) CLAUDE = new Anthropic({ apiKey: Str
  * --------------------------------------------------------------------------------------- */
 const SCOPO: Record<Tipo, string> = {
   sera: [
-    "LA REVISIONE DELLA SERA (il metodo di Davy Fogarty: il segreto e' la revisione, e per quello che ti ha interrotto non si promette piu' impegno, si cambia il sistema).",
+    "LA REVISIONE DELLA SERA (il metodo di Davy Fogarty: il segreto è la revisione, e per quello che ti ha interrotto non si promette più impegno, si cambia il sistema).",
     "Le fasi, in quest'ordine, una domanda per messaggio, seguendo quello che dice:",
     "focus: durante i blocchi di lavoro profondo di oggi era davvero concentrato? (usa le sessioni di Full Focus e il tempo sulle app)",
-    "leva: ha lavorato sulle cose ad alta leva, quelle che avvicinano il sogno, o su quelle facili? (usa la priorita' di oggi e le cose chiuse)",
+    "leva: ha lavorato sulle cose ad alta leva, quelle che avvicinano il sogno, o su quelle facili? (usa la priorità di oggi e le cose chiuse)",
     "inter: cosa, di preciso, lo ha interrotto oggi? Quando lo dice, scrivi la chiave in \"trigger\".",
     "sistema: cosa cambia nel SISTEMA da domani. Qui proponi il piano su misura per quel grilletto (\"piano\").",
-    "imprevisto: c'e' stato un imprevisto, o sta arrivando qualcosa che cambia i suoi piani?",
+    "imprevisto: c'è stato un imprevisto, o sta arrivando qualcosa che cambia i suoi piani?",
     "fine: chiudi con una frase calda e il riepilogo.",
   ].join("\n"),
   settimana: [
-    "LA REVISIONE DELLA SETTIMANA. Fasi: p1 la cosa piu' importante che ha chiuso; p2 cosa l'ha portato piu' fuori strada in questi sette giorni (scrivi la chiave in \"trigger\");",
+    "LA REVISIONE DELLA SETTIMANA. Fasi: p1 la cosa più importante che ha chiuso; p2 cosa l'ha portato più fuori strada in questi sette giorni (scrivi la chiave in \"trigger\");",
     "p3 cosa taglia dalla prossima settimana (qui proponi il piano su misura per quel grilletto); p4 la mossa della settimana prossima, una sola, con un verbo; fine.",
   ].join("\n"),
-  mese: "LA REVISIONE DEL MESE. Fasi: p1 quanto e' avanzato verso la tappa dell'anno; p2 il mese in una riga; p3 cosa smette di fare da adesso (se e' un'abitudine o un'app, scrivi la chiave in \"trigger\" e proponi il piano); p4 cosa raddoppia il mese prossimo; fine.",
-  trimestre: "LA REVISIONE DEL TRIMESTRE. Fasi: p1 il sogno e' ancora lo stesso; p2 il risultato piu' grande di questi tre mesi; p3 cosa cambia nel sistema per i prossimi tre mesi (proponi il piano); p4 un rischio che vede arrivare; fine.",
-  anno: "LA REVISIONE DELL'ANNO. Fasi: p1 l'anno in una riga; p2 il sogno con cui e' partito e' ancora il suo; p3 cosa lascia nell'anno vecchio (proponi il piano se e' un'abitudine); p4 la promessa per l'anno nuovo, una sola; fine.",
+  mese: "LA REVISIONE DEL MESE. Fasi: p1 quanto è avanzato verso la tappa dell'anno; p2 il mese in una riga; p3 cosa smette di fare da adesso (se è un'abitudine o un'app, scrivi la chiave in \"trigger\" e proponi il piano); p4 cosa raddoppia il mese prossimo; fine.",
+  trimestre: "LA REVISIONE DEL TRIMESTRE. Fasi: p1 il sogno è ancora lo stesso; p2 il risultato più grande di questi tre mesi; p3 cosa cambia nel sistema per i prossimi tre mesi (proponi il piano); p4 un rischio che vede arrivare; fine.",
+  anno: "LA REVISIONE DELL'ANNO. Fasi: p1 l'anno in una riga; p2 il sogno con cui è partito è ancora il suo; p3 cosa lascia nell'anno vecchio (proponi il piano se è un'abitudine); p4 la promessa per l'anno nuovo, una sola; fine.",
   rientro: [
-    "RIENTRA IN ROTTA: la data in cui arriva al sogno si e' spostata, e lo aiuti a rientrare come uno psicologo pratico.",
-    "Fasi: prima: cosa e' successo (un imprevisto, una tentazione, niente da segnalare); grilletto: cosa c'era subito prima, il momento, cosa provava (quando lo dice, scrivi la chiave in \"trigger\");",
-    "tenuto: se c'entra un'app, cosa l'ha tenuto li'; piano: proponi il piano su misura per quel grilletto; patto: scrivete insieme il patto \"Se succede..., allora io...\"; fine.",
-    "Se non c'e' niente da segnalare e i dati lo confermano, chiudi subito con un incoraggiamento.",
+    "RIENTRA IN ROTTA: la data in cui arriva al sogno si è spostata, e lo aiuti a rientrare come uno psicologo pratico.",
+    "LO SPOSTAMENTO. Quanto si è spostato l'arrivo e perché sta in dati.spostamento: \"quanto\" (già scritto per intero, per esempio \"13 ore\" o \"1 giorno e 4 ore\": ripetilo uguale, mai arrotondarlo a un giorno) e \"cause\" (le cause vere calcolate dal navigatore dell'app, ognuna con il suo spostamento). Attribuisci lo spostamento SOLO a quelle cause. Il tempo sulle app non ha spostato la data da solo: puoi dire dove è andato il tempo, mai che i minuti su un'app \"hanno fatto slittare\" l'arrivo. Se \"quanto\" è vuoto, la data non si è mossa: non parlare di slittamento.",
+    "Fasi:",
+    "prima: nel primo messaggio di' di quanto si è spostato l'arrivo e la sua causa vera, poi chiedi cosa è successo (un imprevisto, una tentazione, niente da segnalare).",
+    "grilletto: il grilletto lo DEDUCI TU dai dati, non lo chiedi. Se c'è dati.sgarro, leggi neiQuarantacinqueMinutiPrima e inizioDelloSgarro (cosa ha aperto e fatto, minuto per minuto, con \"cosa\" quando c'è: la ricerca, il sito, il video, la domanda all'AI) e racconta la sequenza in modo concreto, con gli orari e le app, per esempio: \"Alle 9:05 hai aperto Chrome e cercato \"segno zodiacale ariete\", poi sei rimasto su Google per 21 minuti, e da lì sei passato a Instagram.\" Di' qual è secondo te il grilletto (la prima cosa che ha aperto la porta) e chiedi SOLO di confermare, per esempio \"È andata così?\". Mai fargli ricostruire la giornata a memoria. Quando conferma, scrivi la chiave in \"trigger\". Se non c'è dati.sgarro, chiedi in italiano naturale: \"Cosa stavi facendo subito prima?\" oppure \"Cosa ti ha portato lì?\".",
+    "tenuto: se c'entra un'app, cosa l'ha tenuto lì (una sola domanda, breve).",
+    "piano: proponi una prevenzione CONCRETA legata a quel grilletto, con il \"piano\". Esempio: se lo sgarro è nelle prime ore del giorno (sgarro.nellePrimeOreDelGiorno, e dati.inizioGiornata dice a che ora ha preso il telefono e cosa ha aperto nella prima ora), proponi un \"blocco\" di quelle app dal primo uso fino a 2 o 3 ore dopo, così la prima ora va alla cosa più importante (dati.cosaFare). Il blocco si crea solo se lui dice sì: è l'app a chiederglielo.",
+    "patto: scrivete insieme il patto \"Se succede..., allora io...\"; fine.",
+    "Se non c'è niente da segnalare e i dati lo confermano, chiudi subito con un incoraggiamento.",
   ].join("\n"),
 };
 
 const REGOLE = [
-  "COME PARLI. Ogni risposta comincia riprendendo con parole tue quello che ha appena detto, in modo che si senta capito (per esempio \"Ho capito: alle 10 eri su Instagram per scaricare la tensione.\"). Mai la stessa apertura due volte di fila.",
-  "Usa i DATI VERI della giornata: nomina le app, le fasce orarie e i minuti che trovi nei dati. Mai inventare un numero che non c'e'.",
+  "COME PARLI. Ogni risposta comincia riprendendo con parole tue quello che ha appena detto, in modo che si senta capito (per esempio \"Ho capito: alle 10 eri su Instagram per scaricare la tensione.\"). Mai la stessa apertura due volte di fila. Le sue parole riprendile alla seconda persona (lui scrive \"ci sono cascato\", tu dici \"ci sei cascato\"), mai copiate in prima persona.",
+  "Usa i DATI VERI della giornata: nomina le app, le fasce orarie e i minuti che trovi nei dati. Mai inventare un numero che non c'è.",
+  "NUMERI SEMPRE IN CIFRE: \"94 minuti\", \"2 ore\", \"alle 9:05\", mai \"novantaquattro minuti\". Accenti veri: è, perché, più, già, così, può, sì. Mai \"e'\", \"perche'\", \"piu'\".",
   "Una sola domanda per messaggio, alla fine. Da 2 a 4 frasi brevi, massimo 70 parole. Dai del tu.",
-  "MAI farlo sentire in colpa, mai prediche, mai \"dovresti\". Gli mostri dove sta andando e se la direzione e' ancora quella di partenza: la scelta e' sua.",
-  "Italiano semplice e intero: ogni frase con il verbo e la cosa di cui parli, mai \"in quel momento\" senza dire quale. Virgolette solo \"\", mai le caporali. Mai il trattino lungo. Mai la forma \"non e' X, e' Y\". Mai gergo inglese.",
-  "IL PIANO. Quando conosci il grilletto proponi UN piano su misura, detto in una o due frasi, e chiedi se lo vuole applicare. Il piano puo' essere: \"blocco\" di app in una fascia oraria (app SOLO fra i pacchetti nei dati, dalle e alle in HH:MM, giorni 7 booleani da lunedi'); \"limite\" di minuti al giorno su un'app; oppure una prevenzione senza blocco con \"azione\" fra: focus (una sessione di Full Focus con le notifiche chiuse), caveau (le idee nuove nel caveau), respiro (un respiro guidato prima del lavoro), notifiche (spegnere le notifiche di un'app), mattina (il lavoro difficile quando ha piu' energia). Il piano NON si applica da solo: l'app chiede il si' alla persona.",
-  "Se la persona dice di si' al piano, non riproporlo: vai alla fase dopo.",
-  "Le statistiche anonime (\"imparato\") dicono cosa capita piu' spesso e cosa ha aiutato altre persone con un sogno simile: usale solo come ispirazione, mai come fatto su di lui, e mai dire che vengono da altri utenti con nomi o numeri.",
+  "Le domande hanno senso compiuto e suonano come le direbbe una persona: \"Cosa stavi facendo subito prima?\", \"Cosa ti ha portato lì?\". Mai frasi spezzate o rovesciate come \"Subito prima, che cosa c'era?\".",
+  "MAI farlo sentire in colpa, mai prediche, mai \"dovresti\". Gli mostri dove sta andando e se la direzione è ancora quella di partenza: la scelta è sua.",
+  "Italiano semplice e intero: ogni frase con il verbo e la cosa di cui parli, mai \"in quel momento\" senza dire quale. Virgolette solo \"\", mai le caporali né gli apici singoli. Mai il trattino lungo. Mai la forma \"non è X, è Y\". Mai gergo inglese.",
+  "IL PIANO. Quando conosci il grilletto proponi UN piano su misura e concreto, detto in una o due frasi, e chiedi se lo vuole applicare. Il piano può essere: \"blocco\" di app in una fascia oraria (app SOLO fra i pacchetti nei dati, dalle e alle in HH:MM, giorni 7 booleani da lunedì); \"limite\" di minuti al giorno su un'app; oppure una prevenzione senza blocco con \"azione\" fra: focus (una sessione di Full Focus con le notifiche chiuse), caveau (le idee nuove nel caveau), respiro (un respiro guidato prima del lavoro), notifiche (spegnere le notifiche di un'app), mattina (il lavoro difficile quando ha più energia). Il piano NON si applica da solo: l'app chiede il sì alla persona.",
+  "Se la persona dice di sì al piano, non riproporlo: vai alla fase dopo.",
+  "Le statistiche anonime (\"imparato\") dicono cosa capita più spesso e cosa ha aiutato altre persone con un sogno simile: usale solo come ispirazione, mai come fatto su di lui, e mai dire che vengono da altri utenti con nomi o numeri.",
 ].join("\n");
 
 const FORMATO = [
@@ -214,6 +260,77 @@ export function registerFocusLockConversaRoutes(app: Express) {
     if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
     await conversaRispondi(req.body ?? {}, who.sub, res);
   });
+
+  /* ---- LA PROVA DELLA CONSAPEVOLEZZA (0.9.303) ----
+   * "Ti ricordi cosa stavi facendo stamattina alle 9?" "Si'." "Cosa stavi facendo?" La persona lo scrive o lo detta, e
+   * il suo agente lo confronta con quello che dice il telefono in quell'ora.
+   * POST { domanda, momento, risposta, nomeAgente, dati: { ora, app: [{ nome, min }], eventi: [{ ora, app, min, cosa? }] } }
+   *   -> { esito: "preso" | "vicino" | "sbagliato" | "nonsi", testo, modello } */
+  app.post("/api/focuslock/agent/verifica", async (req: Request, res: Response) => {
+    const who = await whoIs(req);
+    if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
+    await verificaRispondi(req.body ?? {}, who.sub, res);
+  });
+}
+
+/** Il modello veloce (Gemini Flash-Lite, Claude Haiku di riserva): il testo JSON della risposta, o null. */
+async function modelloJson(sistema: string, utente: string, maxTok: number): Promise<{ testo: string; modello: string } | null> {
+  const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
+  if (chiaveG) {
+    const modello = process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || process.env.DREAMMAP_VAR_MODELLO || "gemini-3.5-flash-lite";
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+        method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utente }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: maxTok, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } } }),
+      });
+      const j: any = await r.json().catch(() => ({}));
+      const t = r.ok ? (j?.candidates?.[0]?.content?.parts || []).map((x: any) => x.text || "").join("") : "";
+      if (t) return { testo: t, modello };
+    } catch { /* si prova la riserva */ }
+  }
+  if (process.env.AGENT_LLM_KEY) {
+    const modello = process.env.DREAMMAP_CONVERSA_CLAUDE || process.env.DREAMMAP_RIENTRO_CLAUDE || "claude-haiku-5-5";
+    const r = await claude().messages.create({ model: modello, max_tokens: maxTok, temperature: 0.3, system: sistema, messages: [{ role: "user", content: utente }] });
+    const t = r.content.filter((x) => x.type === "text").map((x) => (x.type === "text" ? x.text : "")).join("");
+    if (t) return { testo: t, modello };
+  }
+  return null;
+}
+
+const ESITI = new Set(["preso", "vicino", "sbagliato", "nonsi"]);
+export async function verificaRispondi(b: any, sub: string, res: Risposta) {
+  const g = new Date().toISOString().slice(0, 10);
+  const u = USATI.get(sub); const n = u && u.g === g ? u.n : 0;
+  if (n >= TETTO) { res.status(429).json({ error: "troppi messaggi oggi" }); return; }
+  USATI.set(sub, { g, n: n + 1 });
+  const risposta = pulisci(b.risposta, 600), momento = pulisci(b.momento, 60);
+  if (!risposta || !momento) { res.status(400).json({ error: "manca la risposta o il momento" }); return; }
+  const nome = pulisci(b.nomeAgente, 40).replace(/[<>{}\[\]`*_#|\\"]/g, "") || "Genio";
+  let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 5000); } catch { dati = "{}"; }
+  const sistema = [
+    `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap. Le hai chiesto cosa stava facendo ${momento}: ha risposto, e adesso confronti la sua risposta con quello che dice il telefono in quell'ora.`,
+    "Il telefono vede solo il telefono: le app aperte, i minuti, e quando c'è \"cosa\" la ricerca, il sito, il video. Quello che faceva lontano dal telefono non lo vede.",
+    "Gli esiti: \"preso\" SOLO se la sua risposta corrisponde all'attività principale di quell'ora (la prima app in \"app\", quella con più minuti) (anche con parole diverse: \"guardavo reel\" vale Instagram, \"cercavo una cosa\" vale Google o Chrome); \"vicino\" se ha detto un'app o una cosa che c'era ma non la principale (per esempio la seconda app), o la principale detta in modo vago; \"sbagliato\" se ha detto una cosa diversa da quello che dice il telefono; \"nonsi\" se parla di una cosa fuori dal telefono (\"studiavo\", \"ero in palestra\") e il telefono in quell'ora è stato usato poco, quindi non si può dire. Esempio: il telefono dice Google 33 minuti e lui scrive \"lavoravo al logo\": è \"sbagliato\" (il telefono in quell'ora era su Google per più di mezz'ora), e lo dici senza accusarlo.",
+    "Prima di decidere scrivi in \"confronto\" in poche parole cosa ha detto lui e qual è l'attività principale per il telefono: l'esito viene da quel confronto.",
+    "Il \"testo\" è il verdetto: 1 o 2 frasi brevi, che cominciano dall'esito (\"Ci hai preso:\", \"Ci sei andato vicino:\", \"Non era così:\") e dicono cosa dice il telefono con il quando per intero (\"" + momento + "\"), le app e i minuti. Metti tra asterischi singoli (*così*) il nome dell'app principale. Mai colpe, mai prediche, mai \"dovresti\".",
+    "Numeri sempre in cifre (\"33 minuti\", \"alle 9:05\"). Accenti veri (è, perché, più). Virgolette solo \"\". Mai il trattino lungo. Dai del tu.",
+    "Rispondi SOLO in JSON: {\"confronto\":\"lui dice ...; il telefono dice ...\",\"esito\":\"preso|vicino|sbagliato|nonsi\",\"testo\":\"...\"}",
+  ].join("\n\n");
+  const utente = "LA DOMANDA: " + pulisci(b.domanda, 200) + "\n\nLA SUA RISPOSTA: " + risposta + "\n\nCOSA DICE IL TELEFONO IN QUELL'ORA (JSON):\n" + dati;
+  try {
+    const r = await modelloJson(sistema, utente, 300);
+    if (!r) {
+      if (process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.AGENT_LLM_KEY) { res.status(502).json({ error: "il modello non ha risposto" }); return; }
+      res.status(503).json({ error: "la verifica non ha un modello acceso", spento: true }); return;
+    }
+    const j = jsonDa(r.testo);
+    const testo = j ? copy(j.testo, 320) : "";
+    if (!testo) { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
+    res.json({ esito: ESITI.has(String(j.esito)) ? String(j.esito) : "nonsi", testo, modello: r.modello });
+  } catch (e: any) {
+    res.status(502).json({ error: "verifica: " + (e?.message || String(e)) });
+  }
 }
 
 type Risposta = { status: (n: number) => Risposta; json: (x: any) => any };
@@ -228,7 +345,7 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
     const nome = pulisci(b.nomeAgente, 40).replace(/[<>{}\[\]`*_#|\\"]/g, "") || "Genio";
     const messaggi = (Array.isArray(b.messaggi) ? b.messaggi : []).slice(-24)
       .map((m: any) => ({ chi: m?.chi === "io" ? "io" : "genio", t: pulisci(m?.t, 1500) })).filter((m: any) => m.t);
-    let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 9000); } catch { dati = "{}"; }
+    let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 14000); } catch { dati = "{}"; }
     let fasi: Record<string, string[]> = {};
     try {
       const f = b.fasi && typeof b.fasi === "object" ? b.fasi : {};
@@ -253,8 +370,8 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
     const utenteTxt = "I DATI VERI (JSON):\n" + dati
       + "\n\nLE RISPOSTE PRONTE PER FASE (l'app le mostra come pillole):\n" + JSON.stringify(fasi)
       + (imparato ? "\n\nIMPARATO DA PERSONE CON UN SOGNO SIMILE (conteggi anonimi):\n" + JSON.stringify(imparato).slice(0, 1500) : "")
-      + "\n\nLA CONVERSAZIONE FINORA:\n" + (messaggi.length ? messaggi.map((m: any) => (m.chi === "io" ? "Persona: " : "Tu: ") + m.t).join("\n") : "(comincia tu: saluta in una riga, di' cosa hai visto nei dati di piu' importante e fai la prima domanda)")
-      + (b.evento === "piano_applicato" ? "\n\nLA PERSONA HA APPENA DETTO SI' AL PIANO e l'app l'ha applicato: confermalo in una riga, senza riproporlo, e passa alla fase dopo con la sua domanda." : "")
+      + "\n\nLA CONVERSAZIONE FINORA:\n" + (messaggi.length ? messaggi.map((m: any) => (m.chi === "io" ? "Persona: " : "Tu: ") + m.t).join("\n") : "(comincia tu: saluta in una riga, di' cosa hai visto nei dati di più importante e fai la prima domanda)")
+      + (b.evento === "piano_applicato" ? "\n\nLA PERSONA HA APPENA DETTO SÌ AL PIANO e l'app l'ha applicato: confermalo in una riga, senza riproporlo, e passa alla fase dopo con la sua domanda." : "")
       + (b.evento === "piano_rifiutato" ? "\n\nLA PERSONA HA DETTO NO AL PIANO: rispetta la scelta in una riga, senza insistere, e passa alla fase dopo con la sua domanda." : "")
       + "\n\nRisposte della persona finora: " + turni +(turni >= 6 ? ". CHIUDI ADESSO con fine: true e il riepilogo." : ".");
     const ora = (t: unknown) => { const m = String(t ?? "").match(/^(\d{1,2})[:.](\d{2})$/); return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
