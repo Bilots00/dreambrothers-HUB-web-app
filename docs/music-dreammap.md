@@ -152,7 +152,7 @@ In `content/episodi.json` aggiungi a un episodio una chiave facoltativa `"musica
 
 Un brano che non li passa non entra in libreria: dopo 3 semi diversi viene segnato come "scartato dal controllo".
 
-- **Loudness** -18 LUFS per l'ambient, -14 per gli spot, -16 per gli effetti, con tolleranza ±1.
+- **Loudness** -18 LUFS per l'ambient e -14 per gli spot, con tolleranza ±1. Per gli effetti -16 è l'obiettivo, non un cancello: un click di mezzo secondo non ci arriva senza sfondare il tetto dei picchi, quindi resta più basso (nel primo batch di produzione: click -20,6, mystery box -17,4).
 - **True peak** sotto -1 dBTP. Il tetto è -1,5.
 - **Silenzio**: niente silenzio in apertura (più di 1 s per l'ambient, più di 30 ms per un effetto) e niente buchi morti (più di 1,5 s sotto -45 dBFS).
 - **Giunzione del loop**: salto RMS sotto 3 dB, salto di campione sotto 25 volte il tipico.
