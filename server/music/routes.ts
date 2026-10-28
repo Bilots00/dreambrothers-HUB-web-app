@@ -1,13 +1,13 @@
 /**
  * Le porte HTTP del Music Studio.
- *   GET /api/music/file/:id.mp3           — la web app (cookie di sessione); ?dl=1 per scaricare
+ *   GET /api/music/file/:id.mp3           — la web app (stesso utente di tRPC); ?dl=1 per scaricare
  *   GET /api/focuslock/music/manifest     — Dream Map: elenco pubblico delle tracce pubblicate
  *   GET /api/focuslock/music/:id.mp3      — Dream Map: il file, solo se pubblicato
  * Il prefisso /api/focuslock/ non e' un caso: il bridge nativo dell'app
  * (NATIVE.publicApi) accetta solo quello.
  */
 import type { Express, Request, Response } from "express";
-import { sdk } from "../_core/sdk";
+import { createContext } from "../_core/context";
 import { dreamMapManifest, getTrack, readAudio } from "./service";
 
 function sendAudio(req: Request, res: Response, buf: Buffer, opts: { filename?: string; immutable?: boolean }) {
@@ -43,7 +43,9 @@ function publicBase(req: Request): string {
 export function registerMusicRoutes(app: Express) {
   app.get("/api/music/file/:id.mp3", async (req, res) => {
     try {
-      const user = await sdk.authenticateRequest(req).catch(() => null);
+      // Lo stesso utente che vede tRPC: oggi la web app e' a utente unico, senza
+      // login, e chiedere qui un cookie di sessione dava 401 in produzione.
+      const { user } = await createContext({ req, res } as unknown as Parameters<typeof createContext>[0]);
       if (!user) { res.status(401).json({ error: "login richiesto" }); return; }
       const id = Number(req.params.id);
       const t = await getTrack(id);
