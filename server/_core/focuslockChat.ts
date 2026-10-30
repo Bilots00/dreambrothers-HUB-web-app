@@ -985,7 +985,11 @@ export function registerFocusLockChatRoutes(app: Express) {
       "vote_actions: tre azioni minime da 2-25 minuti, in prima persona al presente. affirmations: 30 frasi brevi al presente. credenze: 3. nonPiu: 2-3 frasi \"Non ... piu'\".",
       "Rispondi SOLO in JSON: {\"identity_statement\":\"Sono una persona che...\",\"traits\":[\"\",\"\",\"\"],\"old_self_line\":\"Prima dicevo: \\\"sto cercando di...\\\"\",\"new_self_line\":\"Ora dico: \\\"sono una persona che...\\\"\",\"vote_actions\":[\"\",\"\",\"\"],\"affirmations\":[\"...\"],\"credenze\":[\"\"],\"nonPiu\":[\"\"]}",
     ].join("\n");
-    const utenteTxt = "Il sogno: " + pulisci(b.sogno, 300) + "\nLa categoria: " + pulisci(b.categoria, 40) + "\nIl blocco principale del Sabotatore: " + pulisci(b.blocco, 40) + "\nLe risposte: " + risposte;
+    /* app 0.9.307: le risposte in parole; dove la persona ha messo in ordine le scelte, arrivano numerate e la prima e'
+     * quella che conta di piu' (il collo di bottiglia). */
+    let inParole = ""; try { const t = b.risposte_testo && typeof b.risposte_testo === "object" ? b.risposte_testo : {}; inParole = Object.keys(t).map((k) => "- " + pulisci(k, 30) + ": " + pulisci(t[k], 600)).join("\n").slice(0, 3000); } catch { /* niente */ }
+    const utenteTxt = "Il sogno: " + pulisci(b.sogno, 300) + "\nLa categoria: " + pulisci(b.categoria, 40) + "\nIl blocco principale del Sabotatore: " + pulisci(b.blocco, 40) + "\nLe risposte: " + risposte
+      + (inParole ? "\nLe risposte in parole (quando sono numerate, la prima e' quella che conta di piu': costruisci l'identita' e le tre azioni soprattutto su quella):\n" + inParole : "");
     const copy = (t: unknown, max: number) => String(t ?? "").replace(/[«»“”]/g, "\"").replace(/\s*[—–]\s*/g, ", ").replace(/\s+/g, " ").trim().slice(0, max);
     const lista = (l: unknown, n: number, max: number) => (Array.isArray(l) ? l : []).map((x) => copy(x, max)).filter(Boolean).slice(0, n);
     const leggi = (t: string) => {

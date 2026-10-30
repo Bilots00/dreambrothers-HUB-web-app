@@ -26,7 +26,13 @@ import { getDb } from "../db";
 const FOCUSLOCK_WEB_CLIENT_ID = process.env.FOCUSLOCK_GOOGLE_CLIENT_ID
   || "516399834954-he4ihicio4ant68p0bgbq8p49ib92bp8.apps.googleusercontent.com";
 
-const MAX_BACKUP_BYTES = 512 * 1024; // un backup reale pesa qualche KB; questo è un tetto, non una stima
+/* DreamMap 0.9.307: il tetto era 512 KB ("un backup reale pesa qualche KB"). Non e' piu' vero da settembre: il backup
+   porta tutte le chiavi dell'app (`web`, fino a 3 MB lato telefono, flWebDump) e la riga di sistema `fl:mobile-rules` e'
+   lo SPECCHIO che il computer legge. Il 15/10 quella riga pesava 518.232 byte: da li' ogni PUT del telefono riceveva 413
+   "backup too large", l'app lo ingoiava in silenzio e il computer e' rimasto per due settimane al viaggio del 15/10
+   (livello 1, mappa e tappe di prima del reset del 28/10). Anche il backup personale del telefono era fermo al 15/10.
+   La colonna e' MEDIUMTEXT (16 MB): 8 MB stanno larghi sopra ai 3 MB del telefono anche con le virgolette escapate. */
+const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
 const FORBIDDEN_KEYS = ["strict", "strictMode", "pin", "pinHash", "pinSalt"];
 
 let tableReady: Promise<void> | null = null;
