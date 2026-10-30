@@ -78,6 +78,13 @@ export function ensureMusicTables(): Promise<void> {
         data MEDIUMBLOB NOT NULL,
         PRIMARY KEY (trackId, idx)
       )`);
+      /* 0.9.308: dmAuto = pubblicata da sola dal batch notturno (Andrea non l'ha scelta a mano). Serve alla pulizia:
+         quelle automatiche dopo 30 giorni se ne vanno come le altre notturne, quelle scelte a mano restano. */
+      try { await exec(sql`ALTER TABLE music_tracks ADD COLUMN dmAuto TINYINT NOT NULL DEFAULT 0`); }
+      catch (e: any) {
+        const why = [e?.code, e?.message, e?.cause?.code, e?.cause?.message].filter(Boolean).join(" ");
+        if (!/duplicate column|ER_DUP_FIELDNAME/i.test(why || String(e))) throw e;
+      }
     })().catch((e) => { ready = null; throw e; });
   }
   return ready;
@@ -142,7 +149,7 @@ async function runQueue() {
   running = true;
   try {
     for (;;) {
-      const next = (await rows(sql`SELECT id, spec, attempts, title FROM music_tracks WHERE status = 'queued' ORDER BY id ASC LIMIT 1`))[0];
+      const next = (await rows(sql`SELECT id, spec, attempts, title, source FROM music_tracks WHERE status = 'queued' ORDER BY id ASC LIMIT 1`))[0];
       if (!next) break;
       const id = Number(next.id);
       await exec(sql`UPDATE music_tracks SET status = 'rendering', updatedAt = NOW() WHERE id = ${id}`);
@@ -159,6 +166,7 @@ async function runQueue() {
           await exec(sql`UPDATE music_tracks SET status = 'ready', attempts = ${attempts}, error = NULL, seed = ${s.seed},
             metrics = ${JSON.stringify(r.metrics)}, durationSec = ${r.durationSec}, loopStartSec = ${r.loopStartSec}, loopSec = ${r.loopSec},
             bpm = ${r.bpm}, keyName = ${r.key}, mood = ${r.mood}, bytes = ${r.mp3.length}, updatedAt = NOW() WHERE id = ${id}`);
+          if (next.source === "nightly") await autoPublish(id);
           done = true;
         } catch (e: any) {
           err = String(e?.message || e).slice(0, 2000);
@@ -225,17 +233,36 @@ export async function deleteTrack(userId: number, id: number) {
 export async function setPublished(userId: number, id: number, on: boolean, uses: DreamMapUse[] = [], rarity: DreamMapRarity | null = null) {
   await ensureMusicTables();
   if (on) {
-    await exec(sql`UPDATE music_tracks SET dmPublished = 1, dmUses = ${uses.join(",")}, dmRarity = ${rarity},
+    await exec(sql`UPDATE music_tracks SET dmPublished = 1, dmAuto = 0, dmUses = ${uses.join(",")}, dmRarity = ${rarity},
       dmPublishedAt = COALESCE(dmPublishedAt, NOW()), updatedAt = NOW() WHERE id = ${id} AND userId = ${userId} AND status = 'ready'`);
   } else {
-    await exec(sql`UPDATE music_tracks SET dmPublished = 0, updatedAt = NOW() WHERE id = ${id} AND userId = ${userId}`);
+    await exec(sql`UPDATE music_tracks SET dmPublished = 0, dmAuto = 0, updatedAt = NOW() WHERE id = ${id} AND userId = ${userId}`);
   }
+}
+
+/**
+ * 0.9.308, Andrea: "ho creato la sezione music perche' nell'app ci fossero sempre suoni nuovi". Il batch notturno
+ * finiva nella libreria e li' restava: nessuna traccia era pubblicata, il manifest di Dream Map era vuoto e l'app non
+ * riceveva niente. Adesso ogni pezzo notturno pronto va su Dream Map da solo (effetti -> "Effetti del gioco",
+ * tracce -> "Focus / viaggio"). Chi lo toglie dalla web app ("Togli da Dream Map") lo toglie per sempre: dmPublishedAt
+ * resta scritto, e questa funzione non lo ripubblica.
+ */
+const AUTO_USES = sql`CASE WHEN kind = 'sfx' THEN 'game_sfx' ELSE 'focus' END`;
+export async function autoPublish(id: number) {
+  await exec(sql`UPDATE music_tracks SET dmPublished = 1, dmAuto = 1, dmUses = ${AUTO_USES}, dmPublishedAt = NOW()
+    WHERE id = ${id} AND status = 'ready' AND source = 'nightly' AND dmPublished = 0 AND dmPublishedAt IS NULL`);
+}
+/** Al boot: i notturni gia' pronti e mai toccati (quelli fatti prima di questa versione) vanno su Dream Map. */
+export async function autoPublishBackfill(): Promise<number> {
+  const r = await exec(sql`UPDATE music_tracks SET dmPublished = 1, dmAuto = 1, dmUses = ${AUTO_USES}, dmPublishedAt = COALESCE(createdAt, NOW())
+    WHERE status = 'ready' AND source = 'nightly' AND dmPublished = 0 AND dmPublishedAt IS NULL`);
+  return Number(r?.affectedRows ?? 0);
 }
 
 // ── manifest per Dream Map ──
 export async function dreamMapManifest(base: string) {
   await ensureMusicTables();
-  const list = (await rows(sql`SELECT ${LIST_COLS}, UNIX_TIMESTAMP(updatedAt) AS upTs, UNIX_TIMESTAMP(dmPublishedAt) AS pubTs FROM music_tracks WHERE dmPublished = 1 AND status = 'ready' ORDER BY dmPublishedAt DESC, id DESC`));
+  const list = (await rows(sql`SELECT ${LIST_COLS}, dmAuto, UNIX_TIMESTAMP(updatedAt) AS upTs, UNIX_TIMESTAMP(dmPublishedAt) AS pubTs FROM music_tracks WHERE dmPublished = 1 AND status = 'ready' ORDER BY dmPublishedAt DESC, id DESC`));
   let version = 0;
   const items = list.map((raw) => {
     const r = toRow(raw);
@@ -257,6 +284,8 @@ export async function dreamMapManifest(base: string) {
       mime: "audio/mpeg",
       uses: r.dmUses,
       rarity: r.dmRarity,
+      /* true = pubblicata da sola dal batch notturno; false = scelta a mano da Andrea (l'app la preferisce) */
+      auto: !!Number(raw.dmAuto ?? 0),
       publishedAt: raw.pubTs ? new Date(Number(raw.pubTs) * 1000).toISOString() : null,
       loudnessLufs: r.metrics?.lufs != null ? Math.round(r.metrics.lufs * 10) / 10 : null,
     };
@@ -313,9 +342,9 @@ export async function runNightlyBatch(opts: { force?: boolean } = {}): Promise<{
   return { batch, queued: plan.length, skipped: false };
 }
 
-/** Pulizia: i notturni non tenuti (ne' preferiti ne' pubblicati) oltre 30 giorni. */
+/** Pulizia: i notturni non tenuti (ne' preferiti ne' pubblicati a mano) oltre 30 giorni. */
 export async function pruneOld() {
-  const old = await rows(sql`SELECT id FROM music_tracks WHERE source = 'nightly' AND favourite = 0 AND dmPublished = 0
+  const old = await rows(sql`SELECT id FROM music_tracks WHERE source = 'nightly' AND favourite = 0 AND (dmPublished = 0 OR dmAuto = 1)
     AND createdAt < DATE_SUB(NOW(), INTERVAL ${RETENTION_DAYS} DAY)`);
   for (const o of old) {
     await exec(sql`DELETE FROM music_chunks WHERE trackId = ${o.id}`);
@@ -344,6 +373,8 @@ export async function resumeQueueOnBoot() {
   try {
     await ensureMusicTables();
     await exec(sql`UPDATE music_tracks SET status = 'queued' WHERE status = 'rendering'`);
+    const n = await autoPublishBackfill();
+    if (n) console.log(`[Music] ${n} pezzi notturni pubblicati su Dream Map`);
     kick();
   } catch (e) {
     console.warn("[Music] ripresa coda al boot fallita:", e);
