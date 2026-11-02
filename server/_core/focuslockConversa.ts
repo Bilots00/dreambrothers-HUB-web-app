@@ -130,23 +130,16 @@ function claude(): Anthropic { if (!CLAUDE) CLAUDE = new Anthropic({ apiKey: Str
  * COSA COPRE OGNI CONVERSAZIONE. Le fasi sono le stesse del Genio a opzioni: cosi' l'app sa quali pillole mostrare.
  * --------------------------------------------------------------------------------------- */
 const SCOPO: Record<Tipo, string> = {
-  sera: [
-    "LA REVISIONE DELLA SERA (il metodo di Davy Fogarty: il segreto è la revisione, e per quello che ti ha interrotto non si promette più impegno, si cambia il sistema).",
-    "Le fasi, in quest'ordine, una domanda per messaggio, seguendo quello che dice:",
-    "focus: durante i blocchi di lavoro profondo di oggi era davvero concentrato? (usa le sessioni di Full Focus e il tempo sulle app)",
-    "leva: ha lavorato sulle cose ad alta leva, quelle che avvicinano il sogno, o su quelle facili? (usa la priorità di oggi e le cose chiuse)",
-    "inter: cosa, di preciso, lo ha interrotto oggi? Quando lo dice, scrivi la chiave in \"trigger\".",
-    "sistema: cosa cambia nel SISTEMA da domani. Qui proponi il piano su misura per quel grilletto (\"piano\").",
-    "imprevisto: c'è stato un imprevisto, o sta arrivando qualcosa che cambia i suoi piani?",
-    "fine: chiudi con una frase calda e il riepilogo.",
-  ].join("\n"),
-  settimana: [
-    "LA REVISIONE DELLA SETTIMANA. Fasi: p1 la cosa più importante che ha chiuso; p2 cosa l'ha portato più fuori strada in questi sette giorni (scrivi la chiave in \"trigger\");",
-    "p3 cosa taglia dalla prossima settimana (qui proponi il piano su misura per quel grilletto); p4 la mossa della settimana prossima, una sola, con un verbo; fine.",
-  ].join("\n"),
-  mese: "LA REVISIONE DEL MESE. Fasi: p1 quanto è avanzato verso la tappa dell'anno; p2 il mese in una riga; p3 cosa smette di fare da adesso (se è un'abitudine o un'app, scrivi la chiave in \"trigger\" e proponi il piano); p4 cosa raddoppia il mese prossimo; fine.",
-  trimestre: "LA REVISIONE DEL TRIMESTRE. Fasi: p1 il sogno è ancora lo stesso; p2 il risultato più grande di questi tre mesi; p3 cosa cambia nel sistema per i prossimi tre mesi (proponi il piano); p4 un rischio che vede arrivare; fine.",
-  anno: "LA REVISIONE DELL'ANNO. Fasi: p1 l'anno in una riga; p2 il sogno con cui è partito è ancora il suo; p3 cosa lascia nell'anno vecchio (proponi il piano se è un'abitudine); p4 la promessa per l'anno nuovo, una sola; fine.",
+  /* 0.9.310: anche la sera, con il tuo agente personale, e' analisi e verdetto, non pianificazione */
+  sera: periodo("LA REVISIONE DELLA SERA", "oggi", false),
+  /* 0.9.310, Andrea: "domande scriptate senza filo logico". Le revisioni di periodo hanno uno scopo solo (capire se la
+   * persona e' sulla rotta o fuori, cosa l'ha avvicinata, cosa l'ha allontanata, cosa cambia, e ricalcolare solo con il
+   * suo si'), e ogni domanda segue la risposta di prima. Il primo messaggio (il recap e la prima domanda) lo scrive
+   * l'app, subito: il modello continua dalla prima risposta. */
+  settimana: periodo("LA REVISIONE DELLA SETTIMANA", "in questi sette giorni", false),
+  mese: periodo("LA REVISIONE DEL MESE", "nel mese (dati.quando dice quale, per esempio \"a ottobre\")", false),
+  trimestre: periodo("LA REVISIONE DEL TRIMESTRE", "in questi tre mesi", true),
+  anno: periodo("LA REVISIONE DELL'ANNO", "nell'anno (dati.quando dice quale)", true),
   rientro: [
     "RIENTRA IN ROTTA: la data in cui arriva al sogno si è spostata, e lo aiuti a rientrare come uno psicologo pratico.",
     "LO SPOSTAMENTO. Quanto si è spostato l'arrivo e perché sta in dati.spostamento: \"quanto\" (già scritto per intero, per esempio \"13 ore\" o \"1 giorno e 4 ore\": ripetilo uguale, mai arrotondarlo a un giorno) e \"cause\" (le cause vere calcolate dal navigatore dell'app, ognuna con il suo spostamento). Attribuisci lo spostamento SOLO a quelle cause. Il tempo sulle app non ha spostato la data da solo: puoi dire dove è andato il tempo, mai che i minuti su un'app \"hanno fatto slittare\" l'arrivo. Se \"quanto\" è vuoto, la data non si è mossa: non parlare di slittamento.",
@@ -159,6 +152,23 @@ const SCOPO: Record<Tipo, string> = {
     "Se non c'è niente da segnalare e i dati lo confermano, chiudi subito con un incoraggiamento.",
   ].join("\n"),
 };
+
+/* 0.9.310, Andrea (seconda richiesta): "con Premium la revisione non deve chiedere cosa farai: e' l'agente personale
+ * che analizza e ricalcola". Prima l'analisi dei dati veri (la partita, il tempo per ora, la Timeline con cosa faceva
+ * dentro le app), poi il resoconto, le domande solo sul perche', il verdetto e, se e' fuori rotta, il percorso nuovo
+ * proposto dall'agente: lo applica l'app solo con il si' della persona. */
+function periodo(nome: string, quando: string, sogno: boolean): string {
+  return [
+    nome + ". Sei tu che analizzi e ricalcoli: la persona NON deve pianificare. Non chiederle MAI \"cosa farai\", \"cosa cambi\", \"qual è la tua mossa\", \"cosa raddoppi\".",
+    "L'app le ha già mostrato i numeri del periodo (dati.recapDelPeriodo): non ripeterli.",
+    "Le fasi:",
+    "resoconto (il primo messaggio, quando l'evento è \"resoconto\"): analizza " + quando + " con i dati veri: dati.partita (i punti del nuovo te e del vecchio te: quando e perché ha segnato il vecchio te, per fascia oraria e per causa), dati.timeline (cosa faceva davvero dentro le app: le ricerche, i titoli dei video, i siti, le domande agli assistenti, con i minuti e le ore), dati.abitudini e dati.tempo (le fasce orarie più piene, le app). Scrivi in 3-5 frasi brevi dove sta vincendo e dove sta perdendo, concreto: orari, app e contenuti veri (esempio: \"Il vecchio te ha segnato 4 volte fra le 22 e le 23, sempre su YouTube: video di gaming.\"). Distingui il lavoro dalla distrazione: Chrome su un sito di un concorrente o una ricerca su come fare una cosa del sogno può essere lavoro. Se un dato manca, non inventarlo e non nominarlo.",
+    "perche: SOLO se serve a capire il perché di una perdita importante, fai UNA domanda mirata (esempio: \"Alle 22, cosa ti porta su YouTube: la stanchezza, la noia o l'abitudine?\"), con 3 o 4 \"pillole\" come risposte possibili. Al massimo 2 domande in tutta la revisione. Se una cosa nei dati non è chiara (lavoro o distrazione?), chiedila così.",
+    (sogno ? "Se dati.sogno non torna più con quello che fa, chiedi se il sogno è ancora quello.\n" : "") + "verdetto: scrivi \"verdetto\": \"in_rotta\" oppure \"fuori_rotta\". In rotta (nessuna perdita grave e dati.arrivo non peggiora di molto): dillo con le prove, chiudi con fine: true e il riepilogo, niente ricalcolo. Fuori rotta: proponi TU il percorso nuovo in \"percorso\" (gli orizzonti che cambiano: oggi, settimana e mese almeno; un approccio diverso dove serve, i blocchi nelle fasce in cui perde) e, se aiuta, un \"piano\" di blocco per quella fascia. Nel testo spiega in 2-3 frasi cosa cambia rispetto alla roadmap di adesso (dati.roadmap) e chiedi se vuole applicarlo: lo applica l'app solo con il suo sì, con il pulsante \"Applica il nuovo percorso\". Se dati.strada è \"Seguo il Genio\" il percorso lo decidi tu per intero; se è \"Pianifico io\" proponi solo le modifiche e tieni i suoi passi.",
+    "Se l'evento è \"percorso_rifiutato\": rispetta la scelta in una riga, senza insistere, e chiudi con fine: true e il riepilogo.",
+    "fine: una frase calda e il riepilogo.",
+  ].join("\n");
+}
 
 const REGOLE = [
   "COME PARLI. Ogni risposta comincia riprendendo con parole tue quello che ha appena detto, in modo che si senta capito (per esempio \"Ho capito: alle 10 eri su Instagram per scaricare la tensione.\"). Mai la stessa apertura due volte di fila. Le sue parole riprendile alla seconda persona (lui scrive \"ci sono cascato\", tu dici \"ci sei cascato\"), mai copiate in prima persona.",
@@ -177,6 +187,9 @@ const FORMATO = [
   "Rispondi SOLO in JSON, cosi':",
   "{\"testo\":\"...\",\"fase\":\"<una delle fasi>\",\"trigger\":\"<chiave o vuoto>\",\"piano\":null oppure {\"tipo\":\"blocco|limite|prevenzione\",\"nome\":\"massimo 4 parole\",\"app\":[\"pacchetto\"],\"dalle\":\"HH:MM\",\"alle\":\"HH:MM\",\"giorni\":[true,true,true,true,true,true,true],\"minutiGiorno\":0,\"azione\":\"focus|caveau|respiro|notifiche|mattina|\",\"aiuto\":\"<chiave della contromisura>\",\"perche\":\"una riga\"},\"pillole\":[\"da 0 a 4 risposte possibili, brevi, in prima persona\"],\"fine\":false,\"riepilogo\":null}",
   "Alla fine (fine: true) \"riepilogo\" ha le risposte della persona in poche parole: {\"focus\":\"\",\"leva\":\"\",\"interruzione\":\"\",\"contromisura\":\"\",\"imprevisto\":\"\",\"patto\":\"\"} (lascia vuote quelle che non c'entrano).",
+  "Nelle revisioni della settimana, del mese, del trimestre e dell'anno il \"riepilogo\" è invece: {\"rotta\":\"quanto si è avvicinato, in poche parole\",\"sogno\":\"\",\"funzionato\":\"cosa ha funzionato, con il dettaglio\",\"allontanato\":\"cosa gli ha fatto perdere tempo, con il dettaglio\",\"cambio\":\"cosa cambia da domani, in prima persona\",\"mossa\":\"la prossima mossa concreta, con un verbo all'imperativo e il quando\",\"ricalcolo\":\"sì, no o vuoto se non è stato chiesto\"}.",
+  "Nelle revisioni (della sera, della settimana, del mese, del trimestre, dell'anno) aggiungi \"verdetto\" (\"in_rotta\", \"fuori_rotta\" o vuoto finché non lo sai) e, solo quando sei fuori rotta e proponi il percorso nuovo, \"percorso\": {\"oggi\":{\"testo\":\"...\",\"passi\":[\"1-3 passi con un verbo\"]},\"settimana\":{\"testo\":\"...\",\"passi\":[\"...\"]},\"mese\":{\"testo\":\"...\",\"passi\":[\"...\"]},\"anno\":{...},\"cinque\":{...}} (anno e cinque solo se cambiano; al massimo 5 passi per orizzonte). Insieme al verdetto metti già il \"riepilogo\".",
+  "Il \"riepilogo\" delle revisioni: {\"rotta\":\"com'è andata in una frase breve\",\"funzionato\":\"dove vince, concreto\",\"allontanato\":\"dove perde, concreto, con l'ora e l'app\",\"mossa\":\"la prima cosa del percorso nuovo o del piano, all'imperativo e con il quando\",\"ricalcolo\":\"sì, no o vuoto\"}.",
   "Metti il \"piano\" solo nel messaggio in cui lo proponi. Le \"pillole\" solo se le risposte pronte della fase non vanno bene per la tua domanda.",
 ].join("\n");
 
@@ -423,7 +436,7 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
     const chiaviFasi = Object.keys(fasi).concat(["fine"]);
     /* i pacchetti che si possono bloccare: solo quelli che l'app ha mandato, mai uno inventato */
     const pacchetti = new Set<string>();
-    try { const d = b.dati ?? {}; for (const l of [d.app, d.appTutte, d.appGiorno]) for (const a of (Array.isArray(l) ? l : [])) if (a && typeof a.pkg === "string") pacchetti.add(a.pkg); } catch { /* niente */ }
+    try { const d = b.dati ?? {}; for (const l of [d.app, d.appTutte, d.appGiorno, d.timeline && d.timeline.cose]) for (const a of (Array.isArray(l) ? l : [])) if (a && typeof a.pkg === "string") pacchetti.add(a.pkg); } catch { /* niente */ }
     let imparato: any = null;
     const sogno = SOGNI.has(String(b.sogno)) ? String(b.sogno) : "";
     if (sogno) { try { imparato = await classifica(sogno, tipo === "rientro" ? "rientro" : tipo); } catch { imparato = null; } }
@@ -441,6 +454,8 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
       + (imparato ? "\n\nIMPARATO DA PERSONE CON UN SOGNO SIMILE (conteggi anonimi):\n" + JSON.stringify(imparato).slice(0, 1500) : "")
       + "\n\nLA CONVERSAZIONE FINORA:\n" + (messaggi.length ? messaggi.map((m: any) => (m.chi === "io" ? "Persona: " : "Tu: ") + m.t).join("\n") : "(comincia tu: saluta in una riga, di' cosa hai visto nei dati di più importante e fai la prima domanda)")
       + (b.evento === "piano_applicato" ? "\n\nLA PERSONA HA APPENA DETTO SÌ AL PIANO e l'app l'ha applicato: confermalo in una riga, senza riproporlo, e passa alla fase dopo con la sua domanda." : "")
+      + (b.evento === "resoconto" ? "\n\nEVENTO \"resoconto\": scrivi adesso il resoconto iniziale dai dati (dove vince, dove perde), e solo se serve una domanda sul perché." : "")
+      + (b.evento === "percorso_rifiutato" ? "\n\nLA PERSONA HA DETTO NO AL PERCORSO NUOVO: rispetta la scelta in una riga e chiudi con fine: true e il riepilogo." : "")
       + (b.evento === "piano_rifiutato" ? "\n\nLA PERSONA HA DETTO NO AL PIANO: rispetta la scelta in una riga, senza insistere, e passa alla fase dopo con la sua domanda." : "")
       + "\n\nRisposte della persona finora: " + turni +(turni >= 6 ? ". CHIUDI ADESSO con fine: true e il riepilogo." : ".");
     const ora = (t: unknown) => { const m = String(t ?? "").match(/^(\d{1,2})[:.](\d{2})$/); return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
@@ -469,11 +484,24 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
       const pillole = (Array.isArray(j.pillole) ? j.pillole : []).map((x: any) => copy(x, 70)).filter(Boolean).slice(0, 4);
       const fine = !!j.fine || turni >= 7;
       let riepilogo: any = null;
-      if (fine && j.riepilogo && typeof j.riepilogo === "object") {
+      if (j.riepilogo && typeof j.riepilogo === "object") {
         riepilogo = {};
-        for (const k of ["focus", "leva", "interruzione", "contromisura", "imprevisto", "patto"]) riepilogo[k] = copy(j.riepilogo[k], 200);
+        for (const k of ["focus", "leva", "interruzione", "contromisura", "imprevisto", "patto", "rotta", "sogno", "funzionato", "allontanato", "cambio", "mossa", "ricalcolo"]) riepilogo[k] = copy(j.riepilogo[k], 200);
       }
-      return { testo, fase: fine ? "fine" : fase, trigger, piano, pillole, fine, riepilogo };
+      /* 0.9.310: il verdetto e il percorso nuovo (gli orizzonti della roadmap), che l'app applica solo con il si' */
+      const verdetto = ["in_rotta", "fuori_rotta"].includes(String(j.verdetto)) ? String(j.verdetto) : "";
+      let percorso: any = null;
+      if (j.percorso && typeof j.percorso === "object") {
+        const out: Record<string, { testo: string; passi: string[] }> = {};
+        for (const k of ["cinque", "anno", "mese", "settimana", "oggi"]) {
+          const x = j.percorso[k];
+          const testo = x && typeof x === "object" ? copy(x.testo, 160) : "";
+          if (!testo) continue;
+          out[k] = { testo, passi: (Array.isArray(x.passi) ? x.passi : []).map((t: any) => copy(t, 160)).filter(Boolean).slice(0, 5) };
+        }
+        if (out.settimana || out.oggi || out.mese) percorso = out;
+      }
+      return { testo, fase: fine ? "fine" : fase, trigger, piano, pillole, fine, riepilogo, verdetto, percorso };
     };
     const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
     try {
