@@ -100,6 +100,35 @@ function ensureArena(): Promise<void> {
         PRIMARY KEY (device, sfidaId),
         INDEX idx_sfida (sfidaId, stato)
       )`);
+      /* app 0.9.321: i duelli a tre round. Si gioca a turni, non in diretta: chi sfida gioca subito, l'altro quando puo', sulle stesse
+         domande (seed). Con a vuoto la sfida e' aperta al primo giocatore che cerca un avversario. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_duelli (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NULL,
+        seed INT NOT NULL,
+        roundDa TEXT NULL,
+        roundA TEXT NULL,
+        stato VARCHAR(10) NOT NULL DEFAULT 'aperto',
+        createdAt TIMESTAMP NULL,
+        doneAt TIMESTAMP NULL,
+        INDEX idx_da (da, createdAt),
+        INDEX idx_a (a, stato),
+        INDEX idx_stato (stato, createdAt)
+      )`);
+      /* app 0.9.321: il pollice su o giu' sulle risposte degli agenti, per migliorarle */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_voti_chat (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        device VARCHAR(64) NOT NULL,
+        voto TINYINT NOT NULL,
+        modo VARCHAR(16) NOT NULL DEFAULT '',
+        testo TEXT NULL,
+        createdAt TIMESTAMP NULL,
+        INDEX idx_voto (voto, createdAt)
+      )`);
+      /* app 0.9.321: il torneo della Lega Diamante (quarti, semifinale, finale), una settimana per fase */
+      try { await db.execute(sql`ALTER TABLE focuslock_players ADD COLUMN torneoFase VARCHAR(10) NOT NULL DEFAULT ''`); } catch (_) { /* c'e' gia' */ }
+      try { await db.execute(sql`ALTER TABLE focuslock_players ADD COLUMN torneiVinti INT NOT NULL DEFAULT 0`); } catch (_) { /* c'e' gia' */ }
     })().catch((e) => { arenaReady = null; throw e; });
   }
   return arenaReady;
@@ -139,13 +168,30 @@ let chiusuraFatta = "";
 async function chiudiSettimane(): Promise<void> {
   const ora = settimanaCorrente();
   if (chiusuraFatta === ora) return;
-  const aperte = await rows(sql`SELECT id, settimana, tier FROM focuslock_leghe WHERE chiusa = 0 AND settimana < ${ora}`);
+  const aperte = await rows(sql`SELECT id, settimana, tier, goal FROM focuslock_leghe WHERE chiusa = 0 AND settimana < ${ora}`);
   for (const l of aperte) {
     const membri = await rows(sql`SELECT device, punti FROM focuslock_lega_membri WHERE legaId = ${l.id} ORDER BY punti DESC, device ASC`);
     const n = membri.length;
     const ti = TIERS.indexOf(String(l.tier));
+    /* una fase del torneo: i primi 10 passano alla fase dopo, in finale i primi 3 vincono; chi esce torna nella Lega Diamante */
+    const fase = String(l.goal || "").indexOf("torneo:") === 0 ? String(l.goal).slice(7) : "";
+    if (fase) {
+      for (let i = 0; i < n; i++) {
+        const m = membri[i];
+        let esito = "eliminato", dopo = "";
+        if (fase === "finale") { if (i < 3) esito = "trofeo"; }
+        else if (i < 10) { esito = "avanza"; dopo = fase === "quarti" ? "semi" : "finale"; }
+        await rows(sql`UPDATE focuslock_lega_membri SET esito = ${esito}, posizione = ${i + 1} WHERE legaId = ${l.id} AND device = ${m.device}`);
+        await rows(sql`UPDATE focuslock_players SET torneoFase = ${dopo} WHERE device = ${m.device}`);
+        if (esito === "trofeo") await rows(sql`UPDATE focuslock_players SET torneiVinti = torneiVinti + 1 WHERE device = ${m.device}`);
+      }
+      await rows(sql`UPDATE focuslock_leghe SET chiusa = 1 WHERE id = ${l.id}`);
+      continue;
+    }
     for (let i = 0; i < n; i++) {
       const m = membri[i];
+      /* i primi 10 di una Lega Diamante vera entrano nel torneo */
+      if (String(l.tier) === "diamante" && n >= LEGA_MIN && i < 10) await rows(sql`UPDATE focuslock_players SET torneoFase = 'quarti' WHERE device = ${m.device} AND torneoFase = ''`);
       let esito = "confermato";
       let nuovoTier = String(l.tier);
       if (n < LEGA_MIN) esito = "formazione";
@@ -161,14 +207,15 @@ async function chiudiSettimane(): Promise<void> {
 
 /* ---- l'iscrizione a una lega della settimana ---- */
 const CATEGORIE = ["studenti", "imprenditori", "lavoratori", "creator", "sportivi"];
-async function assegnaLega(device: string, goal: string, tier: string, nick: string, settimana: string, categoria: string): Promise<number> {
+async function assegnaLega(device: string, goal: string, tier: string, nick: string, settimana: string, categoria: string, torneoFase = ""): Promise<number> {
   const gia = await rows(sql`SELECT legaId FROM focuslock_lega_membri WHERE settimana = ${settimana} AND device = ${device}`);
   if (gia[0]) return Number(gia[0].legaId);
   /* la categoria scelta dall'utente (Studenti, Imprenditori...): la lega resta dentro la categoria,
      e sotto i cinque e' «in formazione». Senza categoria vale la vecchia regola: l'obiettivo del
      Genio se ha abbastanza gente, altrimenti la lega generale. */
   let g = categoria && CATEGORIE.indexOf(categoria) >= 0 ? categoria : (goal || "*");
-  if (!categoria && g !== "*") {
+  if (torneoFase) { g = "torneo:" + torneoFase; tier = "diamante"; }
+  else if (!categoria && g !== "*") {
     const pool = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE legaOptIn = 1 AND goal = ${g} AND updatedAt > (NOW() - INTERVAL 14 DAY)`);
     if (Number(pool[0]?.k || 0) < LEGA_MIN) g = "*";
   }
@@ -500,7 +547,7 @@ export function registerFocusLockArenaRoutes(app: Express) {
     try {
       await ensureArena();
       await chiudiSettimane();
-      const me = (await rows(sql`SELECT device, name, nick, goal, tier, legaOptIn, categoria FROM focuslock_players WHERE device = ${device}`))[0];
+      const me = (await rows(sql`SELECT device, name, nick, goal, tier, legaOptIn, categoria, torneoFase, torneiVinti FROM focuslock_players WHERE device = ${device}`))[0];
       if (!me) { res.json({ optIn: false, giocatore: false }); return; }
       const settimana = settimanaCorrente();
       /* il risultato della settimana scorsa, finche' non e' stato visto */
@@ -508,7 +555,7 @@ export function registerFocusLockArenaRoutes(app: Express) {
         FROM focuslock_lega_membri m WHERE m.device = ${device} AND m.settimana < ${settimana} AND m.esito <> '' ORDER BY m.settimana DESC LIMIT 1`);
       const risultato = prec[0] && !Number(prec[0].visto) ? { settimana: String(prec[0].settimana), esito: String(prec[0].esito), posizione: Number(prec[0].posizione), punti: Number(prec[0].punti), tierPrima: String(prec[0].tier), tierOra: String(me.tier || "bronzo"), n: Number(prec[0].n) } : null;
       if (!Number(me.legaOptIn)) { res.json({ optIn: true && false, giocatore: true, tier: String(me.tier || "bronzo"), fine: fineSettimana(), risultato }); return; }
-      const legaId = await assegnaLega(device, String(me.goal || ""), String(me.tier || "bronzo"), String(me.nick || ""), settimana, String(me.categoria || ""));
+      const legaId = await assegnaLega(device, String(me.goal || ""), String(me.tier || "bronzo"), String(me.nick || ""), settimana, String(me.categoria || ""), String(me.torneoFase || ""));
       const lega = (await rows(sql`SELECT id, goal, tier FROM focuslock_leghe WHERE id = ${legaId}`))[0];
       const membri = await rows(sql`SELECT m.device, m.nick, m.punti, p.name, p.updatedAt, p.metriche FROM focuslock_lega_membri m JOIN focuslock_players p ON p.device = m.device WHERE m.legaId = ${legaId} ORDER BY m.punti DESC, m.device ASC`);
       const out = membri.map((m, i) => ({ device: String(m.device), nome: nomeDi(m), punti: Number(m.punti || 0), posizione: i + 1, me: String(m.device) === device,
@@ -516,9 +563,90 @@ export function registerFocusLockArenaRoutes(app: Express) {
         metriche: metricheLeggi(m.metriche) }));
       const mio = out.filter((x) => x.me)[0] || null;
       res.json({ optIn: true, giocatore: true, settimana, fine: fineSettimana(), tier: String(lega?.tier || me.tier || "bronzo"), goal: String(lega?.goal || "*"),
-        categoria: String(me.categoria || ""), stato: out.length < LEGA_MIN ? "formazione" : "ok", minimo: LEGA_MIN, membri: out, mio, risultato });
+        categoria: String(me.categoria || ""), stato: out.length < LEGA_MIN ? "formazione" : "ok", minimo: LEGA_MIN, membri: out, mio, risultato,
+        torneo: { fase: String(lega?.goal || "").indexOf("torneo:") === 0 ? String(lega?.goal).slice(7) : "", vinti: Number(me.torneiVinti || 0) } });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "lega non disponibile" });
+    }
+  });
+  app.post("/api/focuslock/social/voto-chat", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), voto = Number(b.voto) > 0 ? 1 : -1, modo = String(b.modo || "").slice(0, 16), testo = String(b.testo || "").slice(0, 1500);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      await rows(sql`INSERT INTO focuslock_voti_chat (device, voto, modo, testo, createdAt) VALUES (${device}, ${voto}, ${modo}, ${testo}, NOW())`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "voto non salvato" });
+    }
+  });
+  /* ---- I DUELLI (app 0.9.321) ---- */
+  const roundValidi = (x: any): string | null => {
+    if (!Array.isArray(x) || x.length !== 3) return null;
+    const l = x.map((r: any) => ({ ok: !!(r && r.ok), ms: Math.max(0, Math.min(120000, Math.round(Number(r && r.ms) || 0))) }));
+    return JSON.stringify(l);
+  };
+  const duelloFuori = (d: any, device: string, nomi: Record<string, string>) => {
+    const mio = String(d.da) === device, altro = mio ? (d.a ? String(d.a) : "") : String(d.da);
+    const leggi = (s: any) => { try { return s ? JSON.parse(String(s)) : null; } catch (_) { return null; } };
+    return { id: Number(d.id), seed: Number(d.seed), mio, altro, nome: altro ? (nomi[altro] || "Giocatore") : "", stato: String(d.stato),
+      mieiRound: leggi(mio ? d.roundDa : d.roundA), suoiRound: leggi(mio ? d.roundA : d.roundDa), at: d.doneAt || d.createdAt };
+  };
+  /* un duello aperto da un altro giocatore, se c'e': si gioca sulle sue domande */
+  app.get("/api/focuslock/social/duello/trova", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const l = await rows(sql`SELECT d.id, d.da, d.seed, p.name, p.nick FROM focuslock_duelli d JOIN focuslock_players p ON p.device = d.da
+        WHERE d.a IS NULL AND d.stato = 'aperto' AND d.da <> ${device} AND d.createdAt > (NOW() - INTERVAL 14 DAY) ORDER BY d.createdAt ASC LIMIT 1`);
+      res.json({ ok: true, duello: l[0] ? { id: Number(l[0].id), seed: Number(l[0].seed), nome: nomeDi(l[0]), altro: String(l[0].da) } : null });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "ricerca non riuscita" });
+    }
+  });
+  /* chi sfida ha gia' giocato: a = l'amico, o vuoto per un avversario qualsiasi */
+  app.post("/api/focuslock/social/duello", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64), seed = Math.round(Number(b.seed) || 0), r = roundValidi(b.round);
+    if (!device || !r || device === a) { res.status(400).json({ error: "duello non valido" }); return; }
+    try {
+      await ensureArena();
+      if (a && !(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      await rows(sql`INSERT INTO focuslock_duelli (da, a, seed, roundDa, stato, createdAt) VALUES (${device}, ${a || null}, ${seed}, ${r}, 'aperto', NOW())`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "duello non salvato" });
+    }
+  });
+  app.post("/api/focuslock/social/duello/rispondi", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), id = Math.round(Number(b.id) || 0), r = roundValidi(b.round);
+    if (!device || !(id > 0) || !r) { res.status(400).json({ error: "risposta non valida" }); return; }
+    try {
+      await ensureArena();
+      const d = (await rows(sql`SELECT * FROM focuslock_duelli WHERE id = ${id}`))[0];
+      if (!d || String(d.stato) !== "aperto" || String(d.da) === device || (d.a && String(d.a) !== device)) { res.status(409).json({ error: "duello non disponibile" }); return; }
+      await rows(sql`UPDATE focuslock_duelli SET a = ${device}, roundA = ${r}, stato = 'fatto', doneAt = NOW() WHERE id = ${id} AND stato = 'aperto'`);
+      res.json({ ok: true, roundLui: (() => { try { return JSON.parse(String(d.roundDa)); } catch (_) { return null; } })() });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "risposta non salvata" });
+    }
+  });
+  /* i miei duelli: le sfide da giocare e il registro */
+  app.get("/api/focuslock/social/duello", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const l = await rows(sql`SELECT * FROM focuslock_duelli WHERE da = ${device} OR a = ${device} ORDER BY id DESC LIMIT 40`);
+      const nomi: Record<string, string> = {};
+      const altri = Array.from(new Set(l.map((d: any) => (String(d.da) === device ? d.a : d.da)).filter(Boolean).map(String)));
+      for (const x of altri) { const p = (await rows(sql`SELECT name, nick FROM focuslock_players WHERE device = ${x}`))[0]; nomi[x] = nomeDi(p); }
+      res.json({ ok: true, duelli: l.map((d: any) => duelloFuori(d, device, nomi)) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "duelli non disponibili" });
     }
   });
   app.post("/api/focuslock/social/lega/visto", async (req: Request, res: Response) => {

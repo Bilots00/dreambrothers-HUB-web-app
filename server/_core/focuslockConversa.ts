@@ -503,13 +503,19 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
       }
       return { testo, fase: fine ? "fine" : fase, trigger, piano, pillole, fine, riepilogo, verdetto, percorso };
     };
+    /* app 0.9.321: le foto e i file allegati all'ultimo messaggio. I testi entrano nel messaggio, foto e PDF restano allegati veri */
+    const allegati = (Array.isArray(b.allegati) ? b.allegati : []).slice(0, 3)
+      .map((a: any) => ({ tipo: String(a?.tipo || ""), mime: String(a?.mime || ""), nome: pulisci(a?.nome, 120), dati: String(a?.dati || "") }))
+      .filter((a: any) => a.dati && a.dati.length < 12000000);
+    const allTesto = allegati.filter((a: any) => a.tipo === "text").map((a: any) => { let t = ""; try { t = Buffer.from(a.dati, "base64").toString("utf8").slice(0, 20000); } catch { t = ""; } return "\n\nIL FILE ALLEGATO \"" + a.nome + "\":\n" + t; }).join("");
+    const allMedia = allegati.filter((a: any) => a.tipo !== "text" && /^(image\/|application\/pdf)/.test(a.mime));
     const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
     try {
       if (chiaveG) {
         const modello = process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || process.env.DREAMMAP_VAR_MODELLO || "gemini-3.5-flash-lite";
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
           method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt }] }],
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt + allTesto }, ...allMedia.map((a: any) => ({ inlineData: { mimeType: a.mime, data: a.dati } }))] }],
             generationConfig: { temperature: 0.6, maxOutputTokens: 900, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } } }),
         });
         const j: any = await r.json().catch(() => ({}));
@@ -518,7 +524,10 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
       }
       if (process.env.AGENT_LLM_KEY) {
         const modello = process.env.DREAMMAP_CONVERSA_CLAUDE || process.env.DREAMMAP_RIENTRO_CLAUDE || "claude-haiku-5-5";
-        const r = await claude().messages.create({ model: modello, max_tokens: 900, temperature: 0.6, system: sistema, messages: [{ role: "user", content: utenteTxt }] });
+        const blocchi: any[] = allMedia.map((a: any) => a.mime === "application/pdf"
+          ? { type: "document", source: { type: "base64", media_type: a.mime, data: a.dati } }
+          : { type: "image", source: { type: "base64", media_type: a.mime, data: a.dati } });
+        const r = await claude().messages.create({ model: modello, max_tokens: 900, temperature: 0.6, system: sistema, messages: [{ role: "user", content: blocchi.length ? [...blocchi, { type: "text", text: utenteTxt + allTesto }] : utenteTxt + allTesto }] });
         const v = leggi(r.content.filter((x) => x.type === "text").map((x) => (x.type === "text" ? x.text : "")).join(""));
         if (v) { res.json({ ...v, modello }); return; }
       }
