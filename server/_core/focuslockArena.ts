@@ -264,6 +264,29 @@ export function registerFocusLockArenaRoutes(app: Express) {
     } catch { res.json({ pct: 0, tot: 0 }); }
   });
 
+  /* IL CONFRONTO DEL REPORT (0.9.325): dove sta una persona fra tutte, su una metrica della settimana. Solo aggregati, e i primi tre con il nome che la lega gia' mostra. */
+  app.get("/api/focuslock/social/confronto", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    const met = String(req.query.met || "ff");
+    if (!device || !["ff", "tappe", "serie", "severa"].includes(met)) { res.json({ n: 0 }); return; }
+    try {
+      await ensureArena();
+      const list = await rows(sql`SELECT device, name, nick, metriche FROM focuslock_players WHERE name <> '' AND updatedAt > (NOW() - INTERVAL 30 DAY) LIMIT 5000`);
+      const voci = list.map((r: any) => {
+        const m: any = metricheLeggi(r.metriche);
+        const v = !m ? null : met === "serie" ? Number(m.serie) : Number(m[met]?.s);
+        return { device: String(r.device), nome: String(r.nick || r.name || ""), v };
+      }).filter((x: any) => x.v !== null && isFinite(x.v)) as { device: string; nome: string; v: number }[];
+      voci.sort((a, b) => b.v - a.v);
+      const n = voci.length, i = voci.findIndex((x) => x.device === device);
+      const mio = i >= 0 ? voci[i]!.v : 0;
+      const max = n ? voci[0]!.v : 0;
+      const buckets = new Array(24).fill(0) as number[];
+      voci.forEach((x) => { const k = max > 0 ? Math.min(23, Math.floor((x.v / max) * 24)) : 0; buckets[k] = (buckets[k] || 0) + 1; });
+      res.json({ n, mio, max, rank: i >= 0 ? i + 1 : n + 1, sotto: n ? Math.round((voci.filter((x) => x.v < mio).length / n) * 100) : 0, buckets, top: voci.slice(0, 3) });
+    } catch { res.json({ n: 0 }); }
+  });
+
   /* CERCA PER NOME (0.9.203): nome o nick che contengono il testo, mai se stessi, 12 al massimo.
      Si vede solo nome, device e livello: niente di piu' di quello che la lega gia' mostra. */
   app.get("/api/focuslock/social/cerca", async (req: Request, res: Response) => {
