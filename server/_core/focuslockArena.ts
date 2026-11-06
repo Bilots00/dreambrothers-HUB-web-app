@@ -21,7 +21,7 @@ import { rows, ensureTables as ensureSocial, metricheLeggi } from "./focuslockSo
 
 const REAZIONI = ["cuore", "grande", "continua", "nonmollare", "centrato"];
 const DONI = ["pozione"];
-const TIERS = ["bronzo", "argento", "oro", "diamante"];
+const TIERS = ["bronzo", "argento", "oro", "zaffiro", "rubino", "smeraldo", "turchese", "perla", "ossidiana", "diamante"];
 const LEGA_MAX = 30;
 const LEGA_MIN = 5;
 const INSIEME_SCADENZA_MIN = 10;
