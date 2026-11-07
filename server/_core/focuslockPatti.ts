@@ -271,8 +271,10 @@ export function registerFocusLockPattiRoutes(app: Express) {
     const b = req.body || {};
     const ab = abitudineValida(b.abitudine);
     if (!ab) { res.status(400).json({ error: "abitudine non valida: serve cosa, almeno un giorno e come la verifica l'app" }); return; }
-    const posta = Math.round(Math.max(1, Math.min(100, Number(b.posta) || 5)) * 100);
-    const tetto = Math.round(Math.max(Number(b.posta) || 5, Math.min(500, Number(b.tetto) || 50)) * 100);
+    /* app 0.9.337: il contratto si fa sempre con un garante, e i soldi possono essere zero ("basta la parola") */
+    const pe = Number.isFinite(Number(b.posta)) ? Number(b.posta) : 5;
+    const posta = Math.round(Math.max(0, Math.min(100, pe)) * 100);
+    const tetto = Math.round(Math.max(pe, Math.min(500, Number.isFinite(Number(b.tetto)) ? Number(b.tetto) : 50)) * 100);
     const durata = Math.max(7, Math.min(180, Math.round(Number(b.durataGiorni) || 30)));
     const da = new Date(Date.now() + 86400_000);       // si comincia domani: oggi si firma
     const daGiorno = giornoDi(da.getTime()), aGiorno = giornoDi(da.getTime() + (durata - 1) * 86400_000);
