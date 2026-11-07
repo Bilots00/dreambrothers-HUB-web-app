@@ -119,6 +119,8 @@ export function metricheDi(m: any): string | null {
     v: 1,
     giorno: data(m.giorno, /^\d{4}-\d{2}-\d{2}$/), lunedi: data(m.lunedi, /^\d{4}-\d{2}-\d{2}$/), mese: data(m.mese, /^\d{4}-\d{2}$/),
     tappe: tre(m.tappe, 10000), severa: tre(m.severa, 31), ff: tre(m.ff, 44640), schermo: tre(m.schermo, 44640), serie: n(m.serie, 5000),
+    /* app 0.9.335: il paese (due lettere, dalla lingua del telefono) per la bandiera sul podio della lega */
+    paese: /^[A-Z]{2}$/.test(String(m.paese || "")) ? String(m.paese) : "",
   };
   if (!out.giorno) return null;
   return JSON.stringify(out);

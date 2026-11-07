@@ -512,15 +512,25 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
     const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
     try {
       if (chiaveG) {
-        const modello = process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || process.env.DREAMMAP_VAR_MODELLO || "gemini-3.5-flash-lite";
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
-          method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt + allTesto }, ...allMedia.map((a: any) => ({ inlineData: { mimeType: a.mime, data: a.dati } }))] }],
-            generationConfig: { temperature: 0.6, maxOutputTokens: 900, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } } }),
-        });
-        const j: any = await r.json().catch(() => ({}));
-        const v = r.ok ? leggi((j?.candidates?.[0]?.content?.parts || []).map((x: any) => x.text || "").join("")) : null;
-        if (v) { res.json({ ...v, modello }); return; }
+        /* app 0.9.335, Andrea: "nel Rientra le risposte sono immediate, non pensa, non ragiona, e fanno cagare". Era il modello
+         * leggero con il ragionamento al minimo. Ora la persona sceglie come nella chat del suo agente: "attento" (di serie)
+         * = Flash con il ragionamento alto, "veloce" = Flash-Lite con un ragionamento basso. Se il primo non risponde, c'e' l'altro. */
+        const attento = b.scelta !== "veloce";
+        const lista = attento
+          ? [[process.env.DREAMMAP_CONVERSA_ATTENTO || "gemini-3.5-flash", "high", 6000], [process.env.DREAMMAP_CONVERSA_MODELLO || "gemini-3.5-flash-lite", "low", 2400]]
+          : [[process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || "gemini-3.5-flash-lite", "low", 2400]];
+        for (const [modello, livello, maxOut] of lista as [string, string, number][]) {
+          try {
+            const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+              method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
+              body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt + allTesto }, ...allMedia.map((a: any) => ({ inlineData: { mimeType: a.mime, data: a.dati } }))] }],
+                generationConfig: { temperature: 0.6, maxOutputTokens: maxOut, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: livello } } }),
+            });
+            const j: any = await r.json().catch(() => ({}));
+            const v = r.ok ? leggi((j?.candidates?.[0]?.content?.parts || []).filter((x: any) => !x.thought).map((x: any) => x.text || "").join("")) : null;
+            if (v) { res.json({ ...v, modello, scelta: attento ? "attento" : "veloce" }); return; }
+          } catch { /* si prova il prossimo */ }
+        }
       }
       if (process.env.AGENT_LLM_KEY) {
         const modello = process.env.DREAMMAP_CONVERSA_CLAUDE || process.env.DREAMMAP_RIENTRO_CLAUDE || "claude-haiku-5-5";
