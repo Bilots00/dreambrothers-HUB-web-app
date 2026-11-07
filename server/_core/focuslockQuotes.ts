@@ -46,6 +46,22 @@ function minutiDallaMezzanotteRoma(t = Date.now()): number {
   return h * 60 + m;
 }
 
+/* DreamMap 0.9.337, Andrea: "la frase di Bob Marley sui soldi non la voglio piu' vedere". Qualunque sia la fonte (il sito,
+   la traduzione), le frasi bandite non escono da qui; e due frasi che Andrea ha voluto entrano nel giro. */
+const BANDITE = /marley|povere|poveri|ricco non|uomo ricco|poor man|so poor|rich man/i;
+const AGGIUNTE = ['"Ricorda che non ottenere ciò che vuoi a volte è un meraviglioso colpo di fortuna." ~ Dalai Lama', '"Ogni progresso avviene fuori dalla zona di comfort." ~ Michael John Bobak'];
+export function quotesPulite(body: any): any {
+  if (!body || typeof body !== "object") return body;
+  const out = { ...body };
+  if (typeof out.today === "string" && BANDITE.test(out.today)) out.today = "";
+  if (Array.isArray(out.quotes)) {
+    const l = out.quotes.filter((q: any) => !BANDITE.test(String(q)));
+    for (const a of AGGIUNTE) if (!l.includes(a)) l.push(a);
+    out.quotes = l;
+  }
+  return out;
+}
+
 function decode(s: string): string {
   return s
     .replace(/&quot;/g, '"').replace(/&#34;/g, '"')
@@ -131,7 +147,7 @@ export function registerFocusLockQuoteRoutes(app: Express) {
   app.get("/api/focuslock/quotes", async (_req: Request, res: Response) => {
     const oggi = giornoRoma();
     const durata = minutiDallaMezzanotteRoma() < 30 ? 5 * 60 * 1000 : CACHE_MS;
-    if (cache && cache.day === oggi && Date.now() - cache.at < durata) { res.json({ ...cache.body, cached: true }); return; }
+    if (cache && cache.day === oggi && Date.now() - cache.at < durata) { res.json(quotesPulite({ ...cache.body, cached: true })); return; }
 
     let today: string | null = null;
     try { today = await readPage(); }
@@ -145,6 +161,6 @@ export function registerFocusLockQuoteRoutes(app: Express) {
     // scorsi e come scorta offline, e non deve mai vincere sulla pagina.
     const body = { today, quotes: quotes.length ? quotes : (today ? [today] : []), day: oggi };
     if (today || quotes.length) cache = { at: Date.now(), day: oggi, body };
-    res.json(body);
+    res.json(quotesPulite(body));
   });
 }
