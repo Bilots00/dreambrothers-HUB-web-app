@@ -56,6 +56,18 @@ function ensureArena(): Promise<void> {
         UNIQUE KEY uniq_d (da, a, giorno),
         INDEX idx_a (a, createdAt)
       )`);
+      /* app 0.9.343: la serie di gruppo come Duolingo. Chi invita scrive una riga "invito"; parte solo quando l'amico accetta
+         (stato "attiva", attivaAt). "rifiutata" e "finita" restano per la storia, e non contano nel tetto di cinque. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_serie_gruppo (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NOT NULL,
+        stato VARCHAR(10) NOT NULL,
+        createdAt TIMESTAMP NULL,
+        attivaAt TIMESTAMP NULL,
+        fineAt TIMESTAMP NULL,
+        INDEX idx_da (da, stato), INDEX idx_a (a, stato)
+      )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_insieme (
         id INT AUTO_INCREMENT PRIMARY KEY,
         codice VARCHAR(8) NOT NULL UNIQUE,
@@ -415,6 +427,87 @@ export function registerFocusLockArenaRoutes(app: Express) {
       res.json({ ok: true, gia: false, tipo: String(d[0].tipo) });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "dono non aperto" });
+    }
+  });
+
+  /* ---- LA SERIE DI GRUPPO (app 0.9.343), come Duolingo: si invita, l'amico accetta o rifiuta, fino a cinque per persona ---- */
+  const SG_MAX = 5;
+  async function sgDiMio(device: string) {
+    return rows(sql`SELECT g.id, g.da, g.a, g.stato, g.createdAt, g.attivaAt, p.name, p.nick, p.device AS altro FROM focuslock_serie_gruppo g
+      JOIN focuslock_players p ON p.device = (CASE WHEN g.da = ${device} THEN g.a ELSE g.da END)
+      WHERE (g.da = ${device} OR g.a = ${device}) AND g.stato IN ('invito', 'attiva') ORDER BY g.id ASC LIMIT 20`);
+  }
+  app.get("/api/focuslock/social/serie-gruppo", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const l = await sgDiMio(device);
+      const attive: any[] = [], inviate: any[] = [], ricevute: any[] = [];
+      for (const r of l) {
+        const x = { id: Number(r.id), device: String(r.altro), nome: nomeDi(r), at: r.attivaAt || r.createdAt };
+        if (String(r.stato) === "attiva") attive.push(x);
+        else if (String(r.da) === device) inviate.push(x);
+        else ricevute.push(x);
+      }
+      res.json({ attive, inviate, ricevute });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "serie di gruppo non disponibile" });
+    }
+  });
+  app.post("/api/focuslock/social/serie-gruppo/invita", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64);
+    if (!device || !a || device === a) { res.status(400).json({ error: "invito non valido" }); return; }
+    try {
+      await ensureArena();
+      if (!(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      const mie = await sgDiMio(device);
+      const gia = mie.filter((r) => String(r.altro) === a)[0];
+      /* se l'amico aveva gia' invitato me, invitarlo vale come accettare */
+      if (gia && String(gia.stato) === "invito" && String(gia.da) === a) {
+        await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'attiva', attivaAt = NOW() WHERE id = ${Number(gia.id)}`);
+        res.json({ ok: true, gia: false, stato: "attiva" }); return;
+      }
+      if (gia) { res.json({ ok: true, gia: true, stato: String(gia.stato) }); return; }
+      if (mie.length >= SG_MAX) { res.status(409).json({ error: "Hai già cinque serie di gruppo" }); return; }
+      await rows(sql`INSERT INTO focuslock_serie_gruppo (da, a, stato, createdAt) VALUES (${device}, ${a}, 'invito', NOW())`);
+      res.json({ ok: true, gia: false, stato: "invito" });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "invito non mandato" });
+    }
+  });
+  app.post("/api/focuslock/social/serie-gruppo/rispondi", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), id = Number(b.id || 0), si = !!b.si;
+    if (!device || !(id > 0)) { res.status(400).json({ error: "risposta non valida" }); return; }
+    try {
+      await ensureArena();
+      const r = await rows(sql`SELECT id, da FROM focuslock_serie_gruppo WHERE id = ${id} AND a = ${device} AND stato = 'invito' LIMIT 1`);
+      if (!r[0]) { res.status(404).json({ error: "invito non trovato" }); return; }
+      if (si) {
+        const mie = await sgDiMio(device);
+        if (mie.filter((x) => String(x.stato) === "attiva").length >= SG_MAX) { res.status(409).json({ error: "Hai già cinque serie di gruppo" }); return; }
+        await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'attiva', attivaAt = NOW() WHERE id = ${id}`);
+      } else {
+        await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'rifiutata', fineAt = NOW() WHERE id = ${id}`);
+      }
+      res.json({ ok: true, stato: si ? "attiva" : "rifiutata" });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "risposta non salvata" });
+    }
+  });
+  app.post("/api/focuslock/social/serie-gruppo/termina", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64);
+    if (!device || !a) { res.status(400).json({ error: "richiesta non valida" }); return; }
+    try {
+      await ensureArena();
+      await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'finita', fineAt = NOW()
+        WHERE stato IN ('invito', 'attiva') AND ((da = ${device} AND a = ${a}) OR (da = ${a} AND a = ${device}))`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "serie non terminata" });
     }
   });
 
