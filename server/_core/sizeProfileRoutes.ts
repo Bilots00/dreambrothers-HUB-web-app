@@ -67,6 +67,7 @@ function cleanProfile(p: any) {
     age: num(p?.age, 10, 110),
     shape: num(p?.shape, 0, 8),
     unit: p?.unit === "imperial" ? "imperial" : "metric",
+    region: typeof p?.region === "string" ? p.region.slice(0, 4) : null,
     bra: p?.bra && typeof p.bra === "object"
       ? { std: String(p.bra.std || "").slice(0, 8), band: String(p.bra.band || "").slice(0, 6), cup: String(p.bra.cup || "").slice(0, 4) }
       : null,
