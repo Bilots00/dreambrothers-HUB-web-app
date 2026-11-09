@@ -44,6 +44,7 @@ import { registerCreativeRoutes } from "./creativeRoutes";
 import { registerAdsLibraryRoutes } from "./adsLibraryRoutes";
 import { registerFulfillmentRoutes } from "./fulfillmentRoutes";
 import { registerChargebackRoutes } from "./chargebackRoutes";
+import { registerSizeProfileRoutes } from "./sizeProfileRoutes";
 import { registerDailySchedules } from "./scheduler";
 import { registerMusicRoutes } from "../music/routes";
 import { appRouter } from "../routers";
@@ -712,6 +713,7 @@ async function startServer() {
   registerAdsLibraryRoutes(app);
   registerFulfillmentRoutes(app);
   registerChargebackRoutes(app);
+  registerSizeProfileRoutes(app);   // guida taglie Premium: profilo nel metafield cliente e feedback
   registerDreamteamRoutes(app);
   // tRPC API
   app.use(
