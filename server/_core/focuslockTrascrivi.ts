@@ -24,7 +24,7 @@ import { whoIs, isIdentity } from "./focuslockRoutes";
 const GEMINI_CHIAVE = () => process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.GEMINI_API_KEY || "";
 const GEMINI_MODELLO = () => process.env.DREAMMAP_DETTATURA_MODELLO || "gemini-3.5-flash-lite";
 const ISTRUZIONI = "Trascrivi l'audio parola per parola, nella lingua in cui si parla (di solito italiano). Metti punteggiatura e maiuscole giuste. Togli solo le esitazioni (ehm, uhm), le false partenze e le parole ripetute due volte di fila. Non riassumere, non tradurre, non aggiungere niente, nessun commento e nessun titolo. Se nell'audio non si parla, rispondi con una stringa vuota.";
-async function conGemini(buf: Buffer, mime: string): Promise<{ testo: string; modello: string }> {
+async function conGemini(buf: Buffer, mime: string, parole: string[] = []): Promise<{ testo: string; modello: string }> {
   const chiave = GEMINI_CHIAVE();
   if (!chiave) throw new Error("nessuna chiave Gemini");
   const modello = GEMINI_MODELLO();
@@ -32,7 +32,7 @@ async function conGemini(buf: Buffer, mime: string): Promise<{ testo: string; mo
     method: "POST", headers: { "x-goog-api-key": chiave, "content-type": "application/json" },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: ISTRUZIONI }] },
-      contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime.split(";")[0] || "audio/webm", data: buf.toString("base64") } }, { text: "Trascrivi." }] }],
+      contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime.split(";")[0] || "audio/webm", data: buf.toString("base64") } }, { text: "Trascrivi tutto l'audio fino all'ultima parola." + (parole.length ? " Parole che possono comparire, scritte cosi': " + parole.join(", ") + "." : "") }] }],
       generationConfig: { temperature: 0, maxOutputTokens: 4000, thinkingConfig: { thinkingLevel: "minimal" } },
     }),
   });
@@ -46,6 +46,49 @@ const MAX_SEC_GIORNO = Math.max(60, Math.floor(Number(process.env.FOCUSLOCK_DETT
 const MAX_BYTE = 25 * 1024 * 1024;
 const USATI = new Map<string, { giorno: string; sec: number }>();
 function giorno(): string { return new Date().toISOString().slice(0, 10); }
+
+/* 0.9.342, Andrea: "la trascrizione con l'AI fa cagare: si mangia le ultime parole e capisce 'toma' per 'Roma'; la dettatura del
+ * telefono e' meglio". Abbiamo guardato come lavora Wispr Flow (l'app installata sul PC): manda TUTTO l'audio a un riconoscitore vero
+ * (/llm/asr) con la lingua scelta e un dizionario (nome, parole del testo, vocabolario personale), e dopo il rilascio tiene il
+ * microfono acceso finche' la voce non tace. Gemini Flash-Lite e' un modello di linguaggio che ascolta: riassume, salta la coda e
+ * inventa parole simili. Adesso l'ordine e' il contrario: prima ElevenLabs Scribe v2 (un riconoscitore vero, con i "keyterms", le parole
+ * da riconoscere), poi Gemini solo se Scribe non risponde. Il conto: Scribe 0,22 $ l'ora, +20% con i keyterms (0,26 $), sul piano
+ * Starter gia' attivo (27 ore al mese); con piu' di 100 keyterms ogni richiesta conta almeno 20 secondi, quindi se ne mandano al
+ * massimo 60. */
+function paroleChiave(v: any): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v) {
+    const w = String(x || "").replace(/[<>{}\[\]\\]/g, "").replace(/\s+/g, " ").trim();
+    if (w.length < 2 || w.length > 50 || w.split(" ").length > 5) continue;
+    if (!out.includes(w)) out.push(w);
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+async function conScribe(chiave: string, buf: Buffer, mime: string, lingua: string, parole: string[]): Promise<{ ok: boolean; status: number; j: any }> {
+  const prova = async (conParole: boolean) => {
+    const fd = new FormData();
+    fd.append("model_id", "scribe_v2");
+    fd.append("language_code", lingua);
+    fd.append("no_verbatim", "true");
+    fd.append("tag_audio_events", "false");
+    fd.append("timestamps_granularity", "none");
+    if (conParole) for (const p of parole) fd.append("keyterms", p);
+    const est = /mp4|m4a|aac/.test(mime) ? "m4a" : (/ogg/.test(mime) ? "ogg" : (/wav/.test(mime) ? "wav" : "webm"));
+    fd.append("file", new Blob([new Uint8Array(buf)], { type: mime }), "dettato." + est);
+    const r = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": chiave }, body: fd });
+    const j: any = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, j };
+  };
+  let r = await prova(parole.length > 0);
+  /* se le parole chiave non vanno bene (formato o piano), si riprova senza: la trascrizione conta piu' del dizionario */
+  if (!r.ok && parole.length && (r.status === 400 || r.status === 422)) {
+    console.warn("[trascrivi] Scribe con keyterms rifiutato, riprovo senza:", JSON.stringify(r.j?.detail || r.j).slice(0, 200));
+    r = await prova(false);
+  }
+  return r;
+}
 
 export function registerFocusLockTrascriviRoutes(app: Express) {
   app.post("/api/focuslock/agent/trascrivi", async (req: Request, res: Response) => {
@@ -64,16 +107,39 @@ export function registerFocusLockTrascriviRoutes(app: Express) {
     const oggi = giorno();
     const usati = u && u.giorno === oggi ? u.sec : 0;
     if (usati + durata > MAX_SEC_GIORNO) { res.status(429).json({ error: "minuti di oggi finiti", finiti: true }); return; }
+    const lingua = String(body.lingua || "it").slice(0, 5);
+    const parole = paroleChiave(body.parole);
+    let erroreScribe = "";
+    if (chiave) {
+      try {
+        const r = await conScribe(String(chiave), buf, mime, lingua, parole);
+        if (r.ok) {
+          const sec = Math.round(Number(r.j?.audio_duration_secs) || durata || 0);
+          USATI.set(who.sub, { giorno: oggi, sec: usati + sec });
+          res.json({ testo: String(r.j?.text || "").trim(), sec, lingua: r.j?.language_code || "", motore: "scribe_v2" + (parole.length ? "+keyterms" : "") });
+          return;
+        }
+        erroreScribe = String(r.j?.detail?.message || r.j?.detail?.status || r.j?.detail || r.status);
+        if (!GEMINI_CHIAVE()) {
+          res.status(r.status === 401 || r.status === 402 || /quota|credit/i.test(erroreScribe) ? 402 : 502).json({ error: "trascrizione non riuscita: " + erroreScribe.slice(0, 200) });
+          return;
+        }
+        console.warn("[trascrivi] Scribe non riuscito, provo Gemini:", erroreScribe.slice(0, 200));
+      } catch (e: any) {
+        erroreScribe = e?.message || String(e);
+        if (!GEMINI_CHIAVE()) { res.status(502).json({ error: "trascrizione non riuscita: " + erroreScribe }); return; }
+      }
+    }
     if (GEMINI_CHIAVE()) {
       try {
-        const g = await conGemini(buf, mime);
+        const g = await conGemini(buf, mime, parole);
         const sec = Math.round(durata || 0);
         USATI.set(who.sub, { giorno: oggi, sec: usati + sec });
         res.json({ testo: g.testo, sec, lingua: String(body.lingua || "it").slice(0, 5), motore: g.modello });
         return;
       } catch (e: any) {
-        console.warn("[trascrivi] Gemini non riuscito, provo Scribe:", e?.message || e);
-        if (!chiave) { res.status(502).json({ error: "trascrizione non riuscita: " + (e?.message || String(e)) }); return; }
+        res.status(502).json({ error: "trascrizione non riuscita: " + (e?.message || String(e)) + (erroreScribe ? " / " + erroreScribe : "") });
+        return;
       }
     }
     try {
@@ -84,7 +150,7 @@ export function registerFocusLockTrascriviRoutes(app: Express) {
       fd.append("tag_audio_events", "false");
       fd.append("timestamps_granularity", "none");
       const est = /mp4|m4a|aac/.test(mime) ? "m4a" : (/ogg/.test(mime) ? "ogg" : (/wav/.test(mime) ? "wav" : "webm"));
-      fd.append("file", new Blob([buf], { type: mime }), "dettato." + est);
+      fd.append("file", new Blob([new Uint8Array(buf)], { type: mime }), "dettato." + est);
       const r = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": String(chiave) }, body: fd });
       const j: any = await r.json().catch(() => ({}));
       if (!r.ok) {
