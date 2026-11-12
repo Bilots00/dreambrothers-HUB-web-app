@@ -68,6 +68,17 @@ function ensureArena(): Promise<void> {
         fineAt TIMESTAMP NULL,
         INDEX idx_da (da, stato), INDEX idx_a (a, stato)
       )`);
+      /* app 0.9.344: la Serie perfetta, come lo "Slancio perfetto" di Duolingo. Chi fa la tappa 7 giorni di fila senza protezioni
+         entra nel premio della settimana (3000 monete), che il lunedi' dopo si divide fra tutti quelli che ce l'hanno fatta. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_serie_perfetta (
+        device VARCHAR(64) NOT NULL,
+        settimana VARCHAR(10) NOT NULL,
+        giorni INT NOT NULL DEFAULT 0,
+        pagatoAt TIMESTAMP NULL,
+        quota INT NULL,
+        updatedAt TIMESTAMP NULL,
+        PRIMARY KEY (device, settimana)
+      )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_insieme (
         id INT AUTO_INCREMENT PRIMARY KEY,
         codice VARCHAR(8) NOT NULL UNIQUE,
@@ -508,6 +519,48 @@ export function registerFocusLockArenaRoutes(app: Express) {
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "serie non terminata" });
+    }
+  });
+
+  /* ---- LA SERIE PERFETTA (app 0.9.344) ---- */
+  const SP_PREMIO = 3000, SP_MINIMO = 50;
+  app.post("/api/focuslock/social/serie-perfetta", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const giorni = Math.max(0, Math.min(7, Math.floor(Number(b.giorni || 0))));
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const c = await rows(sql`SELECT 1 AS k FROM focuslock_players WHERE device = ${device} LIMIT 1`);
+      if (!c.length) { res.status(404).json({ error: "giocatore non trovato" }); return; }
+      if (giorni >= 3) {
+        await rows(sql`INSERT INTO focuslock_serie_perfetta (device, settimana, giorni, updatedAt) VALUES (${device}, DATE_FORMAT(UTC_DATE(), '%x-W%v'), ${giorni}, NOW())
+          ON DUPLICATE KEY UPDATE giorni = GREATEST(giorni, VALUES(giorni)), updatedAt = NOW()`);
+      }
+      const n = await rows(sql`SELECT SUM(giorni >= 3) AS inGara, SUM(giorni >= 7) AS completati FROM focuslock_serie_perfetta WHERE settimana = DATE_FORMAT(UTC_DATE(), '%x-W%v')`);
+      res.json({ ok: true, premio: SP_PREMIO, inGara: Number(n[0]?.inGara || 0), completati: Number(n[0]?.completati || 0) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "serie perfetta non salvata" });
+    }
+  });
+  /* Il lunedi' (o quando riapre l'app): la quota della settimana scorsa, una volta sola. */
+  app.post("/api/focuslock/social/serie-perfetta/premio", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const r = await rows(sql`SELECT settimana, pagatoAt FROM focuslock_serie_perfetta
+        WHERE device = ${device} AND giorni >= 7 AND settimana = DATE_FORMAT(UTC_DATE() - INTERVAL 7 DAY, '%x-W%v') LIMIT 1`);
+      if (!r[0] || r[0].pagatoAt) { res.json({ ok: true, quota: 0 }); return; }
+      const n = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_serie_perfetta WHERE giorni >= 7 AND settimana = ${String(r[0].settimana)}`);
+      const quanti = Math.max(1, Number(n[0]?.n || 1));
+      const quota = Math.max(SP_MINIMO, Math.floor(SP_PREMIO / quanti));
+      const fatto: any = await rows(sql`UPDATE focuslock_serie_perfetta SET pagatoAt = NOW(), quota = ${quota}
+        WHERE device = ${device} AND settimana = ${String(r[0].settimana)} AND pagatoAt IS NULL`);
+      res.json({ ok: true, quota, quanti });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "premio non disponibile" });
     }
   });
 
