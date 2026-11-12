@@ -181,6 +181,7 @@ const REGOLE = [
   "IL PIANO. Quando conosci il grilletto proponi UN piano su misura e concreto, detto in una o due frasi, e chiedi se lo vuole applicare. Il piano può essere: \"blocco\" di app in una fascia oraria (app SOLO fra i pacchetti nei dati, dalle e alle in HH:MM, giorni 7 booleani da lunedì); \"limite\" di minuti al giorno su un'app; oppure una prevenzione senza blocco con \"azione\" fra: focus (una sessione di Full Focus con le notifiche chiuse), caveau (le idee nuove nel caveau), respiro (un respiro guidato prima del lavoro), notifiche (spegnere le notifiche di un'app), mattina (il lavoro difficile quando ha più energia). Il piano NON si applica da solo: l'app chiede il sì alla persona.",
   "Se la persona dice di sì al piano, non riproporlo: vai alla fase dopo.",
   "IL LAVORO VERO (app 0.9.344). Le ore \"sul sogno\" contate dal navigatore (dati.spostamento.cause) sono solo le sessioni di Full Focus e i programmi del computer segnati produttivi. Prima di parlare di lavoro guarda dati.lavoroVero: cosa ha fatto davvero al computer ieri e oggi (voci con i minuti; \"non classificato\" può essere lavoro vero) e con le altre AI. MAI scrivere \"non hai lavorato\" o \"non hai lavorato a...\". Se in lavoroVero ci sono ore di lavoro, dillo così: \"Ieri hai lavorato 2 ore su admin.shopify.com e 5 ore su claude.ai, ma senza Full Focus l'app non le ha contate come ore sul sogno: per questo l'arrivo si è spostato.\" e chiedi se era lavoro sulla priorità o su altro. Solo se lavoroVero è vuoto puoi dire che non risultano ore contate, senza accusare.",
+  "TELEFONO E COMPUTER, SEMPRE TUTTI E DUE (app 0.9.346). dati.tempo e dati.app sono della sorgente che sta guardando a schermo; dati.telefonoOggi e dati.lavoroVero (computerOggi, computerIeri) ci sono sempre: analizza tutti e due i dispositivi insieme e di' dove è andato il tempo su ognuno, senza chiedergli di cambiare filtro. Il computer conta solo la finestra in primo piano e solo con la persona davanti (mouse o tastiera negli ultimi due minuti): quei minuti sono uso attivo vero.",
   "LA DATA NEI PRIMI GIORNI. Se c'è dati.dataVelata, non scrivere nessuna data di arrivo e nessuna previsione di anticipo o ritardo.",
   "Le statistiche anonime (\"imparato\") dicono cosa capita più spesso e cosa ha aiutato altre persone con un sogno simile: usale solo come ispirazione, mai come fatto su di lui, e mai dire che vengono da altri utenti con nomi o numeri.",
 ].join("\n");
@@ -196,6 +197,8 @@ const FORMATO = [
 ].join("\n");
 
 const USATI = new Map<string, { g: string; n: number }>();
+/** I modelli che hanno appena risposto "sovraccarico": si saltano fino all'ora scritta qui. */
+const SOVRACCARICO = new Map<string, number>();
 const TETTO = Math.max(30, Number(process.env.DREAMMAP_CONVERSA_MAX_DAY || 300));
 
 /* ---------------------------------------------------------------------------------------
@@ -518,20 +521,51 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
          * leggero con il ragionamento al minimo. Ora la persona sceglie come nella chat del suo agente: "attento" (di serie)
          * = Flash con il ragionamento alto, "veloce" = Flash-Lite con un ragionamento basso. Se il primo non risponde, c'e' l'altro. */
         const attento = b.scelta !== "veloce";
-        const lista = attento
-          ? [[process.env.DREAMMAP_CONVERSA_ATTENTO || "gemini-3.5-flash", "high", 6000], [process.env.DREAMMAP_CONVERSA_MODELLO || "gemini-3.5-flash-lite", "low", 2400]]
-          : [[process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || "gemini-3.5-flash-lite", "low", 2400]];
-        for (const [modello, livello, maxOut] of lista as [string, string, number][]) {
+        /* app 0.9.346, Andrea: "Il Genio non ha risposto. Perché? Deve rispondere, punto". LA CAUSA, misurata: il modello "attento"
+         * (Flash) nelle ore di punta risponde 503 "high demand" dopo 32 secondi, o resta appeso; senza un tempo massimo la richiesta
+         * superava i 75 secondi che l'app aspetta, e la riserva (Flash-Lite, che risponde in mezzo secondo) non partiva mai.
+         * Adesso: ogni tentativo ha il suo tempo massimo; un modello che ha appena fallito per sovraccarico si salta per tre minuti;
+         * la riserva prova prima con il ragionamento medio e poi basso; e una risposta non in JSON si usa lo stesso come testo. */
+        const principale = process.env.DREAMMAP_CONVERSA_ATTENTO || "gemini-3.5-flash";
+        const riserva = process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || "gemini-3.5-flash-lite";
+        const tentativi: [string, string, number, number][] = [];
+        if (attento && !(SOVRACCARICO.get(principale)! > Date.now())) tentativi.push([principale, "high", 6000, 22000]);
+        if (attento) tentativi.push([riserva, "medium", 4000, 20000]);
+        tentativi.push([riserva, "low", 2400, 15000]);
+        tentativi.push([riserva, "minimal", 2400, 12000]);
+        let ultimoTesto = "";
+        for (const [modello, livello, maxOut, tempo] of tentativi) {
+          const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), tempo);
           try {
             const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
-              method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
+              method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" }, signal: ac.signal,
               body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt + allTesto }, ...allMedia.map((a: any) => ({ inlineData: { mimeType: a.mime, data: a.dati } }))] }],
                 generationConfig: { temperature: 0.6, maxOutputTokens: maxOut, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: livello } } }),
             });
             const j: any = await r.json().catch(() => ({}));
-            const v = r.ok ? leggi((j?.candidates?.[0]?.content?.parts || []).filter((x: any) => !x.thought).map((x: any) => x.text || "").join("")) : null;
+            if (!r.ok) {
+              console.warn("[conversa] " + modello + " (" + livello + ") -> " + r.status + " " + String(j?.error?.message || "").slice(0, 120));
+              if (r.status === 503 || r.status === 429 || r.status === 500) SOVRACCARICO.set(modello, Date.now() + 3 * 60000);
+              continue;
+            }
+            const grezzo = (j?.candidates?.[0]?.content?.parts || []).filter((x: any) => !x.thought).map((x: any) => x.text || "").join("");
+            if (grezzo) ultimoTesto = grezzo;
+            const v = leggi(grezzo);
             if (v) { res.json({ ...v, modello, scelta: attento ? "attento" : "veloce" }); return; }
-          } catch { /* si prova il prossimo */ }
+            console.warn("[conversa] " + modello + " (" + livello + ") risposta non leggibile, fine: " + String(j?.candidates?.[0]?.finishReason || ""));
+          } catch (e: any) {
+            console.warn("[conversa] " + modello + " (" + livello + ") " + (ac.signal.aborted ? "oltre " + tempo + " ms" : String(e?.message || e).slice(0, 120)));
+            if (ac.signal.aborted) SOVRACCARICO.set(modello, Date.now() + 3 * 60000);
+          } finally { clearTimeout(timer); }
+        }
+        /* nessun JSON buono, ma un testo c'e': il JSON tagliato a meta' porta comunque la frase, e una frase vale piu' di un errore */
+        if (ultimoTesto) {
+          const m = /"testo"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(ultimoTesto);
+          let frase = "";
+          try { frase = m ? JSON.parse('"' + m[1] + '"') : ""; } catch { frase = m ? m[1] : ""; }
+          if (!frase && !/^\s*[{\[]/.test(ultimoTesto)) frase = ultimoTesto;
+          frase = copy(frase, 700);
+          if (frase.length >= 20) { res.json({ testo: frase, fase: "", trigger: "", piano: null, pillole: [], fine: false, riepilogo: null, verdetto: "", percorso: null, modello: riserva, scelta: "veloce", recuperata: true }); return; }
         }
       }
       if (process.env.AGENT_LLM_KEY) {
