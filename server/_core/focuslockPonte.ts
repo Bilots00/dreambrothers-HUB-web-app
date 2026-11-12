@@ -42,6 +42,12 @@ function ensure(): Promise<void> {
         createdAt TIMESTAMP NULL,
         INDEX idx_chiave (chiave, createdAt)
       )`);
+      /* app 0.9.347: la roadmap scritta dall'AI dell'utente (gratis per noi: la paga lui con il suo abbonamento) */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_ponte_roadmap (
+        chiave VARCHAR(64) PRIMARY KEY,
+        piano TEXT NOT NULL,
+        createdAt TIMESTAMP NULL
+      )`);
     })().catch((e) => { pronto = null; throw e; });
   }
   return pronto;
@@ -68,6 +74,31 @@ async function scrivi(chiave: string, a: { fonte?: unknown; riassunto?: unknown;
   return "Registrato: il Genio lo legge nella prossima revisione.";
 }
 
+/* app 0.9.347, Andrea: "chi ha gia' un agente suo puo' collegarlo e farsi creare la roadmap da li'". La roadmap arriva nello stesso
+ * formato di quella dell'agente di DreamMap ({cinque, anno, mese, settimana, oggi}: testo e passi) e l'app la applica solo con il si'. */
+function pulisciPiano(p: any): any {
+  if (!p || typeof p !== "object") return null;
+  const out: any = {};
+  for (const k of ["cinque", "anno", "mese", "settimana", "oggi"]) {
+    const x = p[k];
+    if (!x || typeof x !== "object") continue;
+    const testo = String(x.testo ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+    const passi = (Array.isArray(x.passi) ? x.passi : []).map((t: any) => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, 180)).filter(Boolean).slice(0, 6);
+    if (testo || passi.length) out[k] = { testo, passi };
+  }
+  return out.settimana || out.oggi || out.mese ? out : null;
+}
+async function scriviRoadmap(chiave: string, a: any): Promise<string> {
+  const piano = pulisciPiano(a?.piano ?? a);
+  if (!piano) throw new Error("La roadmap deve avere almeno il mese, la settimana o oggi, ognuno con testo e passi.");
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const j = JSON.stringify(piano);
+  await db.execute(sql`INSERT INTO focuslock_ponte_roadmap (chiave, piano, createdAt) VALUES (${chiave}, ${j}, NOW()) ON DUPLICATE KEY UPDATE piano = ${j}, createdAt = NOW()`);
+  return "Roadmap inviata a DreamMap: l'utente la vede nell'app e la applica con un tocco.";
+}
+const PASSI_DESCR = "Da 2 a 5 passi concreti. Ogni passo è una frase intera con il verbo all'inizio, produce qualcosa e dura almeno 25 minuti (mai una scelta da due secondi come 'scegliere lo strumento').";
+const ANELLO = { type: "object", properties: { testo: { type: "string", description: "Una frase: il traguardo di questo periodo." }, passi: { type: "array", items: { type: "string" }, description: PASSI_DESCR } }, required: ["testo", "passi"] };
 const STRUMENTI = [
   {
     name: "registra_lavoro",
@@ -81,6 +112,15 @@ const STRUMENTI = [
         in_rotta: { type: "boolean", description: "true se il lavoro serve al piano dell'utente (quello letto con leggi_piano), false se e' fuori rotta." },
       },
       required: ["riassunto"],
+    },
+  },
+  {
+    name: "scrivi_roadmap",
+    description: "Scrive su DreamMap la roadmap dell'utente verso il suo sogno, dopo avergli fatto le domande che servono (una alla volta). La catena va dal lontano al vicino: fra cinque anni, quest'anno, questo mese, questa settimana, oggi; metti solo gli anelli che finiscono prima della data del sogno. L'utente la vede nell'app e la applica lui.",
+    inputSchema: {
+      type: "object",
+      properties: { piano: { type: "object", properties: { cinque: ANELLO, anno: ANELLO, mese: ANELLO, settimana: ANELLO, oggi: ANELLO }, description: "Gli anelli della roadmap." } },
+      required: ["piano"],
     },
   },
   {
@@ -100,7 +140,7 @@ async function rispondiMcp(chiave: string, m: any): Promise<any> {
         protocolVersion: String(m?.params?.protocolVersion || "2025-03-26"),
         capabilities: { tools: {} },
         serverInfo: { name: "dreammap", version: "1.0.0" },
-        instructions: "All'inizio leggi il piano con leggi_piano. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro.",
+        instructions: "All'inizio leggi il piano con leggi_piano. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro. Se l'utente ti chiede la sua roadmap, fagli le domande una alla volta e poi scrivila con scrivi_roadmap.",
       });
     case "ping":
       return ok({});
@@ -111,6 +151,7 @@ async function rispondiMcp(chiave: string, m: any): Promise<any> {
       const a = m?.params?.arguments || {};
       try {
         if (nome === "registra_lavoro") return ok({ content: [{ type: "text", text: await scrivi(chiave, a) }] });
+        if (nome === "scrivi_roadmap") return ok({ content: [{ type: "text", text: await scriviRoadmap(chiave, a) }] });
         if (nome === "leggi_piano") {
           const r = await rows(sql`SELECT piano FROM focuslock_ponte_chiavi WHERE chiave = ${chiave} LIMIT 1`);
           return ok({ content: [{ type: "text", text: String(r[0]?.piano || "Il piano non e' ancora arrivato: chiedi all'utente di aprire DreamMap.") }] });
@@ -150,9 +191,22 @@ export function registerFocusLockPonteRoutes(app: Express) {
         const db = await getDb();
         if (!db) throw new Error("database unavailable");
         await db.execute(sql`DELETE FROM focuslock_ponte_log WHERE chiave = ${chiave}`);
+        await db.execute(sql`DELETE FROM focuslock_ponte_roadmap WHERE chiave = ${chiave}`);
         await db.execute(sql`DELETE FROM focuslock_ponte_chiavi WHERE chiave = ${chiave}`);
       }
       res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
+  });
+  /* app 0.9.347: l'app chiede se l'AI dell'utente ha scritto una roadmap */
+  app.get("/api/focuslock/ponte/roadmap", async (req: Request, res: Response) => {
+    const chiave = String(req.query?.chiave || "");
+    try {
+      await ensure();
+      if (!(await esiste(chiave))) { res.status(404).json({ error: "chiave sconosciuta" }); return; }
+      const r = await rows(sql`SELECT piano, createdAt FROM focuslock_ponte_roadmap WHERE chiave = ${chiave} LIMIT 1`);
+      if (!r[0]) { res.json({ piano: null }); return; }
+      let piano: any = null; try { piano = JSON.parse(String(r[0].piano)); } catch { piano = null; }
+      res.json({ piano, at: r[0].createdAt ? new Date(r[0].createdAt as any).getTime() : 0 });
     } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
   });
   /* l'app manda il piano di oggi, cosi' l'AI puo' leggerlo */
