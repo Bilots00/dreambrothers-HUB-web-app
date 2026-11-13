@@ -140,7 +140,7 @@ async function rispondiMcp(chiave: string, m: any): Promise<any> {
         protocolVersion: String(m?.params?.protocolVersion || "2025-03-26"),
         capabilities: { tools: {} },
         serverInfo: { name: "dreammap", version: "1.0.0" },
-        instructions: "All'inizio leggi il piano con leggi_piano. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro. Se l'utente ti chiede la sua roadmap, fagli le domande una alla volta e poi scrivila con scrivi_roadmap.",
+        instructions: "All'inizio leggi il piano con leggi_piano. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro: cosa avete fatto, su quale task, e se era la priorità del piano. Se l'utente ti chiede la sua roadmap, fagli le domande una alla volta e poi scrivila con scrivi_roadmap. Se ti chiede il resoconto della sera, riassumi in registra_lavoro tutto quello su cui avete lavorato oggi e, se il piano non torna più con quello che sta facendo, aggiorna la roadmap con scrivi_roadmap.",
       });
     case "ping":
       return ok({});

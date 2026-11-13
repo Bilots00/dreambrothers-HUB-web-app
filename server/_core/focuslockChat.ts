@@ -189,6 +189,8 @@ const REGOLE_SCRITTURA = [
   "LE VIRGOLETTE sono sempre quelle normali (\"), mai le caporali. Mai il trattino lungo.",
   "L'ORA. Il brief comincia con il giorno e l'ora di adesso (ora italiana): se ti chiede che ore sono o che giorno è, rispondi con quelli, e usali per ragionare (quante ore mancano a stasera, che giorno della settimana è).",
   "COME SI SCRIVE UN PASSO (app 0.9.290, Andrea: \"Scrivere l'offerta quadro più piano su misura: che cazzo vuol dire?\"). Ogni passo è una frase italiana intera che si capisce senza contesto: il verbo, l'oggetto, e per chi o per cosa. Una cosa sola per passo. Mai il segno + né la parola \"più\" per unire due cose (scrivi \"e\", \"con\", \"insieme a\"), mai elenchi di sostantivi incollati, mai sigle. NO \"Scrivere l'offerta quadro più piano su misura, una pagina sola\"; SÌ \"Scrivere in una pagina l'offerta del quadro, con il piano su misura incluso (60 minuti)\". Le vocali accentate si scrivono con l'accento (è, più, perché, già, così, può), mai con l'apostrofo.",
+  "LE DECISIONI (app 0.9.348). Nel brief c'è la riga LE DECISIONI: quante ne ha prese oggi e quali, i giorni di fila con decisioni, quanto ci mette dalla sveglia alla prima mossa e a scrivere un messaggio alla sua AI. È il parametro che conta di più: tienilo presente in ogni consiglio, e quando ricalcoli la rotta o la data usa la velocità delle sue decisioni come primo segnale.",
+  "LA RIGA ATTENZIONE (app 0.9.348): quando la scrivi, ogni numero sono minuti di oggi, sempre. L'app la trasforma in un elenco leggibile: non ripetere quei numeri anche nel testo senza dire che sono minuti o ore.",
   "UN PASSO È LAVORO VERO, MAI UNA SCELTA DA DUE SECONDI (app 0.9.347, Andrea: \"Scegliere lo strumento di intelligenza artificiale per i video non è una tappa: sembra una decisione di vita o di morte, e 30 euro in più o in meno non cambiano niente\"). Un passo produce qualcosa che prima non c'era (un video girato, una pagina scritta, tre clienti chiamati) e richiede almeno 25 minuti. Le micro decisioni (quale strumento, quale app, quale piattaforma, quale colore, quale corso) NON sono passi e non sono tappe: le prendi tu per lui, in base al budget e a quello che sai, e le scrivi dentro al passo come indicazione. NO \"Scegliere lo strumento di intelligenza artificiale per i video\"; SÌ \"Montare il primo video di 30 secondi con CapCut (gratis): se preferisci un altro strumento va bene uguale (45 minuti)\". Se la scelta è davvero importante (soldi veri, un contratto, un socio) fai una domanda sola nella chat, mai una tappa.",
   "QUANDO TI CHIEDE DI SCOMPORRE UNA COSA IN PASSI: al massimo 3 passi, numerati (1. 2. 3.), ognuno con il verbo all'inizio e i minuti fra parentesi alla fine. Mai liste da spuntare con le parentesi quadre ([ ]). Se dopo ne vuole altri, ne scrivi altri 3 al massimo.",
   "NON IMPONI IL MODO DI FARE IL LAVORO. Il modo lo sceglie lui. Se una cosa si può fare in più modi (per esempio un video si può girare con il telefono, oppure creare con strumenti di intelligenza artificiale come Higgsfield, senza mettersi davanti alla telecamera), proponi le possibilità in due righe o chiedigli quale preferisce.",
@@ -249,6 +251,9 @@ function fornitore(): "gemini" | "anthropic" | "" {
   return "";
 }
 function llmAcceso(): boolean { return !!fornitore(); }
+/* app 0.9.348: la chiave Gemini che usa gia' il Genio (DREAMMAP_GEMINI_KEY). Serve SOLO al Veloce del Max: per gli altri account il
+ * fornitore a crediti resta quello configurato (AGENT_LLM_PROVIDER/AGENT_*), cosi' non cambia niente e non si aggiunge spesa */
+function chiaveGeminiMax(): string { return String(process.env.AGENT_GEMINI_KEY || process.env.DREAMMAP_GEMINI_KEY || ""); }
 const CREDITI_ROADMAP = Math.max(1, Math.floor(Number(process.env.AGENT_CREDITI_ROADMAP || 5)));
 let CLAUDE: Anthropic | null = null;
 function claude(): Anthropic {
@@ -416,8 +421,8 @@ function blocchiClaude(lista: Allegato[]): any[] {
  *  della roadmap se l'utente ha scelto «profondo»). Gli allegati vanno nell'ultimo messaggio
  *  dell'utente. Torna il testo e i token usati (per la pagina «Consumi»). */
 async function chiamaModello(messaggi: { role: string; content: string }[], piano = false,
-  opz: { allegati?: Allegato[]; scelta?: SceltaModello; effort?: "low" | "medium" | "high" } = {}): Promise<{ testo: string; uso: Uso | null }> {
-  const f = fornitore();
+  opz: { allegati?: Allegato[]; scelta?: SceltaModello; effort?: "low" | "medium" | "high"; forzaGemini?: boolean } = {}): Promise<{ testo: string; uso: Uso | null }> {
+  const f = opz.forzaGemini ? "gemini" : fornitore();
   const allegati = opz.allegati || [];
   if (f === "anthropic") {
     /* 0.9.230: le immagini allegate dal piano (link alle immagini del piano su questo server) arrivano
@@ -449,10 +454,22 @@ async function chiamaModello(messaggi: { role: string; content: string }[], pian
       cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0 } };
   }
   if (f === "gemini") {
-    const modello = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+    /* app 0.9.348: se il primo modello e' sovraccarico (503/429) o tace oltre 25 secondi, prova le riserve, che hanno code diverse */
+    const modelli = [process.env.GEMINI_MODEL || "gemini-3.5-flash-lite", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"].filter((x, i, a) => a.indexOf(x) === i);
+    let ultimoErr: any = null;
+    for (const modello of modelli) {
+      try { return await chiamaGemini(modello, messaggi, allegati); } catch (e: any) { ultimoErr = e; console.warn("[focuslock-chat] " + modello + ": " + String(e?.message || e).slice(0, 120)); }
+    }
+    throw ultimoErr || new Error("gemini: nessun modello ha risposto");
+  }
+  throw new Error("nessun fornitore configurato");
+}
+async function chiamaGemini(modello: string, messaggi: { role: string; content: string }[], allegati: Allegato[]): Promise<{ testo: string; uso: Uso | null }> {
+  {
+    const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 25000);
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
-      method: "POST",
-      headers: { "x-goog-api-key": String(process.env.AGENT_GEMINI_KEY), "content-type": "application/json" },
+      method: "POST", signal: ac.signal,
+      headers: { "x-goog-api-key": chiaveGeminiMax(), "content-type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: PERSONA }] },
         contents: messaggi.map((m, i) => ({ role: m.role === "assistant" ? "model" : "user",
@@ -462,13 +479,13 @@ async function chiamaModello(messaggi: { role: string; content: string }[], pian
       }),
     });
     const j: any = await r.json();
-    const testo = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim();
+    clearTimeout(timer);
+    const testo = (j?.candidates?.[0]?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || "").join("").trim();
     if (!r.ok || !testo) throw new Error("gemini " + r.status + " " + JSON.stringify(j?.error || j?.promptFeedback || "").slice(0, 200));
     const um = j?.usageMetadata || {};
     return { testo, uso: { modello, inTok: Math.max(0, (um.promptTokenCount || 0) - (um.cachedContentTokenCount || 0)),
       outTok: (um.candidatesTokenCount || 0) + (um.thoughtsTokenCount || 0), cacheRead: um.cachedContentTokenCount || 0, cacheWrite: 0 } };
   }
-  throw new Error("nessun fornitore configurato");
 }
 const APPUNTI_ISTRUZIONI = "Sei un correttore di appunti dettati a voce. Ricevi la trascrizione grezza di quello che una persona ha detto al telefono. Restituisci SOLO il testo sistemato, nella stessa lingua: punteggiatura e maiuscole giuste, a capo dove cambia argomento, un elenco puntato (-) se la persona elenca delle cose, via le esitazioni (ehm, cioè ripetuto, le parole dette due volte di fila). Il riconoscimento vocale del telefono sbaglia spesso le parole che suonano simili: quando una parola chiaramente non ha senso nella frase, sostituiscila con quella che la persona ha detto davvero (stesso suono, senso giusto nel contesto). Non aggiungere frasi, non riassumere, non commentare, non mettere un titolo. Le parole restano le sue.";
 async function appuntiAI(testo: string): Promise<{ testo: string; uso: Uso | null }> {
@@ -591,17 +608,27 @@ function tagliaPiano(testo: string): { testo: string; azioni: any } {
   try { return { testo: testo.slice(0, m.index).trim(), azioni: JSON.parse(m[1]) }; } catch { return { testo: testo.trim(), azioni: null }; }
 }
 
-/** Risponde a un messaggio con il fornitore a crediti. Mai per gli account del Max. */
+/** Un messaggio del Max che risponde il server: dall'app, in Veloce, testo normale (non una richiesta speciale che inizia con "["). */
+function veloceDalMax(m: any, azIn: any): boolean {
+  return String(m.canale || "") === "app" && sceltaValida(azIn?.modello) === "veloce" && !/^\s*\[/.test(String(m.testo || ""));
+}
+/** Risponde a un messaggio con il fornitore a crediti. Per gli account del Max solo il Veloce dall'app. */
 async function rispondiACrediti(id: number): Promise<void> {
-  if (!llmAcceso()) return;
+  if (!llmAcceso() && !chiaveGeminiMax()) return;
   const r = await rows(sql`SELECT id, googleSub, email, canale, testo, azioni FROM focuslock_agent_msgs WHERE id = ${id} AND direzione = 'in' AND stato = 'attesa' LIMIT 1`);
   if (!r.length) return;
   const m = r[0];
-  if (emailMax().includes(String(m.email || "").trim().toLowerCase())) return;        // quelli li serve il VPS
+  const azIn: any = parse(m.azioni) || {};
+  /* app 0.9.348, Andrea: "in modalita' Veloce ci mette troppo". Per l'account del Max ogni messaggio andava al lavoratore sul VPS
+   * (claude -p, minuti). Adesso il Veloce dall'app lo serve subito il modello rapido del server; il VPS resta per "profondo",
+   * per Telegram e WhatsApp e per le richieste speciali dell'app ([turni], [frasi], [piano]...). Il Max non paga crediti. */
+  const eMax = emailMax().includes(String(m.email || "").trim().toLowerCase());
+  if (eMax && !veloceDalMax(m, azIn)) return;        // quelli li serve il VPS
+  if (!eMax && !llmAcceso()) return;
+  const forzaGemini = eMax && !llmAcceso();
   const sub = String(m.googleSub);
   /* 0.9.242: il modello scelto per questo messaggio (dall'app) o, per Telegram e WhatsApp, quello
    * delle impostazioni; e gli allegati, se ce ne sono */
-  const azIn: any = parse(m.azioni) || {};
   const scelta: SceltaModello = sceltaValida(azIn.modello) || (m.canale === "app" ? "veloce" : await sceltaDi(sub));
   const allegati = Array.isArray(azIn.allegati) && azIn.allegati.length ? await allegatiDel(id) : [];
   const consegna = m.canale === "telegram" ? "daconsegnare" : "fatto";
@@ -617,7 +644,7 @@ async function rispondiACrediti(id: number): Promise<void> {
   const profondo = !piano && !scomponi && !iofuturo && !umore && !roadmap && scelta === "profondo" && fornitore() === "anthropic";
   /* le domande dell'intervista costano un messaggio l'una: il piano finale lo scrive la stessa conversazione */
   const costo = piano ? 1 : iofuturo ? CREDITI_IOFUTURO : (scomponi ? CREDITI_SCOMPONI : (intervista ? 1 : (roadmap ? CREDITI_ROADMAP : (profondo ? CREDITI_PROFONDO : 1))));
-  if (!(await scala(sub, costo))) {
+  if (!eMax && !(await scala(sub, costo))) {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'crediti' WHERE id = ${id}`);
     await inserisci(sub, m.email ?? null, m.canale as Canale, "out",
       "Hai finito i crediti del tuo agente. Li ricarichi con Premium: la conversazione riparte da dove l'hai lasciata.", { crediti: 0 }, id, consegna);
@@ -671,7 +698,7 @@ async function rispondiACrediti(id: number): Promise<void> {
      * ragionamento "high" Opus 5.5 pensava a lungo prima di scrivere: il piano si fa con "medium" (il valore di serie
      * del modello), piu' veloce e piu' economico; le domande dell'intervista restano "low". */
     const effort = intervista ? (risposteIntervista >= 5 ? "medium" : "low") : undefined;
-    const risposta = await chiamaModello(messaggi, roadmap || scomponi || iofuturo, { allegati, scelta: profondo ? "profondo" : "veloce", effort });
+    const risposta = await chiamaModello(messaggi, roadmap || scomponi || iofuturo, { allegati, scelta: profondo ? "profondo" : "veloce", effort, forzaGemini });
     await registraUso(sub, id, risposta.uso);
     const testo = risposta.testo;
     const t = piano ? { testo: testo.trim(), azioni: { pianoAi: true } } : umore ? { testo: testo.trim(), azioni: { umore: true } } : tagliaPiano(testo);
@@ -687,7 +714,7 @@ async function rispondiACrediti(id: number): Promise<void> {
     await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'errore' WHERE id = ${id}`);
   }
 }
-function lanciaCrediti(id: number) { if (id && llmAcceso()) setImmediate(() => { rispondiACrediti(id).catch(() => {}); }); }
+function lanciaCrediti(id: number) { if (id && (llmAcceso() || chiaveGeminiMax())) setImmediate(() => { rispondiACrediti(id).catch(() => {}); }); }
 function canali() {
   return {
     telegramBot: String(process.env.FOCUSLOCK_TELEGRAM_BOT || "").replace(/^@/, ""),
@@ -1439,7 +1466,7 @@ export function registerFocusLockChatRoutes(app: Express) {
       if (!max.length) { res.json({ messaggi: [] }); return; }
       const lista = (await rows(sql`SELECT id, googleSub, email, canale, testo, azioni, createdAt FROM focuslock_agent_msgs
         WHERE direzione = 'in' AND stato = 'attesa' ORDER BY id ASC LIMIT 20`))
-        .filter((m: any) => max.includes(String(m.email || "").trim().toLowerCase())).slice(0, 5);
+        .filter((m: any) => max.includes(String(m.email || "").trim().toLowerCase()) && !((llmAcceso() || chiaveGeminiMax()) && veloceDalMax(m, parse(m.azioni) || {}))).slice(0, 5);
       const out: any[] = [];
       for (const m of lista) {
         await rows(sql`UPDATE focuslock_agent_msgs SET stato = 'lavoro' WHERE id = ${m.id} AND stato = 'attesa'`);
