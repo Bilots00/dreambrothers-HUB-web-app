@@ -38,6 +38,7 @@ import { registerFocusLockRitrattoRoutes } from "./focuslockRitratto";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
+import { registerProvaApkRoutes } from "./provaApk";
 import { registerResearchRoutes } from "./researchRoutes";
 import { registerMarketRoutes } from "./marketRoutes";
 import { registerCreativeRoutes } from "./creativeRoutes";
@@ -707,6 +708,7 @@ async function startServer() {
   registerFocusLockRitrattoRoutes(app);    // 0.9.301: il ritratto dell'Io Futuro dal selfie (Gemini, niente si conserva)
   registerWatchlistRoutes(app);
   registerImageProxy(app);
+  registerProvaApkRoutes(app);   // APK di prova del Bug Loop: il link https dentro il messaggio Telegram
   registerResearchRoutes(app);
   registerMarketRoutes(app);
   registerCreativeRoutes(app);
