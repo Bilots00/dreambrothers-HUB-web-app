@@ -17,6 +17,7 @@ import { registerFocusLockConversaRoutes } from "./focuslockConversa";
 import { registerFocusLockPianoRoutes } from "./focuslockPiano";
 import { registerFocusLockNotionRoutes } from "./focuslockNotion";
 import { registerFocusLockPianoAiRoutes } from "./focuslockPianoAi";
+import { registerFocusLockIspirazioneRoutes } from "./focuslockIspirazione";
 import { registerFocusLockPartnerRoutes } from "./focuslockPartners";
 import { registerFocusLockQuoteRoutes } from "./focuslockQuotes";
 import { registerFocusLockBackgroundRoutes } from "./focuslockBackgrounds";
@@ -688,6 +689,7 @@ async function startServer() {
   registerFocusLockPianoRoutes(app);
   registerFocusLockNotionRoutes(app);
   registerFocusLockPianoAiRoutes(app);
+  registerFocusLockIspirazioneRoutes(app);   // 0.9.354: libri e film per il tuo viaggio scelti dal tuo agente (Premium)
   registerFocusLockPartnerRoutes(app);
   registerFocusLockQuoteRoutes(app);
   registerFocusLockBackgroundRoutes(app);
