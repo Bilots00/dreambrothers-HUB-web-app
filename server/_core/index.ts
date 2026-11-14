@@ -47,6 +47,7 @@ import { registerAdsLibraryRoutes } from "./adsLibraryRoutes";
 import { registerFulfillmentRoutes } from "./fulfillmentRoutes";
 import { registerChargebackRoutes } from "./chargebackRoutes";
 import { registerSizeProfileRoutes } from "./sizeProfileRoutes";
+import { registerTeeDesignRoutes } from "./teeDesignRoutes";
 import { registerDailySchedules } from "./scheduler";
 import { registerMusicRoutes } from "../music/routes";
 import { appRouter } from "../routers";
@@ -718,6 +719,7 @@ async function startServer() {
   registerFulfillmentRoutes(app);
   registerChargebackRoutes(app);
   registerSizeProfileRoutes(app);   // guida taglie Premium: profilo nel metafield cliente e feedback
+  registerTeeDesignRoutes(app);     // Tee Studio: "I tuoi design" nel profilo cliente, link condivisibili
   registerDreamteamRoutes(app);
   // tRPC API
   app.use(
