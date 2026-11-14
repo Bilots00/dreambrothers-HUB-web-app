@@ -55,6 +55,18 @@ function ensureTables(): Promise<void> {
         at BIGINT NOT NULL,
         updatedAt TIMESTAMP NULL
       )`);
+      // 0.9.359: le note fra telefono e computer, una riga per nota (vedi le rotte note-sync)
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_note_sync (
+        chiave VARCHAR(64) NOT NULL,
+        id VARCHAR(120) NOT NULL,
+        dati LONGTEXT NOT NULL,
+        modAt BIGINT NOT NULL,
+        via TINYINT NOT NULL DEFAULT 0,
+        seq BIGINT NOT NULL,
+        updatedAt TIMESTAMP NULL,
+        PRIMARY KEY (chiave, id),
+        KEY idx_seq (chiave, seq)
+      )`);
     })().catch((e) => { ready = null; throw e; });
   }
   return ready;
@@ -203,6 +215,66 @@ export function registerFocusLockPianoRoutes(app: Express) {
       await rows(sql`INSERT INTO focuslock_note_import (chiave, dati, at, updatedAt) VALUES (${k}, ${dati}, ${at}, NOW())
         ON DUPLICATE KEY UPDATE dati = VALUES(dati), at = VALUES(at), updatedAt = NOW()`);
       res.json({ ok: true, at });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+
+  /* LE NOTE FRA TELEFONO E COMPUTER (0.9.359). Andrea: "le note del PC non sono sincronizzate con quelle del telefono: quelle
+     del PC sono rimaste indietro". Lo specchio del telefono (fl:mobile-rules) va in un senso solo e salta le chiavi sopra i
+     700 KB: le note non arrivavano. Qui ogni nota e' una riga, sotto la chiave del piano che telefono e PC hanno uguale:
+     - POST note-sync { note: [{ id, mod, via, dati }] }: una nota si scrive solo se la sua modifica e' piu' recente di quella
+       che c'e' (vince l'ultima, nota per nota); via = 1 e' una nota tolta, che resta come segno perche' non torni;
+     - GET note-sync?dopo=<seq>: le note cambiate dopo quel numero, in ordine, a pagine di 300.
+     seq cresce a ogni scrittura (millisecondi * 1000 + contatore): il client ricorda l'ultimo che ha letto. */
+  let seqUltimo = 0;
+  const seqNuovo = () => { const s = Math.max(Date.now() * 1000, seqUltimo + 1); seqUltimo = s; return s; };
+  const MAX_NOTA = 2 * 1024 * 1024;
+  app.get("/api/focuslock/piano/:k/note-sync", async (req: Request, res: Response) => {
+    cors(res); res.setHeader("Cache-Control", "no-store");
+    const k = String(req.params.k || "");
+    if (!CHIAVE.test(k)) { res.status(400).json({ error: "chiave non valida" }); return; }
+    if (troppe("nsg:" + ip(req), 600, 3600000)) { res.status(429).json({ error: "troppe richieste" }); return; }
+    const dopo = Math.max(0, Number(req.query.dopo) || 0);
+    try {
+      await ensureTables();
+      const r = await rows(sql`SELECT id, dati, modAt, via, seq FROM focuslock_note_sync WHERE chiave = ${k} AND seq > ${dopo} ORDER BY seq LIMIT 301`);
+      const piu = r.length > 300;
+      const note = r.slice(0, 300).map((x: any) => ({ id: String(x.id), dati: x.via ? null : String(x.dati), mod: Number(x.modAt) || 0, via: Number(x.via) ? 1 : 0, seq: Number(x.seq) || 0 }));
+      res.json({ note, seq: note.length ? note[note.length - 1].seq : dopo, piu });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+  app.post("/api/focuslock/piano/:k/note-sync", async (req: Request, res: Response) => {
+    cors(res);
+    const k = String(req.params.k || "");
+    if (!CHIAVE.test(k)) { res.status(400).json({ error: "chiave non valida" }); return; }
+    if (troppe("nsp:" + ip(req), 400, 3600000)) { res.status(429).json({ error: "troppe richieste" }); return; }
+    const lista = Array.isArray((req.body ?? {}).note) ? req.body.note.slice(0, 60) : null;
+    if (!lista) { res.status(400).json({ error: "note mancanti" }); return; }
+    try {
+      await ensureTables();
+      const esiti = await conChiave("note:" + k, async () => {
+        const out: { id: string; ok: boolean; motivo?: string }[] = [];
+        for (const n of lista) {
+          const id = String(n?.id || "").slice(0, 120);
+          const mod = Math.floor(Number(n?.mod) || 0);
+          const via = n?.via ? 1 : 0;
+          const dati = via ? "" : (typeof n?.dati === "string" ? n.dati : "");
+          if (!id || !(mod > 0)) { out.push({ id, ok: false, motivo: "senza id o data" }); continue; }
+          if (!via && (!dati || dati.length > MAX_NOTA)) { out.push({ id, ok: false, motivo: dati ? "nota troppo grande" : "nota vuota" }); continue; }
+          if (!via) { try { const o = JSON.parse(dati); if (!o || typeof o !== "object") throw new Error("x"); } catch { out.push({ id, ok: false, motivo: "nota illeggibile" }); continue; } }
+          const seq = seqNuovo();
+          /* l'ordine conta: modAt si aggiorna per ultimo, cosi' gli IF di prima confrontano con il valore vecchio */
+          await rows(sql`INSERT INTO focuslock_note_sync (chiave, id, dati, modAt, via, seq, updatedAt) VALUES (${k}, ${id}, ${dati}, ${mod}, ${via}, ${seq}, NOW())
+            ON DUPLICATE KEY UPDATE
+              dati = IF(VALUES(modAt) > modAt, VALUES(dati), dati),
+              via = IF(VALUES(modAt) > modAt, VALUES(via), via),
+              seq = IF(VALUES(modAt) > modAt, VALUES(seq), seq),
+              updatedAt = IF(VALUES(modAt) > modAt, NOW(), updatedAt),
+              modAt = GREATEST(modAt, VALUES(modAt))`);
+          out.push({ id, ok: true });
+        }
+        return out;
+      });
+      res.json({ ok: true, esiti });
     } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
   });
 
