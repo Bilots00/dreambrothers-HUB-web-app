@@ -108,7 +108,8 @@ function troppi(sub: string): boolean {
   return false;
 }
 function categoria(x: unknown): string | null { const k = String(x ?? "").trim().toLowerCase(); return VOTO_CATEGORIE[k] ? k : null; }
-function tipoSogno(x: unknown): string | null { const k = String(x ?? "").trim().toLowerCase(); return SOGNI.includes(k) ? k : null; }
+/* "scrivo" (Ho un sogno unico, genio-intro.js) conta come generico */
+function tipoSogno(x: unknown): string | null { const k0 = String(x ?? "").trim().toLowerCase(); const k = k0 === "scrivo" ? "generico" : k0; return SOGNI.includes(k) ? k : null; }
 function senzaEtichetta(t: unknown): string { return String(t ?? "").replace(/^\s*\[[a-z]+\]\s*/i, "").trim(); }
 function giorno(d: any): string { const x = d ? new Date(d) : null; return x && !isNaN(+x) ? `${x.getDate()}/${x.getMonth() + 1}` : ""; }
 
