@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { sql } from "drizzle-orm";
+import { registerFocusLockVotiRoutes, lezioniPer, salvaTipoSogno } from "./focuslockVoti";
 import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "../db";
 import { whoIs, isIdentity, rows } from "./focuslockRoutes";
@@ -690,7 +691,9 @@ async function rispondiACrediti(id: number): Promise<void> {
     const chi = /^genio$/i.test(String(nome).trim())
       ? "Ti chiami Genio: sei il Genio dell'app."
       : `Ti chiami ${nome}: è il nome che l'utente ha scelto per te, e quando ti presenti usi questo.`;
-    const domanda = `${chi} ${adessoRoma()} Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\nMESSAGGIO:\n${richiesta}`;
+    /* 0.9.357: le sue segnalazioni, quelle di chi ha un sogno simile e le regole del Regista (focuslockVoti.ts) */
+    const lezioni = await lezioniPer(sub);
+    const domanda = `${chi} ${adessoRoma()} Scrive da: ${m.canale}.\n\nQUELLO CHE L'APP SA DI LUI:\n${String(prof[0]?.brief || "(niente ancora)")}\n\n${lezioni}MESSAGGIO:\n${richiesta}`;
     if (messaggi.length && messaggi[messaggi.length - 1].role === "user") messaggi[messaggi.length - 1].content += "\n\n" + domanda;
     else messaggi.push({ role: "user", content: domanda });
     /* 0.9.282, Andrea: la prima domanda dell'intervista ci metteva troppo. Le domande si fanno con ragionamento basso
@@ -800,6 +803,8 @@ function normaCausa(s: string): string {
 let cacheCause: { at: number; cause: { causa: string; testo: string; n: number }[] } | null = null;
 
 export function registerFocusLockChatRoutes(app: Express) {
+  /* 0.9.357: il voto alle risposte dell'agente, come su Claude, e le regole che l'agente impara dai voti (focuslockVoti.ts) */
+  registerFocusLockVotiRoutes(app, utente);
   /* ---- Rientra in rotta: le cause scritte a mano (pubbliche, senza account) ---- */
   app.options("/api/focuslock/rientro/:x", (_req: Request, res: Response) => { corsPubblico(res); res.status(204).end(); });
 
@@ -1254,6 +1259,8 @@ export function registerFocusLockChatRoutes(app: Express) {
     let testo = pulisci((req.body ?? {}).testo);
     if (!testo && all.lista.length) testo = all.lista.length === 1 ? "Guarda l'allegato." : "Guarda gli allegati.";
     if (!testo) { res.status(400).json({ error: "testo is required" }); return; }
+    /* 0.9.357: il tipo di sogno, per le regole imparate da chi ha un sogno simile */
+    salvaTipoSogno(who.sub, (req.body ?? {}).tipoSogno);
     try {
       await ensureTables();
       const tetto = tettoDi(who.email);
@@ -1492,7 +1499,7 @@ export function registerFocusLockChatRoutes(app: Express) {
           nome: prof[0]?.nome || "Genio",
           /* le regole di scrittura viaggiano in coda al brief, così il lavoratore sul VPS le
            * usa senza cambiare il suo codice; `regole` le porta anche da sole */
-          brief: adessoRoma() + "\n\n" + String(prof[0]?.brief || "") + "\n\n" + REGOLE_SCRITTURA,
+          brief: adessoRoma() + "\n\n" + String(prof[0]?.brief || "") + "\n\n" + REGOLE_SCRITTURA + "\n\n" + await lezioniPer(String(m.googleSub)),
           adesso: adessoRoma(),
           regole: REGOLE_SCRITTURA,
           storico: storico.reverse().map((s: any) => ({ direzione: s.direzione, testo: s.testo })),
