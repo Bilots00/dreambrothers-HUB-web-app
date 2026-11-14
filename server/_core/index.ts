@@ -40,6 +40,7 @@ import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
 import { registerProvaApkRoutes } from "./provaApk";
+import { registerScaricaApkRoutes } from "./scaricaApk";
 import { registerResearchRoutes } from "./researchRoutes";
 import { registerMarketRoutes } from "./marketRoutes";
 import { registerCreativeRoutes } from "./creativeRoutes";
@@ -711,6 +712,7 @@ async function startServer() {
   registerWatchlistRoutes(app);
   registerImageProxy(app);
   registerProvaApkRoutes(app);   // APK di prova del Bug Loop: il link https dentro il messaggio Telegram
+  registerScaricaApkRoutes(app); // 14/11/2026: /scarica/DreamMap.apk dal rilascio automatico sul VPS (solo con DREAMMAP_RILASCIO_VPS=1)
   registerResearchRoutes(app);
   registerMarketRoutes(app);
   registerCreativeRoutes(app);
