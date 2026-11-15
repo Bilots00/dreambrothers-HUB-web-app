@@ -62,7 +62,7 @@ function paroleChiave(v: any): string[] {
     const w = String(x || "").replace(/[<>{}\[\]\\]/g, "").replace(/\s+/g, " ").trim();
     if (w.length < 2 || w.length > 50 || w.split(" ").length > 5) continue;
     if (!out.includes(w)) out.push(w);
-    if (out.length >= 60) break;
+    if (out.length >= 90) break;
   }
   return out;
 }
@@ -90,6 +90,48 @@ async function conScribe(chiave: string, buf: Buffer, mime: string, lingua: stri
   return r;
 }
 
+/* 0.9.363, Andrea: "in macchina ho detto 'usare lo slider counter al posto dei dots nav se ci sono gia' i dots nav in uno slider
+ * carousel' e mi ha scritto 'Rider al posto dei Dodge Snow quando ci sono gia' Idol Snav'. Wispr Flow e Claude non sbagliano le parole
+ * inglesi dentro una frase italiana, neanche con il rumore". Come lavorano: il riconoscitore sente i suoni, poi un modello di linguaggio
+ * rilegge la frase con il contesto (quello che stai scrivendo, il tuo vocabolario, i termini del tuo lavoro) e rimette le parole giuste.
+ * Qui lo stesso: dopo Scribe, una rilettura che corregge SOLO le parole sentite male, usando il testo gia' scritto nel campo e il
+ * glossario. Se la correzione cambia troppo la frase (piu' del 35% della lunghezza) o non risponde in 5 secondi, resta la frase di Scribe.
+ * Il conto: una rilettura sono poche centinaia di token, meno di un decimo di centesimo con Gemini Flash-Lite o Claude Haiku. */
+const RILEGGI = "Sei il correttore di una dettatura vocale. Ricevi la trascrizione automatica di una frase detta a voce, spesso in italiano con parole inglesi o tecniche in mezzo, a volte registrata in auto con rumore. Correggi SOLO le parole riconosciute male: termini inglesi trascritti come parole italiane o nomi strani (es. 'Dodge Snow' = 'dots nav', 'Rider' = 'slider'), nomi propri, termini tecnici. Usa il glossario e il testo gia' scritto per capire cosa voleva dire. Non riscrivere lo stile, non riassumere, non aggiungere niente, non tradurre: tieni la stessa lingua e le stesse parole giuste. Se una parola e' gia' corretta o non sei sicuro, lasciala com'e'. Rispondi solo con la frase corretta, senza virgolette e senza spiegazioni.";
+async function rileggi(testo: string, contesto: string, parole: string[]): Promise<{ testo: string; da: string } | null> {
+  const prompt = "GLOSSARIO: " + parole.join(", ") + "\n\nTESTO GIA' SCRITTO NEL CAMPO (contesto): " + (contesto || "(vuoto)") + "\n\nTRASCRIZIONE DA CORREGGERE: " + testo;
+  const entro = <T,>(p: Promise<T>) => Promise.race([p, new Promise<null>((ok) => setTimeout(() => ok(null), 5000))]);
+  const g = GEMINI_CHIAVE();
+  if (g) {
+    try {
+      const r: any = await entro(fetch(`https://generativelanguage.googleapis.com/v1beta/models/${process.env.DREAMMAP_RILEGGI_MODELLO || "gemini-3.5-flash-lite"}:generateContent`, {
+        method: "POST", headers: { "x-goog-api-key": g, "content-type": "application/json" },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: RILEGGI }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0, maxOutputTokens: 1500, thinkingConfig: { thinkingLevel: "minimal" } } }),
+      }));
+      if (r && r.ok) { const j: any = await r.json().catch(() => ({})); const t = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim(); if (t) return { testo: t, da: "gemini" }; }
+    } catch { /* si prova il prossimo */ }
+  }
+  const a = process.env.ANTHROPIC_API_KEY;
+  if (a) {
+    try {
+      const r: any = await entro(fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: { "x-api-key": a, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: process.env.DREAMMAP_RILEGGI_CLAUDE || "claude-haiku-5-5", max_tokens: 1500, temperature: 0, system: RILEGGI, messages: [{ role: "user", content: prompt }] }),
+      }));
+      if (r && r.ok) { const j: any = await r.json().catch(() => ({})); const t = (j?.content || []).map((p: any) => p.text || "").join("").trim(); if (t) return { testo: t, da: "claude" }; }
+    } catch { /* resta Scribe */ }
+  }
+  return null;
+}
+async function rileggiSicuro(testo: string, contesto: string, parole: string[]): Promise<{ testo: string; riletto: string }> {
+  if (!testo || testo.length < 3) return { testo, riletto: "" };
+  const r = await rileggi(testo, contesto, parole).catch(() => null);
+  if (!r) return { testo, riletto: "" };
+  const t = r.testo.replace(/^["'“”]+|["'“”]+$/g, "").trim();
+  if (!t || Math.abs(t.length - testo.length) > Math.max(12, testo.length * 0.35)) return { testo, riletto: "" };
+  return { testo: t, riletto: r.da };
+}
+
 export function registerFocusLockTrascriviRoutes(app: Express) {
   app.post("/api/focuslock/agent/trascrivi", async (req: Request, res: Response) => {
     const who = await whoIs(req);
@@ -109,6 +151,7 @@ export function registerFocusLockTrascriviRoutes(app: Express) {
     if (usati + durata > MAX_SEC_GIORNO) { res.status(429).json({ error: "minuti di oggi finiti", finiti: true }); return; }
     const lingua = String(body.lingua || "it").slice(0, 5);
     const parole = paroleChiave(body.parole);
+    const contesto = String(body.contesto || "").replace(/\s+/g, " ").slice(-600);
     let erroreScribe = "";
     if (chiave) {
       try {
@@ -116,7 +159,8 @@ export function registerFocusLockTrascriviRoutes(app: Express) {
         if (r.ok) {
           const sec = Math.round(Number(r.j?.audio_duration_secs) || durata || 0);
           USATI.set(who.sub, { giorno: oggi, sec: usati + sec });
-          res.json({ testo: String(r.j?.text || "").trim(), sec, lingua: r.j?.language_code || "", motore: "scribe_v2" + (parole.length ? "+keyterms" : "") });
+          const rl = await rileggiSicuro(String(r.j?.text || "").trim(), contesto, parole);
+          res.json({ testo: rl.testo, sec, lingua: r.j?.language_code || "", motore: "scribe_v2" + (parole.length ? "+keyterms" : "") + (rl.riletto ? "+riletto-" + rl.riletto : "") });
           return;
         }
         erroreScribe = String(r.j?.detail?.message || r.j?.detail?.status || r.j?.detail || r.status);
