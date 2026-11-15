@@ -48,6 +48,7 @@ import { registerFulfillmentRoutes } from "./fulfillmentRoutes";
 import { registerChargebackRoutes } from "./chargebackRoutes";
 import { registerSizeProfileRoutes } from "./sizeProfileRoutes";
 import { registerTeeDesignRoutes } from "./teeDesignRoutes";
+import { registerTeeAiRoutes } from "./teeAiRoutes";
 import { registerTeeStudioOrderRoutes } from "../teeStudioOrders";
 import { registerDailySchedules } from "./scheduler";
 import { registerMusicRoutes } from "../music/routes";
@@ -721,6 +722,7 @@ async function startServer() {
   registerChargebackRoutes(app);
   registerSizeProfileRoutes(app);   // guida taglie Premium: profilo nel metafield cliente e feedback
   registerTeeDesignRoutes(app);     // Tee Studio: "I tuoi design" nel profilo cliente, link condivisibili
+  registerTeeAiRoutes(app);         // Tee Studio: genera il design con l'AI (PNG trasparenti)
   registerTeeStudioOrderRoutes(app); // Tee Studio: ordini delle magliette personalizzate -> Printify
   registerDreamteamRoutes(app);
   // tRPC API
