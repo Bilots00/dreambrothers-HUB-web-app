@@ -12,6 +12,7 @@ import type { Express, Request, Response } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { instrada, type RigaShopify } from "../fulfillmentRouter";
 import type { Destinatario } from "../gelato";
+import { isTeeStudioLine } from "../teeStudioOrders";
 
 /** Lo shop Printify collegato a Shopify. */
 const SHOP_PRINTIFY = Number(process.env.PRINTIFY_SHOP_ID || 23834278);
@@ -57,7 +58,7 @@ function destinatarioDa(ordine: any): Destinatario | null {
 /** Solo i capi hanno una ricetta di stampa: il resto non e' spostabile. */
 function righeDa(ordine: any): RigaShopify[] {
   return (ordine?.line_items || [])
-    .filter((r: any) => r.product_id && r.variant_title)
+    .filter((r: any) => r.product_id && r.variant_title && !isTeeStudioLine(r))
     .map((r: any) => {
       const ct = coloreTaglia(r.variant_title);
       if (!ct) return null;
