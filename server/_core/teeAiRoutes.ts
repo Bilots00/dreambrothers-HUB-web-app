@@ -1,3 +1,4 @@
+import express from "express";
 import type { Express, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import sharp from "sharp";
@@ -289,6 +290,66 @@ export function registerTeeAiRoutes(app: Express) {
       res.setHeader("Access-Control-Allow-Origin", "*"); // il canvas del configuratore la disegna e la esporta per la stampa
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.end(Buffer.from(rows[0].png));
+    } catch { res.status(500).end(); }
+  });
+}
+
+/* "Guardala nella tua stanza": il configuratore esporta la maglietta 3D (GLB) e la carica qui, cosi' ha un URL https.
+ * Scene Viewer (l'AR di Google su Android) e Quick Look non sanno aprire un URL blob: del browser.
+ * POST /api/tee-designs/glb  (corpo = GLB binario, max 8 MB)  ->  {url}
+ * GET  /api/tee-designs/glb/:id.glb  ->  il GLB (model/gltf-binary, CORS *). I file restano 3 giorni, poi si cancellano. */
+const GLB_MAX = 8 * 1024 * 1024;
+const glbHits = new Map<string, number[]>();
+let glbReady: Promise<void> | null = null;
+function ensureGlbTable(): Promise<void> {
+  if (!glbReady) {
+    glbReady = (async () => {
+      const db = await getDb();
+      if (!db) throw new Error("database unavailable");
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS tee_ar_models (
+        id VARCHAR(32) PRIMARY KEY,
+        glb MEDIUMBLOB NOT NULL,
+        createdAt TIMESTAMP NULL,
+        INDEX idx_created (createdAt)
+      )`);
+    })().catch((e) => { glbReady = null; throw e; });
+  }
+  return glbReady;
+}
+
+export function registerTeeArRoutes(app: Express) {
+  app.use("/api/tee-designs/glb", cors);
+  app.post("/api/tee-designs/glb", express.raw({ type: () => true, limit: GLB_MAX }), async (req: Request, res: Response) => {
+    const buf: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (buf.length < 64 || buf.toString("ascii", 0, 4) !== "glTF") { res.status(400).json({ error: "not_glb" }); return; }
+    const ip = ipOf(req), now = Date.now(), h = (glbHits.get(ip) || []).filter((t) => now - t < 3600e3);
+    if (h.length >= 30) { res.status(429).json({ error: "rate_limited" }); return; }
+    h.push(now); glbHits.set(ip, h);
+    try {
+      await ensureGlbTable();
+      const db = await getDb();
+      await db!.execute(sql`DELETE FROM tee_ar_models WHERE createdAt < NOW() - INTERVAL 3 DAY`);
+      const id = "g" + crypto.randomBytes(12).toString("base64url");
+      await db!.execute(sql`INSERT INTO tee_ar_models (id, glb, createdAt) VALUES (${id}, ${buf}, NOW())`);
+      res.json({ url: `${baseUrl(req)}/api/tee-designs/glb/${id}.glb` });
+    } catch (e: any) {
+      console.error("[tee-ar]", e?.message || e);
+      res.status(500).json({ error: "server_error" });
+    }
+  });
+  app.get("/api/tee-designs/glb/:id", async (req: Request, res: Response) => {
+    const id = String(req.params.id || "").replace(/\.glb$/, "").slice(0, 32);
+    if (!/^g[A-Za-z0-9_-]{8,}$/.test(id)) { res.status(404).end(); return; }
+    try {
+      await ensureGlbTable();
+      const db = await getDb();
+      const rows = rowsOf(await db!.execute(sql`SELECT glb FROM tee_ar_models WHERE id = ${id}`));
+      if (!rows.length) { res.status(404).end(); return; }
+      res.setHeader("Content-Type", "model/gltf-binary");
+      res.setHeader("Cache-Control", "public, max-age=259200");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.end(Buffer.from(rows[0].glb));
     } catch { res.status(500).end(); }
   });
 }
