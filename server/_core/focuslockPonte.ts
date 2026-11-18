@@ -62,6 +62,20 @@ function ensure(): Promise<void> {
         INDEX idx_chiave (chiave, createdAt)
       )`);
       /* app 0.9.347: la roadmap scritta dall'AI dell'utente (gratis per noi: la paga lui con il suo abbonamento) */
+      /* app 0.9.367: le chiamate dei sogni chieste dall'AI dell'utente (fai_squillare) e le condizioni su misura che lui le ha
+         chiesto di sorvegliare (crea_condizione_chiamata). L'app le legge al sync e fa squillare il telefono. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_ponte_chiamate (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        chiave VARCHAR(64) NOT NULL,
+        tipo VARCHAR(16) NOT NULL,
+        titolo VARCHAR(200) NOT NULL,
+        testo VARCHAR(1000) NOT NULL,
+        idea VARCHAR(500) NULL,
+        ore INT NOT NULL DEFAULT 0,
+        presaAt TIMESTAMP NULL,
+        createdAt TIMESTAMP NULL,
+        INDEX idx_chiave (chiave, createdAt)
+      )`);
       await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_ponte_roadmap (
         chiave VARCHAR(64) PRIMARY KEY,
         piano TEXT NOT NULL,
@@ -120,6 +134,29 @@ function pulisciPiano(p: any): any {
   if (bivi.length) out.bivi = bivi;
   return out.settimana || out.oggi || out.mese ? out : null;
 }
+/* app 0.9.367, Andrea: "il mio agente deve poter creare trigger su misura per la chiamata dei sogni: per esempio una nuova idea che
+ * mi distrae dal piano. Prima di dare il punto nella partita me lo fa notare con una chiamata, e dopo la risposta il bivio con la data
+ * d'arrivo ricalcolata sotto i miei occhi". Due strumenti: la condizione (si salva e si vede nell'app) e lo squillo vero. */
+async function scriviCondizione(chiave: string, a: any): Promise<string> {
+  const nome = testoPulito(a?.nome, 120), quando = testoPulito(a?.quando, 600), msg = testoPulito(a?.messaggio, 300);
+  if (!nome || !quando) throw new Error("servono nome e quando");
+  const n = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_ponte_chiamate WHERE chiave = ${chiave} AND tipo = 'condizione'`);
+  if (Number(n[0]?.n || 0) >= 20) throw new Error("hai gia' 20 condizioni: toglierne una dall'app");
+  const db = await getDb(); if (!db) throw new Error("database unavailable");
+  await db.execute(sql`INSERT INTO focuslock_ponte_chiamate (chiave, tipo, titolo, testo, idea, ore, createdAt) VALUES (${chiave}, 'condizione', ${nome}, ${quando}, ${msg || null}, 0, NOW())`);
+  return "Condizione salvata: l'utente la vede in DreamMap. Quando si verifica, chiama fai_squillare con il motivo.";
+}
+async function scriviSquillo(chiave: string, a: any): Promise<string> {
+  const motivo = testoPulito(a?.motivo, 200), msg = testoPulito(a?.messaggio, 1000), idea = testoPulito(a?.idea, 500);
+  if (!motivo) throw new Error("serve il motivo");
+  const ore = Math.max(0, Math.min(2000, Math.round(Number(a?.ore_stimate) || 0)));
+  const n = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_ponte_chiamate WHERE chiave = ${chiave} AND tipo = 'chiamata' AND createdAt > (NOW() - INTERVAL 1 DAY)`);
+  if (Number(n[0]?.n || 0) >= 6) throw new Error("gia' 6 chiamate oggi: aspetta domani");
+  const db = await getDb(); if (!db) throw new Error("database unavailable");
+  await db.execute(sql`INSERT INTO focuslock_ponte_chiamate (chiave, tipo, titolo, testo, idea, ore, createdAt) VALUES (${chiave}, 'chiamata', ${motivo}, ${msg || motivo}, ${idea || null}, ${ore}, NOW())`);
+  return "La chiamata e' in coda: il telefono squilla appena DreamMap si sincronizza. Non dare ancora il punto nella partita: lo decide l'utente al bivio.";
+}
+
 async function scriviRoadmap(chiave: string, a: any): Promise<string> {
   const piano = pulisciPiano(a?.piano ?? a);
   if (!piano) throw new Error("La roadmap deve avere almeno il mese, la settimana o oggi, ognuno con testo e passi.");
@@ -213,6 +250,33 @@ const STRUMENTI = [
     },
   },
   {
+    name: "crea_condizione_chiamata",
+    description: "Salva su DreamMap una condizione su misura per la chiamata dei sogni, quando l'utente te lo chiede (per esempio: una nuova idea non coerente con il piano, lavorare dopo mezzanotte, aprire un progetto vecchio). Sei tu a sorvegliarla nelle conversazioni: quando succede, chiama fai_squillare.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        nome: { type: "string", description: "Un nome breve: \"Idea fuori rotta\"." },
+        quando: { type: "string", description: "Quando deve squillare, in una frase che capisce anche l'utente." },
+        messaggio: { type: "string", description: "Cosa dice la chiamata, facoltativo." },
+      },
+      required: ["nome", "quando"],
+    },
+  },
+  {
+    name: "fai_squillare",
+    description: "Fa squillare la chiamata dei sogni sul telefono dell'utente, adesso. Usalo quando si verifica una condizione salvata con crea_condizione_chiamata, o quando l'utente sta per seguire un'idea che non c'entra con il piano letto con leggi_piano: prima di dare il punto nella partita, la chiamata gliela fa notare e dopo la risposta l'app gli mostra il bivio con la data d'arrivo ricalcolata. Al massimo 6 al giorno.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        motivo: { type: "string", description: "Una frase: perche' squilla. \"Una nuova idea ti porta fuori rotta\"." },
+        messaggio: { type: "string", description: "Cosa gli dici quando risponde, 1-2 frasi." },
+        idea: { type: "string", description: "L'idea o la cosa fuori rotta, in poche parole (fa comparire il bivio)." },
+        ore_stimate: { type: "number", description: "Quante ore costerebbe seguirla, stimate. 0 se non lo sai." },
+      },
+      required: ["motivo"],
+    },
+  },
+  {
     name: "leggi_piano",
     description: "Legge il piano dell'utente su DreamMap: il sogno, l'anno, il mese, la settimana e la cosa di oggi. Leggilo all'inizio, per capire se quello che chiede e' in rotta.",
     inputSchema: { type: "object", properties: {} },
@@ -229,7 +293,7 @@ async function rispondiMcp(chiave: string, m: any): Promise<any> {
         protocolVersion: String(m?.params?.protocolVersion || "2025-03-26"),
         capabilities: { tools: {} },
         serverInfo: { name: "dreammap", version: "1.0.0" },
-        instructions: "All'inizio leggi il piano con leggi_piano. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro: cosa avete fatto, su quale task, e se era la priorità del piano. Se l'utente ti chiede la sua roadmap, fagli le domande una alla volta e poi scrivila con scrivi_roadmap. Se ti chiede il resoconto della sera, riassumi in registra_lavoro tutto quello su cui avete lavorato oggi e, se il piano non torna più con quello che sta facendo, aggiorna la roadmap con scrivi_roadmap. Quando vedi finita una tappa della roadmap (un link pubblicato, un file, del codice), confermala con verifica_tappa e la prova: mai solo sulla parola.",
+        instructions: "All'inizio leggi il piano con leggi_piano. Se l'utente ti chiede di avvisarlo quando succede qualcosa (per esempio una nuova idea fuori dal piano), salva la condizione con crea_condizione_chiamata e, quando succede, fai squillare il telefono con fai_squillare prima di dare punti. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro: cosa avete fatto, su quale task, e se era la priorità del piano. Se l'utente ti chiede la sua roadmap, fagli le domande una alla volta e poi scrivila con scrivi_roadmap. Se ti chiede il resoconto della sera, riassumi in registra_lavoro tutto quello su cui avete lavorato oggi e, se il piano non torna più con quello che sta facendo, aggiorna la roadmap con scrivi_roadmap. Quando vedi finita una tappa della roadmap (un link pubblicato, un file, del codice), confermala con verifica_tappa e la prova: mai solo sulla parola.",
       });
     case "ping":
       return ok({});
@@ -242,6 +306,8 @@ async function rispondiMcp(chiave: string, m: any): Promise<any> {
         if (nome === "registra_lavoro") return ok({ content: [{ type: "text", text: await scrivi(chiave, a) }] });
         if (nome === "scrivi_roadmap") return ok({ content: [{ type: "text", text: await scriviRoadmap(chiave, a) }] });
         if (nome === "verifica_tappa") return ok({ content: [{ type: "text", text: await scriviVerifica(chiave, a) }] });
+        if (nome === "crea_condizione_chiamata") return ok({ content: [{ type: "text", text: await scriviCondizione(chiave, a) }] });
+        if (nome === "fai_squillare") return ok({ content: [{ type: "text", text: await scriviSquillo(chiave, a) }] });
         if (nome === "leggi_piano") {
           const r = await rows(sql`SELECT piano FROM focuslock_ponte_chiavi WHERE chiave = ${chiave} LIMIT 1`);
           return ok({ content: [{ type: "text", text: String(r[0]?.piano || "Il piano non e' ancora arrivato: chiedi all'utente di aprire DreamMap.") }] });
@@ -383,6 +449,29 @@ export function registerFocusLockPonteRoutes(app: Express) {
       const r = await rows(sql`SELECT id, fonte, testo, minuti, inRotta, UNIX_TIMESTAMP(createdAt) * 1000 AS at FROM focuslock_ponte_log WHERE chiave = ${chiave} AND createdAt > (NOW() - INTERVAL ${giorni} DAY) ORDER BY id DESC LIMIT 400`);
       res.json({ voci: r.map((x: any) => ({ id: Number(x.id), fonte: String(x.fonte), testo: String(x.testo), minuti: Number(x.minuti) || 0, inRotta: x.inRotta === null ? null : Number(x.inRotta) === 1, at: Number(x.at) })) });
     } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
+  });
+  /* app 0.9.367: le chiamate in coda (da far squillare) e le condizioni su misura; "presa" le toglie dalla coda */
+  app.get("/api/focuslock/ponte/chiamate", async (req: Request, res: Response) => {
+    const chiave = String(req.query.chiave || "");
+    try {
+      await ensure();
+      if (!(await esiste(chiave))) { res.status(404).json({ error: "chiave sconosciuta" }); return; }
+      const r = await rows(sql`SELECT id, tipo, titolo, testo, idea, ore, UNIX_TIMESTAMP(createdAt) * 1000 AS at FROM focuslock_ponte_chiamate
+        WHERE chiave = ${chiave} AND ((tipo = 'chiamata' AND presaAt IS NULL AND createdAt > (NOW() - INTERVAL 12 HOUR)) OR tipo = 'condizione') ORDER BY id DESC LIMIT 40`);
+      const v = r.map((x: any) => ({ id: Number(x.id), tipo: String(x.tipo), titolo: String(x.titolo), testo: String(x.testo), idea: x.idea ? String(x.idea) : "", ore: Number(x.ore) || 0, at: Number(x.at) }));
+      res.json({ chiamate: v.filter((x) => x.tipo === "chiamata"), condizioni: v.filter((x) => x.tipo === "condizione") });
+    } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
+  });
+  app.post("/api/focuslock/ponte/chiamate/presa", async (req: Request, res: Response) => {
+    const chiave = String(req.body?.chiave || ""), id = Number(req.body?.id) || 0, via = !!req.body?.via;
+    try {
+      await ensure();
+      if (!(await esiste(chiave))) { res.status(404).json({ error: "chiave sconosciuta" }); return; }
+      const db = await getDb(); if (!db) throw new Error("database unavailable");
+      if (via) await db.execute(sql`DELETE FROM focuslock_ponte_chiamate WHERE chiave = ${chiave} AND id = ${id}`);
+      else await db.execute(sql`UPDATE focuslock_ponte_chiamate SET presaAt = NOW() WHERE chiave = ${chiave} AND id = ${id}`);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e?.message || "non riuscito" }); }
   });
   /* la porta per chi sa fare una chiamata HTTP */
   app.post("/api/focuslock/ponte/registra", async (req: Request, res: Response) => {

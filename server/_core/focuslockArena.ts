@@ -472,7 +472,10 @@ export function registerFocusLockArenaRoutes(app: Express) {
     if (!device || !a || device === a) { res.status(400).json({ error: "invito non valido" }); return; }
     try {
       await ensureArena();
-      if (!(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      /* app 0.9.367: "Aggiungi amici dava errore 403 non siete amici". Bastava che l'amicizia esistesse in una direzione sola
+         (chi segue e non e' seguito) perche' l'invito venisse rifiutato. La serie parte comunque solo quando l'altro accetta:
+         basta un legame in una delle due direzioni */
+      if (!(await sonoAmici(device, a)) && !(await sonoAmici(a, device))) { res.status(403).json({ error: "Non risulta più fra i tuoi amici: aggiungilo di nuovo con il suo codice" }); return; }
       const mie = await sgDiMio(device);
       const gia = mie.filter((r) => String(r.altro) === a)[0];
       /* se l'amico aveva gia' invitato me, invitarlo vale come accettare */
