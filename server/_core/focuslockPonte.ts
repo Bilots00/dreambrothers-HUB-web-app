@@ -81,11 +81,18 @@ function ensure(): Promise<void> {
         piano TEXT NOT NULL,
         createdAt TIMESTAMP NULL
       )`);
+      /* app 0.9.371: quando la sua AI ha usato il collegamento l'ultima volta. "Collegata" vuol dire che l'AI l'ha usato davvero, non
+         solo che la chiave esiste. La colonna si aggiunge una volta; se c'e' gia', l'errore si ignora */
+      try { await db.execute(sql`ALTER TABLE focuslock_ponte_chiavi ADD COLUMN usatoAt TIMESTAMP NULL`); } catch { /* gia' presente */ }
     })().catch((e) => { pronto = null; throw e; });
   }
   return pronto;
 }
 
+/* l'AI ha usato il collegamento adesso (non blocca la risposta) */
+function segnaUso(chiave: string): void {
+  getDb().then((db) => { if (db) return db.execute(sql`UPDATE focuslock_ponte_chiavi SET usatoAt = NOW() WHERE chiave = ${chiave}`); }).catch(() => { /* niente */ });
+}
 async function esiste(chiave: string): Promise<boolean> {
   if (!/^[a-f0-9]{48}$/.test(chiave)) return false;
   const r = await rows(sql`SELECT chiave FROM focuslock_ponte_chiavi WHERE chiave = ${chiave} LIMIT 1`);
@@ -447,7 +454,10 @@ export function registerFocusLockPonteRoutes(app: Express) {
       await ensure();
       if (!(await esiste(chiave))) { res.status(404).json({ error: "chiave sconosciuta" }); return; }
       const r = await rows(sql`SELECT id, fonte, testo, minuti, inRotta, UNIX_TIMESTAMP(createdAt) * 1000 AS at FROM focuslock_ponte_log WHERE chiave = ${chiave} AND createdAt > (NOW() - INTERVAL ${giorni} DAY) ORDER BY id DESC LIMIT 400`);
-      res.json({ voci: r.map((x: any) => ({ id: Number(x.id), fonte: String(x.fonte), testo: String(x.testo), minuti: Number(x.minuti) || 0, inRotta: x.inRotta === null ? null : Number(x.inRotta) === 1, at: Number(x.at) })) });
+      let usatoAt = 0;
+      try { const u = await rows(sql`SELECT UNIX_TIMESTAMP(usatoAt) * 1000 AS u FROM focuslock_ponte_chiavi WHERE chiave = ${chiave} LIMIT 1`); usatoAt = Number(u[0]?.u) || 0; } catch { usatoAt = 0; }
+      if (!usatoAt && r.length) usatoAt = Number(r[0].at) || 0;
+      res.json({ usatoAt, voci: r.map((x: any) => ({ id: Number(x.id), fonte: String(x.fonte), testo: String(x.testo), minuti: Number(x.minuti) || 0, inRotta: x.inRotta === null ? null : Number(x.inRotta) === 1, at: Number(x.at) })) });
     } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
   });
   /* app 0.9.367: le chiamate in coda (da far squillare) e le condizioni su misura; "presa" le toglie dalla coda */
@@ -479,6 +489,7 @@ export function registerFocusLockPonteRoutes(app: Express) {
     try {
       await ensure();
       if (!(await esiste(chiave))) { res.status(404).json({ error: "chiave sconosciuta" }); return; }
+      segnaUso(chiave);
       res.json({ ok: true, messaggio: await scrivi(chiave, req.body || {}) });
     } catch (e: any) { res.status(400).json({ error: e?.message || "non riuscito" }); }
   });
@@ -488,6 +499,7 @@ export function registerFocusLockPonteRoutes(app: Express) {
     try {
       await ensure();
       if (!(await esiste(chiave))) { res.status(404).json({ jsonrpc: "2.0", id: req.body?.id ?? null, error: { code: -32001, message: "chiave sconosciuta" } }); return; }
+      segnaUso(chiave);
       const b = req.body;
       if (Array.isArray(b)) {
         const out = [];
