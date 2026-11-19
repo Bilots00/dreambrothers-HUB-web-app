@@ -667,6 +667,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   await runMigrations();
   const app = express();
+  /* app 0.9.373, Andrea: "nel collegamento della tua AI compare focuslock: l'app si chiama DreamMap". Tutto quello che arriva su
+     /api/dreammap/... e' lo stesso di /api/focuslock/... (le vecchie strade restano per chi ha gia' copiato il collegamento) */
+  app.use((req, _res, next) => { if (req.url.startsWith("/api/dreammap/")) req.url = "/api/focuslock/" + req.url.slice("/api/dreammap/".length); next(); });
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({
