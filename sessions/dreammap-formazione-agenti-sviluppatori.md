@@ -1061,3 +1061,18 @@ Summary:
 28. Export della sessione per ripartire in una sessione nuova: Andrea vuole capire se il calo è dovuto alla sessione lunghissima e compressa molte volte; tutto quello che dice serve alla formazione degli agenti sviluppatori e del beta tester (come ragiona, cosa vuole e non vuole).
 "PROCEDI PER GRADI RISOLVENDO QUESTE COSE"
 
+
+## assistant — 2026-11-21T23:55:48Z
+STATO DOPO IL GRADO 1 (0.9.382, rilasciata: app e15fbd4 + 24bbfa9, server b40349b; deploy Railway da lanciare a mano).
+FATTI (numeri della lista sopra): 1 Salva in .fl-piede identico a .ed-piede + stato confrontato nel blocco rapido; 2 identita' conta la lettura;
+3 binario .ff-rail; 4 stagione (niente doppione nel carosello, pulsante lontano dai pallini, punti elenco, niente Interrompi con la severa,
+severa scelta nella sua pagina); 5 report (ordine, nota nella (i), podio dalla cache); 6 bolla severa; 7 cartina (tolto nvpMappaStringi);
+9 sera (salta / Ho detto tutto); 10 passi e-commerce; 11 numeri header solo tolti nel Profilo; 12 sottolineato solo Mappa; 13 percentuale
+azzurra; 14 immagine bolla prima; 15 schermata di blocco; 16 contratto (punti elenco, card due colonne, ruota, niente quando, promessa sul
+blocco, bug del campo vuoto); 17 Programmi; 18 AI collegata subito + niente copia per Premium; 19 cerchio account; 20 far crescere il negozio;
+21 mossa contratto; 22 pannello capitolo + piano roadmap sempre; 23 timer come Forest; 24 dopamina di ieri.
+DA FARE (grado 2): 25 popover "Il tuo prossimo passo" uguale alla tappa della roadmap (scomponi, tutorial, tempo, priorita', (i) perche');
+26 Full Focus pianificato: conto alla rovescia, passaggio automatico alla pagina, primo test gratis poi annullare costa (regola della partita,
+punto al vecchio te); 27 Taglia nella revisione serale (di serie per chi ha il problema del focus, scelta per gli altri, senza tempo) e popover
+"Tempo scaduto" da rifare con la skill di UI; 8 "scegli un'emoji o una foto": frase interrotta, chiedere ad Andrea.
+Memoria: focuslock-382-piede-binario-contratto.md e richiesta-su-una-scheda-resta-li.md. Formazione: Giro 29 sul VPS (domande 148-152).
