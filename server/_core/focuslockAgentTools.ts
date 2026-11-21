@@ -52,8 +52,11 @@ const TOOLS = [
     input_schema: { type: "object", properties: { device: { type: "string" }, nome: { type: "string", description: "la regola in poche parole" }, quando: { type: "string", enum: QUANDO }, chi: { type: "string", enum: ["nuovo", "vecchio"] }, punti: { type: "number", description: "da 1 a 3" }, entro: { type: "string", description: "HH:MM, vale solo prima di quest'ora" }, dopo: { type: "string", description: "HH:MM, vale solo da quest'ora" }, parole: { type: "array", items: { type: "string" }, description: "vale solo se il testo contiene una di queste parole" }, giorni: { type: "array", items: { type: "string", enum: GIORNI }, description: "vale solo in questi giorni della settimana" }, piuDi: { type: "number", description: "minuti: vale se la durata o il tempo misurato supera questo valore" }, menoDi: { type: "number", description: "minuti: vale se la durata o il tempo misurato sta sotto questo valore" }, app: { type: "string", description: "per tempoApp: il nome dell'app (per esempio Instagram)" }, dallaVolta: { type: "number", description: "vale dalla N-esima volta del giorno" }, maxGiorno: { type: "number", description: "al massimo N volte al giorno" }, almeno: { type: "number", description: "per giornoSessioni: quante sessioni servono" }, votoMax: { type: "number", description: "per umore: vale con un voto fino a questo (1-5)" }, votoMin: { type: "number", description: "per umore: vale con un voto da questo in su (1-5)" }, perche: { type: "string" } }, required: ["device", "quando", "chi"] } },
   { name: "segna_imprevisto", description: "Segna un imprevisto che porta via tempo al percorso (malattia, lavoro in piu', un viaggio): l'app ricalcola subito l'arrivo previsto.",
     input_schema: { type: "object", properties: { device: { type: "string" }, giorni: { type: "number" }, ore: { type: "number", description: "ore di lavoro sul percorso che porta via" }, motivo: { type: "string" } }, required: ["device", "giorni"] } },
+  /* app 0.9.380: con Premium la chiamata su misura la crea il tuo agente, dalla chat (Impostazioni della chiamata) */
+  { name: "crea_condizione_chiamata", description: "Salva una condizione su misura per la chiamata dei sogni, quando la persona te lo chiede: per esempio aprire un'app che distrae dopo le 22, due giorni senza una tappa, un'idea che non c'entra con il piano. Scrivi quando deve squillare in una frase che capisce anche lei.",
+    input_schema: { type: "object", properties: { device: { type: "string" }, nome: { type: "string", description: "un nome breve, es. Idea fuori rotta" }, quando: { type: "string", description: "quando deve squillare, in una frase intera" }, messaggio: { type: "string" } }, required: ["device", "nome", "quando"] } },
 ];
-const TIPO: Record<string, string> = { aggiorna_roadmap: "roadmap", crea_programma: "programma", crea_blocco_rapido: "blocco_rapido", crea_regola_partita: "regola", segna_imprevisto: "imprevisto" };
+const TIPO: Record<string, string> = { aggiorna_roadmap: "roadmap", crea_programma: "programma", crea_blocco_rapido: "blocco_rapido", crea_regola_partita: "regola", segna_imprevisto: "imprevisto", crea_condizione_chiamata: "chiamata" };
 
 function chiave(req: Request): boolean {
   const k = String(process.env.AGENT_TOOLS_KEY || "");
@@ -96,6 +99,9 @@ export function registerFocusLockAgentTools(app: Express) {
         piuDi: intero(a.piuDi, 1, 1440), menoDi: intero(a.menoDi, 1, 1440), app: String(a.app || "").slice(0, 60),
         dallaVolta: intero(a.dallaVolta, 2, 50), maxGiorno: intero(a.maxGiorno, 1, 20), almeno: intero(a.almeno, 1, 20),
         votoMax: intero(a.votoMax, 1, 5), votoMin: intero(a.votoMin, 1, 5) };
+    } else if (tool === "crea_condizione_chiamata") {
+      payload = { nome: String(a.nome || "").slice(0, 80), quando: String(a.quando || "").slice(0, 300), messaggio: String(a.messaggio || "").slice(0, 300) };
+      if (!payload.nome || !payload.quando) { res.status(400).json({ error: "servono nome e quando" }); return; }
     } else if (tool === "segna_imprevisto") {
       payload = { giorni: Math.max(1, Math.min(60, Math.round(Number(a.giorni) || 1))), ore: Math.max(0, Math.min(400, Number(a.ore) || 0)), motivo: String(a.motivo || "").slice(0, 160) };
     } else {
