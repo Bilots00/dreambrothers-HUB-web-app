@@ -127,8 +127,36 @@ const NOTE_GLOSSARIO = [
   "sgarro: a slip, breaking your own rule. penitenza: a self-chosen penalty.",
 ].join("\n");
 
+/* 23/11/2026: su Railway c'e' la chiave Gemini che usa gia' il Genio, non quella di Claude. Si usa Claude se c'e' la sua
+   chiave, altrimenti Gemini: cosi' le traduzioni partono senza aggiungere niente. */
+function chiaveGemini(): string { return String(process.env.AGENT_GEMINI_KEY || process.env.DREAMMAP_GEMINI_KEY || process.env.GEMINI_API_KEY || ""); }
+export function traduzioniAccese(): boolean { return !!(claude() || chiaveGemini()); }
+async function chiediGemini(testo: string): Promise<Record<string, unknown>> {
+  const modelli = [process.env.TRADUZIONI_GEMINI_MODEL || "gemini-3-flash-preview", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview"].filter((x, i, a) => a.indexOf(x) === i);
+  let errore: unknown = null;
+  for (const modello of modelli) {
+    const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 120000);
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+        method: "POST", signal: ac.signal,
+        headers: { "x-goog-api-key": chiaveGemini(), "content-type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: ISTRUZIONI + "\nAnswer with ONE JSON object only, no prose, no code fences." }] },
+          contents: [{ role: "user", parts: [{ text: testo }] }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0.3, maxOutputTokens: 32000 },
+        }),
+      });
+      const j: any = await r.json();
+      const out = (j?.candidates?.[0]?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || "").join("").trim();
+      if (!r.ok || !out) throw new Error("gemini " + r.status + " " + JSON.stringify(j?.error || "").slice(0, 160));
+      return JSON.parse(out.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    } catch (e) { errore = e; } finally { clearTimeout(timer); }
+  }
+  throw errore || new Error("gemini: nessun modello ha risposto");
+}
 async function chiedi(lingua: string, sorg: Pacco, glossario: Pacco | null, note: string): Promise<Record<string, unknown>> {
-  const c = claude(); if (!c) throw new Error("traduzioni spente: manca la chiave di Claude");
+  const c = claude();
+  if (!c && !chiaveGemini()) throw new Error("traduzioni spente: manca la chiave di Claude o di Gemini");
   const nomeLingua = (() => { try { return new Intl.DisplayNames(["en"], { type: "language" }).of(lingua) || lingua; } catch { return lingua; } })();
   const schema = z.object(Object.fromEntries(Object.keys(sorg).map((k) => [k, z.string()])) as Record<string, z.ZodString>);
   const testo = [
@@ -138,6 +166,7 @@ async function chiedi(lingua: string, sorg: Pacco, glossario: Pacco | null, note
     "Italian source, as JSON:",
     JSON.stringify(sorg, null, 1),
   ].filter(Boolean).join("\n\n");
+  if (!c) return chiediGemini(testo);
   const stream = c.beta.messages.stream({
     model: MODELLO,
     max_tokens: 64000,
