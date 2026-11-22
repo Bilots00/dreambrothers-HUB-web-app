@@ -16,7 +16,7 @@ import { getDb } from "../db";
  * GET /api/tee-designs/ai/:id.png  ->  il PNG salvato (URL stabile, id non indovinabile).
  *
  * IL MOTORE: Gemini immagini con la stessa chiave del ritratto dell'Io Futuro (DREAMMAP_GEMINI_KEY), stessa lista di modelli.
- * IL CONTO (listino ai.google.dev/gemini-api/docs/pricing, come in focuslockRitratto.ts; i modelli immagini NON hanno piano
+ * IL CONTO (listino ai.google.dev/gemini-api/docs/pricing, come in dreammapRitratto.ts; i modelli immagini NON hanno piano
  * gratuito): gemini-nano-banana-2.1 = 0,0336 $ a immagine 1K, riserva gemini-3.1-flash-image = 0,067 $.
  *   Una generazione = 2 immagini = circa 0,07 $. Tetto di serie TEE_AI_DAILY_MAX = 150 immagini al giorno (circa 5 $ al
  *   giorno, 150 $ al mese nel caso peggiore). Al tetto: 429 fino a mezzanotte UTC. Per IP: TEE_AI_PER_HOUR (di serie 6).

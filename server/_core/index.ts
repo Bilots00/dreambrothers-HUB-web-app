@@ -9,33 +9,34 @@ import { registerCareRoutes } from "./careRoutes";
 import { registerSocialRoutes } from "./socialRoutes";
 import { registerVideoRoutes } from "./videoRoutes";
 import { registerClaudeRoutes } from "./claudeRoutes";
-import { registerFocusLockRoutes } from "./focuslockRoutes";
-import { registerFocusLockFeedbackRoutes } from "./focuslockFeedback";
-import { registerFocusLockAgentRoutes } from "./focuslockAgent";
-import { registerFocusLockChatRoutes } from "./focuslockChat";
-import { registerFocusLockConversaRoutes } from "./focuslockConversa";
-import { registerFocusLockPianoRoutes } from "./focuslockPiano";
-import { registerFocusLockNotionRoutes } from "./focuslockNotion";
-import { registerFocusLockPianoAiRoutes } from "./focuslockPianoAi";
-import { registerFocusLockIspirazioneRoutes } from "./focuslockIspirazione";
-import { registerFocusLockPartnerRoutes } from "./focuslockPartners";
-import { registerFocusLockQuoteRoutes } from "./focuslockQuotes";
-import { registerFocusLockBackgroundRoutes } from "./focuslockBackgrounds";
-import { registerFocusLockTreeRoutes } from "./focuslockTrees";
-import { registerFocusLockSocialRoutes } from "./focuslockSocial";
-import { registerFocusLockArenaRoutes } from "./focuslockArena";
-import { registerFocusLockPonteRoutes } from "./focuslockPonte";
-import { registerFocusLockGenioRoutes } from "./focuslockGenio";
-import { registerFocusLockAgentTools } from "./focuslockAgentTools";
-import { registerFocusLockIoFuturoRoutes } from "./focuslockIoFuturo";
-import { registerFocusLockSocialProofRoutes } from "./focuslockSocialProof";
-import { registerFocusLockCompagniRoutes } from "./focuslockCompagni";
-import { registerFocusLockPattiRoutes } from "./focuslockPatti";
-import { registerFocusLockVitaRoutes } from "./focuslockVita";
-import { registerFocusLockTutorialRoutes } from "./focuslockTutorial";
-import { registerFocusLockTrascriviRoutes } from "./focuslockTrascrivi";
-import { registerFocusLockUnsplashRoutes } from "./focuslockUnsplash";
-import { registerFocusLockRitrattoRoutes } from "./focuslockRitratto";
+import { registerDreamMapRoutes } from "./dreammapRoutes";
+import { registerDreamMapFeedbackRoutes } from "./dreammapFeedback";
+import { registerDreamMapAgentRoutes } from "./dreammapAgent";
+import { registerDreamMapChatRoutes } from "./dreammapChat";
+import { registerDreamMapConversaRoutes } from "./dreammapConversa";
+import { registerDreamMapPianoRoutes } from "./dreammapPiano";
+import { registerDreamMapNotionRoutes } from "./dreammapNotion";
+import { registerDreamMapPianoAiRoutes } from "./dreammapPianoAi";
+import { registerDreamMapIspirazioneRoutes } from "./dreammapIspirazione";
+import { registerDreamMapPartnerRoutes } from "./dreammapPartners";
+import { registerDreamMapQuoteRoutes } from "./dreammapQuotes";
+import { registerDreamMapBackgroundRoutes } from "./dreammapBackgrounds";
+import { registerDreamMapTreeRoutes } from "./dreammapTrees";
+import { registerDreamMapSocialRoutes } from "./dreammapSocial";
+import { registerDreamMapArenaRoutes } from "./dreammapArena";
+import { registerDreamMapPonteRoutes } from "./dreammapPonte";
+import { registerDreamMapGenioRoutes } from "./dreammapGenio";
+import { registerDreamMapAgentTools } from "./dreammapAgentTools";
+import { registerDreamMapIoFuturoRoutes } from "./dreammapIoFuturo";
+import { registerDreamMapSocialProofRoutes } from "./dreammapSocialProof";
+import { registerDreamMapCompagniRoutes } from "./dreammapCompagni";
+import { registerDreamMapPattiRoutes } from "./dreammapPatti";
+import { registerDreamMapTraduzioniRoutes } from "./dreammapTraduzioni";
+import { registerDreamMapVitaRoutes } from "./dreammapVita";
+import { registerDreamMapTutorialRoutes } from "./dreammapTutorial";
+import { registerDreamMapTrascriviRoutes } from "./dreammapTrascrivi";
+import { registerDreamMapUnsplashRoutes } from "./dreammapUnsplash";
+import { registerDreamMapRitrattoRoutes } from "./dreammapRitratto";
 import { registerDreamteamRoutes } from "./dreamteamRoutes";
 import { registerWatchlistRoutes } from "./watchlistRoutes";
 import { registerImageProxy } from "./imageProxy";
@@ -688,33 +689,34 @@ async function startServer() {
   registerVideoRoutes(app);
   registerClaudeRoutes(app);
   registerMusicRoutes(app);
-  registerFocusLockRoutes(app);
-  registerFocusLockFeedbackRoutes(app);
-  registerFocusLockAgentRoutes(app);
-  registerFocusLockChatRoutes(app);
-  registerFocusLockConversaRoutes(app);   // 0.9.301: la revisione e il Rientra in rotta in chat con il tuo agente, e i dati anonimi che insegnano al Genio
-  registerFocusLockPianoRoutes(app);
-  registerFocusLockNotionRoutes(app);
-  registerFocusLockPianoAiRoutes(app);
-  registerFocusLockIspirazioneRoutes(app);   // 0.9.354: libri e film per il tuo viaggio scelti dal tuo agente (Premium)
-  registerFocusLockPartnerRoutes(app);
-  registerFocusLockQuoteRoutes(app);
-  registerFocusLockBackgroundRoutes(app);
-  registerFocusLockTreeRoutes(app);
-  registerFocusLockSocialRoutes(app);
-  registerFocusLockArenaRoutes(app);
-  registerFocusLockPonteRoutes(app);
-  registerFocusLockGenioRoutes(app);
-  registerFocusLockAgentTools(app);
-  registerFocusLockIoFuturoRoutes(app);
-  registerFocusLockSocialProofRoutes(app); // prova sociale e catena dei sogni accesi
-  registerFocusLockCompagniRoutes(app); // 0.9.285: le sessioni in coppia, come Focusmate
-  registerFocusLockPattiRoutes(app);    // 0.9.285: il patto con il tuo Dreambrother
-  registerFocusLockVitaRoutes(app);     // 0.9.286: la vita in settimane, le pagine viste dagli amici
-  registerFocusLockTutorialRoutes(app);   // 0.9.290: il tutorial con un video vero (la ricerca nella cornice e' spenta)
-  registerFocusLockTrascriviRoutes(app);   // 0.9.290: la dettatura con ElevenLabs Scribe v2
-  registerFocusLockUnsplashRoutes(app);    // 0.9.298: le foto di Unsplash per il piano (copertina e blocco immagine)
-  registerFocusLockRitrattoRoutes(app);    // 0.9.301: il ritratto dell'Io Futuro dal selfie (Gemini, niente si conserva)
+  registerDreamMapRoutes(app);
+  registerDreamMapFeedbackRoutes(app);
+  registerDreamMapAgentRoutes(app);
+  registerDreamMapChatRoutes(app);
+  registerDreamMapConversaRoutes(app);   // 0.9.301: la revisione e il Rientra in rotta in chat con il tuo agente, e i dati anonimi che insegnano al Genio
+  registerDreamMapPianoRoutes(app);
+  registerDreamMapNotionRoutes(app);
+  registerDreamMapPianoAiRoutes(app);
+  registerDreamMapIspirazioneRoutes(app);   // 0.9.354: libri e film per il tuo viaggio scelti dal tuo agente (Premium)
+  registerDreamMapPartnerRoutes(app);
+  registerDreamMapQuoteRoutes(app);
+  registerDreamMapBackgroundRoutes(app);
+  registerDreamMapTreeRoutes(app);
+  registerDreamMapSocialRoutes(app);
+  registerDreamMapArenaRoutes(app);
+  registerDreamMapPonteRoutes(app);
+  registerDreamMapGenioRoutes(app);
+  registerDreamMapAgentTools(app);
+  registerDreamMapIoFuturoRoutes(app);
+  registerDreamMapSocialProofRoutes(app); // prova sociale e catena dei sogni accesi
+  registerDreamMapCompagniRoutes(app); // 0.9.285: le sessioni in coppia, come Focusmate
+  registerDreamMapPattiRoutes(app);    // 0.9.285: il patto con il tuo Dreambrother
+  registerDreamMapTraduzioniRoutes(app); // 22/11/2026: i testi dell app in qualsiasi lingua
+  registerDreamMapVitaRoutes(app);     // 0.9.286: la vita in settimane, le pagine viste dagli amici
+  registerDreamMapTutorialRoutes(app);   // 0.9.290: il tutorial con un video vero (la ricerca nella cornice e' spenta)
+  registerDreamMapTrascriviRoutes(app);   // 0.9.290: la dettatura con ElevenLabs Scribe v2
+  registerDreamMapUnsplashRoutes(app);    // 0.9.298: le foto di Unsplash per il piano (copertina e blocco immagine)
+  registerDreamMapRitrattoRoutes(app);    // 0.9.301: il ritratto dell'Io Futuro dal selfie (Gemini, niente si conserva)
   registerWatchlistRoutes(app);
   registerImageProxy(app);
   registerProvaApkRoutes(app);   // APK di prova del Bug Loop: il link https dentro il messaggio Telegram
