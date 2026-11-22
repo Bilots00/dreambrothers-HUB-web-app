@@ -1,0 +1,851 @@
+import type { Express, Request, Response } from "express";
+import { sql } from "drizzle-orm";
+import { getDb } from "../db";
+import { rows, ensureTables as ensureSocial, metricheLeggi } from "./dreammapSocial";
+
+/* DreamMap — l'arena: gli amici con i loro numeri, le reazioni, il Focus
+ * insieme, le leghe settimanali e il conteggio di chi partecipa a una sfida.
+ *
+ * Stessa identita' della classifica (l'id casuale del telefono, focuslock_players): niente
+ * email, niente contatti. Agli amici arrivano SOLO gli aggregati: ore di concentrazione della
+ * settimana, giorni di fila, punteggio vecchio te / nuovo te, delta settimanale e (app 0.9.300) le
+ * metriche del confronto: tappe, giorni di severa, Full Focus, serie. Mai il nome di un'app, mai la
+ * rotta; il tempo di schermo solo se la persona accende "Condividi anche il tempo di schermo".
+ *
+ * LEGHE. Settimana da lunedi' a domenica; la chiusura la fa il server la prima volta che
+ * qualcuno chiede la lega dopo la mezzanotte UTC di domenica. Fino a trenta persone per lega,
+ * stesso obiettivo del Genio; se l'obiettivo ha meno di cinque iscritti si finisce nella lega
+ * generale; sotto i cinque, anche li', la lega e' «in formazione»: niente promossi, niente
+ * retrocessi, e MAI giocatori finti. Punti = minuti di Full Focus portati a termine (li conta
+ * il telefono, con il tetto di 480 al giorno) + 30 per ogni passo della rotta spuntato. */
+
+const REAZIONI = ["cuore", "grande", "continua", "nonmollare", "centrato"];
+const DONI = ["pozione"];
+const TIERS = ["bronzo", "argento", "oro", "zaffiro", "rubino", "smeraldo", "turchese", "perla", "ossidiana", "diamante"];
+const LEGA_MAX = 30;
+const LEGA_MIN = 5;
+const INSIEME_SCADENZA_MIN = 10;
+
+let arenaReady: Promise<void> | null = null;
+function ensureArena(): Promise<void> {
+  if (!arenaReady) {
+    arenaReady = (async () => {
+      await ensureSocial();
+      const db = await getDb();
+      if (!db) throw new Error("database unavailable");
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_reazioni (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NOT NULL,
+        tipo VARCHAR(12) NOT NULL,
+        giorno DATE NOT NULL,
+        createdAt TIMESTAMP NULL,
+        UNIQUE KEY uniq_r (da, a, tipo, giorno),
+        INDEX idx_a (a, createdAt)
+      )`);
+      /* app 0.9.305: i doni fra amici veri (la pozione della concentrazione). Uno al giorno per amico;
+         presoAt = quando chi l'ha ricevuto l'ha aperto (da li' partono i suoi 15 minuti di XP doppi). */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_doni (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NOT NULL,
+        tipo VARCHAR(12) NOT NULL,
+        giorno DATE NOT NULL,
+        createdAt TIMESTAMP NULL,
+        presoAt TIMESTAMP NULL,
+        UNIQUE KEY uniq_d (da, a, giorno),
+        INDEX idx_a (a, createdAt)
+      )`);
+      /* app 0.9.343: la serie di gruppo come Duolingo. Chi invita scrive una riga "invito"; parte solo quando l'amico accetta
+         (stato "attiva", attivaAt). "rifiutata" e "finita" restano per la storia, e non contano nel tetto di cinque. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_serie_gruppo (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NOT NULL,
+        stato VARCHAR(10) NOT NULL,
+        createdAt TIMESTAMP NULL,
+        attivaAt TIMESTAMP NULL,
+        fineAt TIMESTAMP NULL,
+        INDEX idx_da (da, stato), INDEX idx_a (a, stato)
+      )`);
+      /* app 0.9.344: la Serie perfetta, come lo "Slancio perfetto" di Duolingo. Chi fa la tappa 7 giorni di fila senza protezioni
+         entra nel premio della settimana (3000 monete), che il lunedi' dopo si divide fra tutti quelli che ce l'hanno fatta. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_serie_perfetta (
+        device VARCHAR(64) NOT NULL,
+        settimana VARCHAR(10) NOT NULL,
+        giorni INT NOT NULL DEFAULT 0,
+        pagatoAt TIMESTAMP NULL,
+        quota INT NULL,
+        updatedAt TIMESTAMP NULL,
+        PRIMARY KEY (device, settimana)
+      )`);
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_insieme (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        codice VARCHAR(8) NOT NULL UNIQUE,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NULL,
+        minuti INT NOT NULL,
+        createdAt TIMESTAMP NULL,
+        acceptedAt TIMESTAMP NULL,
+        endAt TIMESTAMP NULL,
+        esitoDa TEXT NULL,
+        esitoA TEXT NULL,
+        INDEX idx_da (da, createdAt), INDEX idx_a (a, createdAt)
+      )`);
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_leghe (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        settimana VARCHAR(10) NOT NULL,
+        goal VARCHAR(24) NOT NULL,
+        tier VARCHAR(12) NOT NULL,
+        chiusa TINYINT NOT NULL DEFAULT 0,
+        createdAt TIMESTAMP NULL,
+        INDEX idx_s (settimana, goal, tier)
+      )`);
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_lega_membri (
+        settimana VARCHAR(10) NOT NULL,
+        device VARCHAR(64) NOT NULL,
+        legaId INT NOT NULL,
+        nick VARCHAR(24) NOT NULL DEFAULT '',
+        punti INT NOT NULL DEFAULT 0,
+        tier VARCHAR(12) NOT NULL DEFAULT 'bronzo',
+        esito VARCHAR(12) NOT NULL DEFAULT '',
+        posizione INT NOT NULL DEFAULT 0,
+        visto TINYINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (settimana, device),
+        INDEX idx_lega (legaId)
+      )`);
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_sfide (
+        device VARCHAR(64) NOT NULL,
+        sfidaId VARCHAR(40) NOT NULL,
+        stato VARCHAR(12) NOT NULL DEFAULT 'attiva',
+        createdAt TIMESTAMP NULL,
+        updatedAt TIMESTAMP NULL,
+        PRIMARY KEY (device, sfidaId),
+        INDEX idx_sfida (sfidaId, stato)
+      )`);
+      /* app 0.9.321: i duelli a tre round. Si gioca a turni, non in diretta: chi sfida gioca subito, l'altro quando puo', sulle stesse
+         domande (seed). Con a vuoto la sfida e' aperta al primo giocatore che cerca un avversario. */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_duelli (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        da VARCHAR(64) NOT NULL,
+        a VARCHAR(64) NULL,
+        seed INT NOT NULL,
+        roundDa TEXT NULL,
+        roundA TEXT NULL,
+        stato VARCHAR(10) NOT NULL DEFAULT 'aperto',
+        createdAt TIMESTAMP NULL,
+        doneAt TIMESTAMP NULL,
+        INDEX idx_da (da, createdAt),
+        INDEX idx_a (a, stato),
+        INDEX idx_stato (stato, createdAt)
+      )`);
+      /* app 0.9.321: il pollice su o giu' sulle risposte degli agenti, per migliorarle */
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS focuslock_voti_chat (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        device VARCHAR(64) NOT NULL,
+        voto TINYINT NOT NULL,
+        modo VARCHAR(16) NOT NULL DEFAULT '',
+        testo TEXT NULL,
+        createdAt TIMESTAMP NULL,
+        INDEX idx_voto (voto, createdAt)
+      )`);
+      /* app 0.9.321: il torneo della Lega Diamante (quarti, semifinale, finale), una settimana per fase */
+      try { await db.execute(sql`ALTER TABLE focuslock_players ADD COLUMN torneoFase VARCHAR(10) NOT NULL DEFAULT ''`); } catch (_) { /* c'e' gia' */ }
+      try { await db.execute(sql`ALTER TABLE focuslock_players ADD COLUMN torneiVinti INT NOT NULL DEFAULT 0`); } catch (_) { /* c'e' gia' */ }
+    })().catch((e) => { arenaReady = null; throw e; });
+  }
+  return arenaReady;
+}
+
+/* ---- la settimana, in UTC: 'YYYY-Www' ---- */
+function settimanaDi(d: Date): string {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const g = x.getUTCDay() || 7;
+  x.setUTCDate(x.getUTCDate() + 4 - g);
+  const inizio = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
+  const w = Math.ceil(((x.getTime() - inizio.getTime()) / 86400000 + 1) / 7);
+  return x.getUTCFullYear() + "-W" + String(w).padStart(2, "0");
+}
+function settimanaCorrente(): string { return settimanaDi(new Date()); }
+/** Il prossimo lunedi' 00:00 UTC. */
+function fineSettimana(): number {
+  const d = new Date();
+  const g = d.getUTCDay() || 7;
+  const lun = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + (8 - g)));
+  return lun.getTime();
+}
+function codice(): string {
+  const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 6; i++) s += A[Math.floor(Math.random() * A.length)];
+  return s;
+}
+function nomeDi(r: any): string { return String(r?.nick || r?.name || "").trim() || "Giocatore"; }
+async function sonoAmici(device: string, altro: string): Promise<boolean> {
+  const r = await rows(sql`SELECT 1 AS k FROM focuslock_friends WHERE device = ${device} AND friend = ${altro} LIMIT 1`);
+  return r.length > 0;
+}
+
+/* ---- la chiusura delle settimane passate ---- */
+let chiusuraFatta = "";
+async function chiudiSettimane(): Promise<void> {
+  const ora = settimanaCorrente();
+  if (chiusuraFatta === ora) return;
+  const aperte = await rows(sql`SELECT id, settimana, tier, goal FROM focuslock_leghe WHERE chiusa = 0 AND settimana < ${ora}`);
+  for (const l of aperte) {
+    const membri = await rows(sql`SELECT device, punti FROM focuslock_lega_membri WHERE legaId = ${l.id} ORDER BY punti DESC, device ASC`);
+    const n = membri.length;
+    const ti = TIERS.indexOf(String(l.tier));
+    /* una fase del torneo: i primi 10 passano alla fase dopo, in finale i primi 3 vincono; chi esce torna nella Lega Diamante */
+    const fase = String(l.goal || "").indexOf("torneo:") === 0 ? String(l.goal).slice(7) : "";
+    if (fase) {
+      for (let i = 0; i < n; i++) {
+        const m = membri[i];
+        let esito = "eliminato", dopo = "";
+        if (fase === "finale") { if (i < 3) esito = "trofeo"; }
+        else if (i < 10) { esito = "avanza"; dopo = fase === "quarti" ? "semi" : "finale"; }
+        await rows(sql`UPDATE focuslock_lega_membri SET esito = ${esito}, posizione = ${i + 1} WHERE legaId = ${l.id} AND device = ${m.device}`);
+        await rows(sql`UPDATE focuslock_players SET torneoFase = ${dopo} WHERE device = ${m.device}`);
+        if (esito === "trofeo") await rows(sql`UPDATE focuslock_players SET torneiVinti = torneiVinti + 1 WHERE device = ${m.device}`);
+      }
+      await rows(sql`UPDATE focuslock_leghe SET chiusa = 1 WHERE id = ${l.id}`);
+      continue;
+    }
+    for (let i = 0; i < n; i++) {
+      const m = membri[i];
+      /* i primi 10 di una Lega Diamante vera entrano nel torneo */
+      if (String(l.tier) === "diamante" && n >= LEGA_MIN && i < 10) await rows(sql`UPDATE focuslock_players SET torneoFase = 'quarti' WHERE device = ${m.device} AND torneoFase = ''`);
+      let esito = "confermato";
+      let nuovoTier = String(l.tier);
+      if (n < LEGA_MIN) esito = "formazione";
+      else if (i < 5) { esito = ti < TIERS.length - 1 ? "promosso" : "vetta"; if (ti < TIERS.length - 1) nuovoTier = TIERS[ti + 1]; }
+      else if (i >= n - 5) { esito = ti > 0 ? "retrocesso" : "confermato"; if (ti > 0) nuovoTier = TIERS[ti - 1]; }
+      await rows(sql`UPDATE focuslock_lega_membri SET esito = ${esito}, posizione = ${i + 1} WHERE legaId = ${l.id} AND device = ${m.device}`);
+      if (nuovoTier !== String(l.tier)) await rows(sql`UPDATE focuslock_players SET tier = ${nuovoTier} WHERE device = ${m.device}`);
+    }
+    await rows(sql`UPDATE focuslock_leghe SET chiusa = 1 WHERE id = ${l.id}`);
+  }
+  chiusuraFatta = ora;
+}
+
+/* ---- l'iscrizione a una lega della settimana ---- */
+const CATEGORIE = ["studenti", "imprenditori", "lavoratori", "creator", "sportivi"];
+async function assegnaLega(device: string, goal: string, tier: string, nick: string, settimana: string, categoria: string, torneoFase = ""): Promise<number> {
+  const gia = await rows(sql`SELECT legaId FROM focuslock_lega_membri WHERE settimana = ${settimana} AND device = ${device}`);
+  if (gia[0]) return Number(gia[0].legaId);
+  /* la categoria scelta dall'utente (Studenti, Imprenditori...): la lega resta dentro la categoria,
+     e sotto i cinque e' «in formazione». Senza categoria vale la vecchia regola: l'obiettivo del
+     Genio se ha abbastanza gente, altrimenti la lega generale. */
+  let g = categoria && CATEGORIE.indexOf(categoria) >= 0 ? categoria : (goal || "*");
+  if (torneoFase) { g = "torneo:" + torneoFase; tier = "diamante"; }
+  else if (!categoria && g !== "*") {
+    const pool = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_players WHERE legaOptIn = 1 AND goal = ${g} AND updatedAt > (NOW() - INTERVAL 14 DAY)`);
+    if (Number(pool[0]?.k || 0) < LEGA_MIN) g = "*";
+  }
+  const leghe = await rows(sql`SELECT l.id, (SELECT COUNT(*) FROM focuslock_lega_membri m WHERE m.legaId = l.id) AS n
+    FROM focuslock_leghe l WHERE l.settimana = ${settimana} AND l.goal = ${g} AND l.tier = ${tier} AND l.chiusa = 0 ORDER BY l.id ASC`);
+  let legaId = 0;
+  for (const l of leghe) if (Number(l.n) < LEGA_MAX) { legaId = Number(l.id); break; }
+  if (!legaId) {
+    await rows(sql`INSERT INTO focuslock_leghe (settimana, goal, tier, chiusa, createdAt) VALUES (${settimana}, ${g}, ${tier}, 0, NOW())`);
+    const nuova = await rows(sql`SELECT id FROM focuslock_leghe WHERE settimana = ${settimana} AND goal = ${g} AND tier = ${tier} ORDER BY id DESC LIMIT 1`);
+    legaId = Number(nuova[0]?.id || 0);
+  }
+  const p = await rows(sql`SELECT legaPunti, legaSettimana FROM focuslock_players WHERE device = ${device}`);
+  const punti = p[0] && String(p[0].legaSettimana) === settimana ? Number(p[0].legaPunti || 0) : 0;
+  await rows(sql`INSERT IGNORE INTO focuslock_lega_membri (settimana, device, legaId, nick, punti, tier) VALUES (${settimana}, ${device}, ${legaId}, ${nick}, ${punti}, ${tier})`);
+  return legaId;
+}
+
+export function registerDreamMapArenaRoutes(app: Express) {
+  /* AMICI SUGGERITI (0.9.207): gli amici dei miei amici («Seguito da …»), poi chi e' attivo
+     («Persona che potresti conoscere»). Mai chi seguo gia'. */
+  app.get("/api/focuslock/social/suggeriti", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const miei = (await rows(sql`SELECT friend FROM focuslock_friends WHERE device = ${device}`)).map((x) => String(x.friend));
+      const fof = await rows(sql`SELECT f2.friend AS device, p.name, p.nick, p1.name AS daName, p1.nick AS daNick
+        FROM focuslock_friends f1 JOIN focuslock_friends f2 ON f2.device = f1.friend
+        JOIN focuslock_players p ON p.device = f2.friend JOIN focuslock_players p1 ON p1.device = f1.friend
+        WHERE f1.device = ${device} AND f2.friend <> ${device} LIMIT 80`);
+      const visti: Record<string, boolean> = {}; const out: any[] = [];
+      for (const r of fof) { const d = String(r.device); if (miei.includes(d) || visti[d]) continue; visti[d] = true; out.push({ device: d, nome: nomeDi(r), da: String(r.daNick || r.daName || "un amico") }); }
+      const attivi = await rows(sql`SELECT device, name, nick FROM focuslock_players WHERE device <> ${device} AND name <> '' AND updatedAt > (NOW() - INTERVAL 14 DAY) ORDER BY updatedAt DESC LIMIT 40`);
+      for (const r of attivi) { const d = String(r.device); if (miei.includes(d) || visti[d] || out.length >= 30) continue; visti[d] = true; out.push({ device: d, nome: nomeDi(r), da: "" }); }
+      res.json({ giocatori: out });
+    } catch (e: any) { res.status(500).json({ error: e?.message || "suggeriti non disponibili" }); }
+  });
+  /* PRIMA DEGLI ALTRI (0.9.207): quanti giocatori attivi non si sono ancora fatti vivi oggi */
+  app.get("/api/focuslock/social/serie-prima", async (_req: Request, res: Response) => {
+    try {
+      await ensureArena();
+      const r = await rows(sql`SELECT COUNT(*) AS tot, SUM(updatedAt < CURDATE()) AS nonOggi FROM focuslock_players WHERE name <> '' AND updatedAt > (NOW() - INTERVAL 7 DAY)`);
+      const tot = Number(r[0]?.tot || 0), non = Number(r[0]?.nonOggi || 0);
+      res.json({ pct: tot >= 3 ? Math.round(non * 100 / tot) : 0, tot });
+    } catch { res.json({ pct: 0, tot: 0 }); }
+  });
+
+  /* IL CONFRONTO DEL REPORT (0.9.325): dove sta una persona fra tutte, su una metrica della settimana. Solo aggregati, e i primi tre con il nome che la lega gia' mostra. */
+  app.get("/api/focuslock/social/confronto", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    const met = String(req.query.met || "ff");
+    if (!device || !["ff", "tappe", "serie", "severa"].includes(met)) { res.json({ n: 0 }); return; }
+    try {
+      await ensureArena();
+      const list = await rows(sql`SELECT device, name, nick, metriche FROM focuslock_players WHERE name <> '' AND updatedAt > (NOW() - INTERVAL 30 DAY) LIMIT 5000`);
+      const voci = list.map((r: any) => {
+        const m: any = metricheLeggi(r.metriche);
+        const v = !m ? null : met === "serie" ? Number(m.serie) : Number(m[met]?.s);
+        return { device: String(r.device), nome: String(r.nick || r.name || ""), v };
+      }).filter((x: any) => x.v !== null && isFinite(x.v)) as { device: string; nome: string; v: number }[];
+      voci.sort((a, b) => b.v - a.v);
+      const n = voci.length, i = voci.findIndex((x) => x.device === device);
+      const mio = i >= 0 ? voci[i]!.v : 0;
+      const max = n ? voci[0]!.v : 0;
+      const buckets = new Array(24).fill(0) as number[];
+      voci.forEach((x) => { const k = max > 0 ? Math.min(23, Math.floor((x.v / max) * 24)) : 0; buckets[k] = (buckets[k] || 0) + 1; });
+      res.json({ n, mio, max, rank: i >= 0 ? i + 1 : n + 1, sotto: n ? Math.round((voci.filter((x) => x.v < mio).length / n) * 100) : 0, buckets, top: voci.slice(0, 3) });
+    } catch { res.json({ n: 0 }); }
+  });
+
+  /* CERCA PER NOME (0.9.203): nome o nick che contengono il testo, mai se stessi, 12 al massimo.
+     Si vede solo nome, device e livello: niente di piu' di quello che la lega gia' mostra. */
+  app.get("/api/focuslock/social/cerca", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    const q = String(req.query.q || "").trim().slice(0, 40);
+    if (!device || q.length < 2) { res.json({ giocatori: [] }); return; }
+    try {
+      await ensureArena();
+      const like = "%" + q.replace(/[%_]/g, "") + "%";
+      const list = await rows(sql`SELECT device, name, nick, level, (updatedAt > (NOW() - INTERVAL 10 MINUTE)) AS online FROM focuslock_players
+        WHERE device <> ${device} AND (name LIKE ${like} OR nick LIKE ${like}) AND updatedAt > (NOW() - INTERVAL 90 DAY)
+        ORDER BY updatedAt DESC LIMIT 12`);
+      res.json({ giocatori: list.map((r) => ({ device: String(r.device), nome: nomeDi(r), level: Number(r.level || 1), online: !!Number(r.online) })) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "ricerca non disponibile" });
+    }
+  });
+
+  /* SEGUI (0.9.203): una freccia sola, da me a lui. Chi entra con il codice resta amico in
+     entrambe le direzioni (dreammapSocial), chi viene seguito da qui diventa un follower. */
+  app.post("/api/focuslock/social/segui", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const a = String(b.a || "").slice(0, 64);
+    if (!device || !a) { res.status(400).json({ error: "device mancante" }); return; }
+    if (device === a) { res.status(400).json({ error: "sei tu" }); return; }
+    try {
+      await ensureArena();
+      const p = await rows(sql`SELECT device, name, nick FROM focuslock_players WHERE device = ${a}`);
+      if (!p[0]) { res.status(404).json({ error: "giocatore non trovato" }); return; }
+      await rows(sql`INSERT IGNORE INTO focuslock_friends (device, friend, createdAt) VALUES (${device}, ${a}, NOW())`);
+      res.json({ ok: true, nome: nomeDi(p[0]) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "non seguito" });
+    }
+  });
+
+  /* Gli amici, con i soli aggregati che si possono vedere. Piu' gli inviti al Focus insieme
+     in attesa e le reazioni gia' mandate oggi. */
+  app.get("/api/focuslock/social/amici", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const list = await rows(sql`SELECT p.device, p.name, p.nick, p.level, p.ffMin7, p.streak, p.ffStreak, p.neo, p.old, p.score7, p.prevScore7, p.tier, p.updatedAt, p.attivita, p.metriche,
+        (p.updatedAt > (NOW() - INTERVAL 10 MINUTE)) AS online
+        FROM focuslock_friends f JOIN focuslock_players p ON p.device = f.friend WHERE f.device = ${device} ORDER BY p.score7 DESC, p.updatedAt DESC LIMIT 100`);
+      const oggi = await rows(sql`SELECT a, tipo FROM focuslock_reazioni WHERE da = ${device} AND giorno = UTC_DATE()`);
+      const mandate: Record<string, string[]> = {};
+      for (const r of oggi) (mandate[String(r.a)] = mandate[String(r.a)] || []).push(String(r.tipo));
+      /* app 0.9.305: a chi ho gia' mandato un dono oggi, e i doni che ho ricevuto e non ho ancora aperto */
+      const doniOggi = new Set((await rows(sql`SELECT a FROM focuslock_doni WHERE da = ${device} AND giorno = UTC_DATE()`)).map((r) => String(r.a)));
+      const doniRicevuti = await rows(sql`SELECT d.id, d.tipo, d.da, d.createdAt, p.name, p.nick FROM focuslock_doni d JOIN focuslock_players p ON p.device = d.da
+        WHERE d.a = ${device} AND d.presoAt IS NULL AND d.createdAt > (NOW() - INTERVAL 3 DAY) ORDER BY d.id DESC LIMIT 10`);
+      const amici = list.map((r) => ({
+        device: String(r.device), nome: nomeDi(r), level: Number(r.level || 1),
+        ffMin7: Number(r.ffMin7 || 0), streak: Number(r.streak || 0), ffStreak: Number(r.ffStreak || 0),
+        neo: Number(r.neo || 0), old: Number(r.old || 0), score7: Number(r.score7 || 0), prevScore7: Number(r.prevScore7 || 0),
+        tier: String(r.tier || "bronzo"), visto: r.updatedAt ? new Date(r.updatedAt).toISOString() : null,
+        reazioniOggi: mandate[String(r.device)] || [],
+        donoOggi: doniOggi.has(String(r.device)),
+        /* online = ha parlato col server negli ultimi dieci minuti; attivita = cosa stava facendo */
+        online: !!Number(r.online), attivita: String(r.attivita || "app"),
+        /* app 0.9.300: i numeri del confronto (Oggi / Settimana / Mese / Serie) */
+        metriche: metricheLeggi(r.metriche),
+      }));
+      const ricevute = await rows(sql`SELECT r.tipo, COUNT(*) AS n FROM focuslock_reazioni r WHERE r.a = ${device} AND r.createdAt > (NOW() - INTERVAL 7 DAY) GROUP BY r.tipo`);
+      const ultime = await rows(sql`SELECT r.tipo, r.createdAt, p.name, p.nick FROM focuslock_reazioni r JOIN focuslock_players p ON p.device = r.da WHERE r.a = ${device} ORDER BY r.createdAt DESC LIMIT 12`);
+      /* seguiti e follower (0.9.203): chi seguo io, e chi segue me */
+      let seguiti = amici.length, follower = 0;
+      try {
+        const c = await rows(sql`SELECT (SELECT COUNT(*) FROM focuslock_friends WHERE device = ${device}) AS seguiti, (SELECT COUNT(*) FROM focuslock_friends WHERE friend = ${device}) AS follower`);
+        seguiti = Number(c[0]?.seguiti || 0); follower = Number(c[0]?.follower || 0);
+      } catch (_) { /* senza contatori si vive */ }
+      res.json({ amici, seguiti, follower, reazioni: { totali: ricevute.map((x) => ({ tipo: String(x.tipo), n: Number(x.n) })), ultime: ultime.map((x) => ({ tipo: String(x.tipo), da: nomeDi(x), at: x.createdAt })) },
+        doni: doniRicevuti.map((x) => ({ id: Number(x.id), tipo: String(x.tipo), da: nomeDi(x), daDevice: String(x.da), at: x.createdAt })) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "amici non disponibili" });
+    }
+  });
+
+  /* Una reazione predefinita: una per tipo, per amico, al giorno. */
+  app.post("/api/focuslock/social/reazione", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64), tipo = String(b.tipo || "");
+    if (!device || !a || REAZIONI.indexOf(tipo) < 0) { res.status(400).json({ error: "reazione non valida" }); return; }
+    try {
+      await ensureArena();
+      if (!(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      const gia = await rows(sql`SELECT 1 AS k FROM focuslock_reazioni WHERE da = ${device} AND a = ${a} AND tipo = ${tipo} AND giorno = UTC_DATE() LIMIT 1`);
+      if (gia.length) { res.json({ ok: true, gia: true }); return; }
+      await rows(sql`INSERT IGNORE INTO focuslock_reazioni (da, a, tipo, giorno, createdAt) VALUES (${device}, ${a}, ${tipo}, UTC_DATE(), NOW())`);
+      res.json({ ok: true, gia: false });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "reazione non salvata" });
+    }
+  });
+
+  /* ---- I DONI (app 0.9.305): la pozione della concentrazione, uno al giorno per amico ---- */
+  app.post("/api/focuslock/social/dono", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64), tipo = String(b.tipo || "pozione");
+    if (!device || !a || device === a || DONI.indexOf(tipo) < 0) { res.status(400).json({ error: "dono non valido" }); return; }
+    try {
+      await ensureArena();
+      if (!(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      const gia = await rows(sql`SELECT 1 AS k FROM focuslock_doni WHERE da = ${device} AND a = ${a} AND giorno = UTC_DATE() LIMIT 1`);
+      if (gia.length) { res.json({ ok: true, gia: true }); return; }
+      await rows(sql`INSERT IGNORE INTO focuslock_doni (da, a, tipo, giorno, createdAt) VALUES (${device}, ${a}, ${tipo}, UTC_DATE(), NOW())`);
+      res.json({ ok: true, gia: false });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "dono non salvato" });
+    }
+  });
+  /* Chi l'ha ricevuto lo apre: una volta sola (gia' = era gia' stato aperto, anche da un altro telefono). */
+  app.post("/api/focuslock/social/dono/apri", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), id = Number(b.id || 0);
+    if (!device || !(id > 0)) { res.status(400).json({ error: "dono non valido" }); return; }
+    try {
+      await ensureArena();
+      const d = await rows(sql`SELECT id, tipo, presoAt FROM focuslock_doni WHERE id = ${id} AND a = ${device} LIMIT 1`);
+      if (!d[0]) { res.status(404).json({ error: "dono non trovato" }); return; }
+      if (d[0].presoAt) { res.json({ ok: true, gia: true, tipo: String(d[0].tipo) }); return; }
+      await rows(sql`UPDATE focuslock_doni SET presoAt = NOW() WHERE id = ${id} AND a = ${device} AND presoAt IS NULL`);
+      res.json({ ok: true, gia: false, tipo: String(d[0].tipo) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "dono non aperto" });
+    }
+  });
+
+  /* ---- LA SERIE DI GRUPPO (app 0.9.343), come Duolingo: si invita, l'amico accetta o rifiuta, fino a cinque per persona ---- */
+  const SG_MAX = 5;
+  async function sgDiMio(device: string) {
+    return rows(sql`SELECT g.id, g.da, g.a, g.stato, g.createdAt, g.attivaAt, p.name, p.nick, p.device AS altro FROM focuslock_serie_gruppo g
+      JOIN focuslock_players p ON p.device = (CASE WHEN g.da = ${device} THEN g.a ELSE g.da END)
+      WHERE (g.da = ${device} OR g.a = ${device}) AND g.stato IN ('invito', 'attiva') ORDER BY g.id ASC LIMIT 20`);
+  }
+  app.get("/api/focuslock/social/serie-gruppo", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const l = await sgDiMio(device);
+      const attive: any[] = [], inviate: any[] = [], ricevute: any[] = [];
+      for (const r of l) {
+        const x = { id: Number(r.id), device: String(r.altro), nome: nomeDi(r), at: r.attivaAt || r.createdAt };
+        if (String(r.stato) === "attiva") attive.push(x);
+        else if (String(r.da) === device) inviate.push(x);
+        else ricevute.push(x);
+      }
+      res.json({ attive, inviate, ricevute });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "serie di gruppo non disponibile" });
+    }
+  });
+  app.post("/api/focuslock/social/serie-gruppo/invita", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64);
+    if (!device || !a || device === a) { res.status(400).json({ error: "invito non valido" }); return; }
+    try {
+      await ensureArena();
+      /* app 0.9.367: "Aggiungi amici dava errore 403 non siete amici". Bastava che l'amicizia esistesse in una direzione sola
+         (chi segue e non e' seguito) perche' l'invito venisse rifiutato. La serie parte comunque solo quando l'altro accetta:
+         basta un legame in una delle due direzioni */
+      if (!(await sonoAmici(device, a)) && !(await sonoAmici(a, device))) { res.status(403).json({ error: "Non risulta più fra i tuoi amici: aggiungilo di nuovo con il suo codice" }); return; }
+      const mie = await sgDiMio(device);
+      const gia = mie.filter((r) => String(r.altro) === a)[0];
+      /* se l'amico aveva gia' invitato me, invitarlo vale come accettare */
+      if (gia && String(gia.stato) === "invito" && String(gia.da) === a) {
+        await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'attiva', attivaAt = NOW() WHERE id = ${Number(gia.id)}`);
+        res.json({ ok: true, gia: false, stato: "attiva" }); return;
+      }
+      if (gia) { res.json({ ok: true, gia: true, stato: String(gia.stato) }); return; }
+      if (mie.length >= SG_MAX) { res.status(409).json({ error: "Hai già cinque serie di gruppo" }); return; }
+      await rows(sql`INSERT INTO focuslock_serie_gruppo (da, a, stato, createdAt) VALUES (${device}, ${a}, 'invito', NOW())`);
+      res.json({ ok: true, gia: false, stato: "invito" });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "invito non mandato" });
+    }
+  });
+  app.post("/api/focuslock/social/serie-gruppo/rispondi", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), id = Number(b.id || 0), si = !!b.si;
+    if (!device || !(id > 0)) { res.status(400).json({ error: "risposta non valida" }); return; }
+    try {
+      await ensureArena();
+      const r = await rows(sql`SELECT id, da FROM focuslock_serie_gruppo WHERE id = ${id} AND a = ${device} AND stato = 'invito' LIMIT 1`);
+      if (!r[0]) { res.status(404).json({ error: "invito non trovato" }); return; }
+      if (si) {
+        const mie = await sgDiMio(device);
+        if (mie.filter((x) => String(x.stato) === "attiva").length >= SG_MAX) { res.status(409).json({ error: "Hai già cinque serie di gruppo" }); return; }
+        await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'attiva', attivaAt = NOW() WHERE id = ${id}`);
+      } else {
+        await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'rifiutata', fineAt = NOW() WHERE id = ${id}`);
+      }
+      res.json({ ok: true, stato: si ? "attiva" : "rifiutata" });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "risposta non salvata" });
+    }
+  });
+  app.post("/api/focuslock/social/serie-gruppo/termina", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64);
+    if (!device || !a) { res.status(400).json({ error: "richiesta non valida" }); return; }
+    try {
+      await ensureArena();
+      await rows(sql`UPDATE focuslock_serie_gruppo SET stato = 'finita', fineAt = NOW()
+        WHERE stato IN ('invito', 'attiva') AND ((da = ${device} AND a = ${a}) OR (da = ${a} AND a = ${device}))`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "serie non terminata" });
+    }
+  });
+
+  /* ---- LA SERIE PERFETTA (app 0.9.344) ---- */
+  const SP_PREMIO = 3000, SP_MINIMO = 50;
+  app.post("/api/focuslock/social/serie-perfetta", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const giorni = Math.max(0, Math.min(7, Math.floor(Number(b.giorni || 0))));
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const c = await rows(sql`SELECT 1 AS k FROM focuslock_players WHERE device = ${device} LIMIT 1`);
+      if (!c.length) { res.status(404).json({ error: "giocatore non trovato" }); return; }
+      if (giorni >= 3) {
+        await rows(sql`INSERT INTO focuslock_serie_perfetta (device, settimana, giorni, updatedAt) VALUES (${device}, DATE_FORMAT(UTC_DATE(), '%x-W%v'), ${giorni}, NOW())
+          ON DUPLICATE KEY UPDATE giorni = GREATEST(giorni, VALUES(giorni)), updatedAt = NOW()`);
+      }
+      const n = await rows(sql`SELECT SUM(giorni >= 3) AS inGara, SUM(giorni >= 7) AS completati FROM focuslock_serie_perfetta WHERE settimana = DATE_FORMAT(UTC_DATE(), '%x-W%v')`);
+      res.json({ ok: true, premio: SP_PREMIO, inGara: Number(n[0]?.inGara || 0), completati: Number(n[0]?.completati || 0) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "serie perfetta non salvata" });
+    }
+  });
+  /* Il lunedi' (o quando riapre l'app): la quota della settimana scorsa, una volta sola. */
+  app.post("/api/focuslock/social/serie-perfetta/premio", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const r = await rows(sql`SELECT settimana, pagatoAt FROM focuslock_serie_perfetta
+        WHERE device = ${device} AND giorni >= 7 AND settimana = DATE_FORMAT(UTC_DATE() - INTERVAL 7 DAY, '%x-W%v') LIMIT 1`);
+      if (!r[0] || r[0].pagatoAt) { res.json({ ok: true, quota: 0 }); return; }
+      const n = await rows(sql`SELECT COUNT(*) AS n FROM focuslock_serie_perfetta WHERE giorni >= 7 AND settimana = ${String(r[0].settimana)}`);
+      const quanti = Math.max(1, Number(n[0]?.n || 1));
+      const quota = Math.max(SP_MINIMO, Math.floor(SP_PREMIO / quanti));
+      const fatto: any = await rows(sql`UPDATE focuslock_serie_perfetta SET pagatoAt = NOW(), quota = ${quota}
+        WHERE device = ${device} AND settimana = ${String(r[0].settimana)} AND pagatoAt IS NULL`);
+      res.json({ ok: true, quota, quanti });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "premio non disponibile" });
+    }
+  });
+
+  /* LE NOVITA' PER LE NOTIFICHE (app 0.9.305). Il telefono non ha notifiche push: il servizio di
+     DreamMap (AmiciNovita.java) chiede qui ogni quarto d'ora cosa e' arrivato dopo l'ultimo id visto,
+     separato per reazioni (r) e doni (d). Con r o d negativo (la prima volta) non torna niente di
+     vecchio: solo i due id da cui ripartire, cosi' il primo giro non suona per una settimana di reazioni. */
+  app.get("/api/focuslock/social/novita", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    const r = Math.floor(Number(req.query.r ?? -1)), d = Math.floor(Number(req.query.d ?? -1));
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const maxR = Number((await rows(sql`SELECT COALESCE(MAX(id), 0) AS m FROM focuslock_reazioni WHERE a = ${device}`))[0]?.m || 0);
+      const maxD = Number((await rows(sql`SELECT COALESCE(MAX(id), 0) AS m FROM focuslock_doni WHERE a = ${device}`))[0]?.m || 0);
+      const eventi: any[] = [];
+      if (Number.isFinite(r) && r >= 0) {
+        const l = await rows(sql`SELECT x.id, x.tipo, x.da, x.createdAt, p.name, p.nick FROM focuslock_reazioni x JOIN focuslock_players p ON p.device = x.da
+          WHERE x.a = ${device} AND x.id > ${r} AND x.createdAt > (NOW() - INTERVAL 2 DAY) ORDER BY x.id ASC LIMIT 20`);
+        for (const x of l) eventi.push({ k: "reazione", id: Number(x.id), tipo: String(x.tipo), da: nomeDi(x), daDevice: String(x.da), at: x.createdAt });
+      }
+      if (Number.isFinite(d) && d >= 0) {
+        const l = await rows(sql`SELECT x.id, x.tipo, x.da, x.createdAt, p.name, p.nick FROM focuslock_doni x JOIN focuslock_players p ON p.device = x.da
+          WHERE x.a = ${device} AND x.id > ${d} AND x.presoAt IS NULL AND x.createdAt > (NOW() - INTERVAL 2 DAY) ORDER BY x.id ASC LIMIT 20`);
+        for (const x of l) eventi.push({ k: "dono", id: Number(x.id), tipo: String(x.tipo), da: nomeDi(x), daDevice: String(x.da), at: x.createdAt });
+      }
+      res.json({ eventi, r: maxR, d: maxD });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "novita non disponibili" });
+    }
+  });
+
+  /* ---- Focus insieme ---- */
+  app.post("/api/focuslock/social/insieme", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const a = String(b.a || "").slice(0, 64);
+    const minuti = Math.max(10, Math.min(180, Math.round(Number(b.minuti) || 25)));
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      if (a && !(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      /* un invito aperto alla volta: quello vecchio si chiude */
+      await rows(sql`DELETE FROM focuslock_insieme WHERE da = ${device} AND acceptedAt IS NULL`);
+      let c = "";
+      for (let i = 0; i < 5 && !c; i++) {
+        const cand = codice();
+        const clash = await rows(sql`SELECT id FROM focuslock_insieme WHERE codice = ${cand}`);
+        if (!clash.length) c = cand;
+      }
+      await rows(sql`INSERT INTO focuslock_insieme (codice, da, a, minuti, createdAt) VALUES (${c}, ${device}, ${a || null}, ${minuti}, NOW())`);
+      const r = await rows(sql`SELECT id, createdAt FROM focuslock_insieme WHERE codice = ${c} LIMIT 1`);
+      res.json({ ok: true, id: Number(r[0]?.id || 0), codice: c, minuti, scadeAt: new Date(Date.now() + INSIEME_SCADENZA_MIN * 60000).toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "invito non creato" });
+    }
+  });
+  app.post("/api/focuslock/social/insieme/accetta", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const c = String(b.codice || "").trim().toUpperCase().slice(0, 8);
+    const id = Number(b.id) || 0;
+    if (!device || (!c && !id)) { res.status(400).json({ error: "codice mancante" }); return; }
+    try {
+      await ensureArena();
+      const inv = id
+        ? await rows(sql`SELECT * FROM focuslock_insieme WHERE id = ${id} LIMIT 1`)
+        : await rows(sql`SELECT * FROM focuslock_insieme WHERE codice = ${c} LIMIT 1`);
+      const i = inv[0];
+      if (!i) { res.status(404).json({ error: "Nessun invito con questo codice." }); return; }
+      if (String(i.da) === device) { res.status(400).json({ error: "È il tuo invito." }); return; }
+      if (i.acceptedAt) { res.status(409).json({ error: "Qualcuno l'ha già accettato." }); return; }
+      if (Date.now() - new Date(i.createdAt).getTime() > INSIEME_SCADENZA_MIN * 60000) { res.status(410).json({ error: "L'invito è scaduto." }); return; }
+      if (i.a && String(i.a) !== device) { res.status(403).json({ error: "Questo invito è per un altro amico." }); return; }
+      const endAt = new Date(Date.now() + 20000 + Number(i.minuti) * 60000);
+      await rows(sql`UPDATE focuslock_insieme SET a = ${device}, acceptedAt = NOW(), endAt = ${endAt} WHERE id = ${i.id}`);
+      const da = await rows(sql`SELECT name, nick FROM focuslock_players WHERE device = ${String(i.da)}`);
+      res.json({ ok: true, id: Number(i.id), minuti: Number(i.minuti), endAt: endAt.toISOString(), con: nomeDi(da[0]), conDevice: String(i.da) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "invito non accettato" });
+    }
+  });
+  app.get("/api/focuslock/social/insieme", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const lim = new Date(Date.now() - INSIEME_SCADENZA_MIN * 60000);
+      const miei = await rows(sql`SELECT i.*, p.name AS aName, p.nick AS aNick FROM focuslock_insieme i LEFT JOIN focuslock_players p ON p.device = i.a WHERE i.da = ${device} ORDER BY i.id DESC LIMIT 5`);
+      const ricevuti = await rows(sql`SELECT i.*, p.name AS daName, p.nick AS daNick FROM focuslock_insieme i JOIN focuslock_players p ON p.device = i.da
+        WHERE i.a = ${device} AND (i.acceptedAt IS NOT NULL OR i.createdAt > ${lim}) ORDER BY i.id DESC LIMIT 5`);
+      const forma = (i: any, ruolo: "da" | "a") => {
+        const scaduto = !i.acceptedAt && Date.now() - new Date(i.createdAt).getTime() > INSIEME_SCADENZA_MIN * 60000;
+        const p = (x: any) => { try { return x ? JSON.parse(String(x)) : null; } catch { return null; } };
+        return { id: Number(i.id), codice: String(i.codice), minuti: Number(i.minuti), ruolo,
+          stato: i.acceptedAt ? (new Date(i.endAt).getTime() < Date.now() ? "finito" : "in corso") : (scaduto ? "scaduto" : "attesa"),
+          con: ruolo === "da" ? (i.a ? nomeDi({ name: i.aName, nick: i.aNick }) : "") : nomeDi({ name: i.daName, nick: i.daNick }),
+          conDevice: ruolo === "da" ? (i.a ? String(i.a) : "") : String(i.da),
+          createdAt: i.createdAt, endAt: i.endAt, scadeAt: new Date(new Date(i.createdAt).getTime() + INSIEME_SCADENZA_MIN * 60000).toISOString(),
+          mio: p(ruolo === "da" ? i.esitoDa : i.esitoA), suo: p(ruolo === "da" ? i.esitoA : i.esitoDa) };
+      };
+      res.json({ miei: miei.map((i) => forma(i, "da")), ricevuti: ricevuti.map((i) => forma(i, "a")) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "inviti non disponibili" });
+    }
+  });
+  app.post("/api/focuslock/social/insieme/esito", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const id = Number(b.id) || 0;
+    if (!device || !id) { res.status(400).json({ error: "dati mancanti" }); return; }
+    try {
+      await ensureArena();
+      const esito = JSON.stringify({ ok: !!b.ok, minuti: Math.max(0, Math.min(600, Math.round(Number(b.minuti) || 0))), at: new Date().toISOString() });
+      await rows(sql`UPDATE focuslock_insieme SET esitoDa = IF(da = ${device}, ${esito}, esitoDa), esitoA = IF(a = ${device}, ${esito}, esitoA) WHERE id = ${id} AND (da = ${device} OR a = ${device})`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "esito non salvato" });
+    }
+  });
+  app.post("/api/focuslock/social/insieme/annulla", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const id = Number(b.id) || 0;
+    try {
+      await ensureArena();
+      await rows(sql`DELETE FROM focuslock_insieme WHERE id = ${id} AND da = ${device} AND acceptedAt IS NULL`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "non annullato" });
+    }
+  });
+
+  /* ---- la lega ---- */
+  app.post("/api/focuslock/social/lega/iscrivi", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64);
+    const nick = String(b.nick || "").trim().slice(0, 24);
+    const categoria = CATEGORIE.indexOf(String(b.categoria || "")) >= 0 ? String(b.categoria) : "";
+    const optIn = b.optIn === undefined ? true : !!b.optIn;
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      await rows(sql`UPDATE focuslock_players SET legaOptIn = ${optIn ? 1 : 0}, nick = ${nick}, categoria = ${categoria} WHERE device = ${device}`);
+      res.json({ ok: true, optIn });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "iscrizione non riuscita" });
+    }
+  });
+  app.get("/api/focuslock/social/lega", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      await chiudiSettimane();
+      const me = (await rows(sql`SELECT device, name, nick, goal, tier, legaOptIn, categoria, torneoFase, torneiVinti FROM focuslock_players WHERE device = ${device}`))[0];
+      if (!me) { res.json({ optIn: false, giocatore: false }); return; }
+      const settimana = settimanaCorrente();
+      /* il risultato della settimana scorsa, finche' non e' stato visto */
+      const prec = await rows(sql`SELECT m.settimana, m.esito, m.posizione, m.punti, m.tier, m.visto, (SELECT COUNT(*) FROM focuslock_lega_membri x WHERE x.legaId = m.legaId) AS n
+        FROM focuslock_lega_membri m WHERE m.device = ${device} AND m.settimana < ${settimana} AND m.esito <> '' ORDER BY m.settimana DESC LIMIT 1`);
+      const risultato = prec[0] && !Number(prec[0].visto) ? { settimana: String(prec[0].settimana), esito: String(prec[0].esito), posizione: Number(prec[0].posizione), punti: Number(prec[0].punti), tierPrima: String(prec[0].tier), tierOra: String(me.tier || "bronzo"), n: Number(prec[0].n) } : null;
+      if (!Number(me.legaOptIn)) { res.json({ optIn: true && false, giocatore: true, tier: String(me.tier || "bronzo"), fine: fineSettimana(), risultato }); return; }
+      const legaId = await assegnaLega(device, String(me.goal || ""), String(me.tier || "bronzo"), String(me.nick || ""), settimana, String(me.categoria || ""), String(me.torneoFase || ""));
+      const lega = (await rows(sql`SELECT id, goal, tier FROM focuslock_leghe WHERE id = ${legaId}`))[0];
+      const membri = await rows(sql`SELECT m.device, m.nick, m.punti, p.name, p.updatedAt, p.metriche FROM focuslock_lega_membri m JOIN focuslock_players p ON p.device = m.device WHERE m.legaId = ${legaId} ORDER BY m.punti DESC, m.device ASC`);
+      const out = membri.map((m, i) => ({ device: String(m.device), nome: nomeDi(m), punti: Number(m.punti || 0), posizione: i + 1, me: String(m.device) === device,
+        /* app 0.9.300: per ordinare la lega anche per tappe, Full Focus, schermo, severa, serie */
+        metriche: metricheLeggi(m.metriche) }));
+      const mio = out.filter((x) => x.me)[0] || null;
+      res.json({ optIn: true, giocatore: true, settimana, fine: fineSettimana(), tier: String(lega?.tier || me.tier || "bronzo"), goal: String(lega?.goal || "*"),
+        categoria: String(me.categoria || ""), stato: out.length < LEGA_MIN ? "formazione" : "ok", minimo: LEGA_MIN, membri: out, mio, risultato,
+        torneo: { fase: String(lega?.goal || "").indexOf("torneo:") === 0 ? String(lega?.goal).slice(7) : "", vinti: Number(me.torneiVinti || 0) } });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "lega non disponibile" });
+    }
+  });
+  app.post("/api/focuslock/social/voto-chat", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), voto = Number(b.voto) > 0 ? 1 : -1, modo = String(b.modo || "").slice(0, 16), testo = String(b.testo || "").slice(0, 1500);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      await rows(sql`INSERT INTO focuslock_voti_chat (device, voto, modo, testo, createdAt) VALUES (${device}, ${voto}, ${modo}, ${testo}, NOW())`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "voto non salvato" });
+    }
+  });
+  /* ---- I DUELLI (app 0.9.321) ---- */
+  const roundValidi = (x: any): string | null => {
+    if (!Array.isArray(x) || x.length !== 3) return null;
+    const l = x.map((r: any) => ({ ok: !!(r && r.ok), ms: Math.max(0, Math.min(120000, Math.round(Number(r && r.ms) || 0))) }));
+    return JSON.stringify(l);
+  };
+  const duelloFuori = (d: any, device: string, nomi: Record<string, string>) => {
+    const mio = String(d.da) === device, altro = mio ? (d.a ? String(d.a) : "") : String(d.da);
+    const leggi = (s: any) => { try { return s ? JSON.parse(String(s)) : null; } catch (_) { return null; } };
+    return { id: Number(d.id), seed: Number(d.seed), mio, altro, nome: altro ? (nomi[altro] || "Giocatore") : "", stato: String(d.stato),
+      mieiRound: leggi(mio ? d.roundDa : d.roundA), suoiRound: leggi(mio ? d.roundA : d.roundDa), at: d.doneAt || d.createdAt };
+  };
+  /* un duello aperto da un altro giocatore, se c'e': si gioca sulle sue domande */
+  app.get("/api/focuslock/social/duello/trova", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const l = await rows(sql`SELECT d.id, d.da, d.seed, p.name, p.nick FROM focuslock_duelli d JOIN focuslock_players p ON p.device = d.da
+        WHERE d.a IS NULL AND d.stato = 'aperto' AND d.da <> ${device} AND d.createdAt > (NOW() - INTERVAL 14 DAY) ORDER BY d.createdAt ASC LIMIT 1`);
+      res.json({ ok: true, duello: l[0] ? { id: Number(l[0].id), seed: Number(l[0].seed), nome: nomeDi(l[0]), altro: String(l[0].da) } : null });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "ricerca non riuscita" });
+    }
+  });
+  /* chi sfida ha gia' giocato: a = l'amico, o vuoto per un avversario qualsiasi */
+  app.post("/api/focuslock/social/duello", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), a = String(b.a || "").slice(0, 64), seed = Math.round(Number(b.seed) || 0), r = roundValidi(b.round);
+    if (!device || !r || device === a) { res.status(400).json({ error: "duello non valido" }); return; }
+    try {
+      await ensureArena();
+      if (a && !(await sonoAmici(device, a))) { res.status(403).json({ error: "non siete amici" }); return; }
+      await rows(sql`INSERT INTO focuslock_duelli (da, a, seed, roundDa, stato, createdAt) VALUES (${device}, ${a || null}, ${seed}, ${r}, 'aperto', NOW())`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "duello non salvato" });
+    }
+  });
+  app.post("/api/focuslock/social/duello/rispondi", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), id = Math.round(Number(b.id) || 0), r = roundValidi(b.round);
+    if (!device || !(id > 0) || !r) { res.status(400).json({ error: "risposta non valida" }); return; }
+    try {
+      await ensureArena();
+      const d = (await rows(sql`SELECT * FROM focuslock_duelli WHERE id = ${id}`))[0];
+      if (!d || String(d.stato) !== "aperto" || String(d.da) === device || (d.a && String(d.a) !== device)) { res.status(409).json({ error: "duello non disponibile" }); return; }
+      await rows(sql`UPDATE focuslock_duelli SET a = ${device}, roundA = ${r}, stato = 'fatto', doneAt = NOW() WHERE id = ${id} AND stato = 'aperto'`);
+      res.json({ ok: true, roundLui: (() => { try { return JSON.parse(String(d.roundDa)); } catch (_) { return null; } })() });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "risposta non salvata" });
+    }
+  });
+  /* i miei duelli: le sfide da giocare e il registro */
+  app.get("/api/focuslock/social/duello", async (req: Request, res: Response) => {
+    const device = String(req.query.device || "").slice(0, 64);
+    if (!device) { res.status(400).json({ error: "device mancante" }); return; }
+    try {
+      await ensureArena();
+      const l = await rows(sql`SELECT * FROM focuslock_duelli WHERE da = ${device} OR a = ${device} ORDER BY id DESC LIMIT 40`);
+      const nomi: Record<string, string> = {};
+      const altri = Array.from(new Set(l.map((d: any) => (String(d.da) === device ? d.a : d.da)).filter(Boolean).map(String)));
+      for (const x of altri) { const p = (await rows(sql`SELECT name, nick FROM focuslock_players WHERE device = ${x}`))[0]; nomi[x] = nomeDi(p); }
+      res.json({ ok: true, duelli: l.map((d: any) => duelloFuori(d, device, nomi)) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "duelli non disponibili" });
+    }
+  });
+  app.post("/api/focuslock/social/lega/visto", async (req: Request, res: Response) => {
+    const b = req.body || {};
+    const device = String(b.device || "").slice(0, 64), settimana = String(b.settimana || "").slice(0, 10);
+    try {
+      await ensureArena();
+      await rows(sql`UPDATE focuslock_lega_membri SET visto = 1 WHERE device = ${device} AND settimana = ${settimana}`);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "non segnato" });
+    }
+  });
+
+  /* Quanti stanno facendo una sfida adesso (aggiornato dalla sync di ogni telefono). */
+  app.get("/api/focuslock/social/sfide", async (req: Request, res: Response) => {
+    const ids = String(req.query.ids || "").split(",").map((s) => s.trim().slice(0, 40)).filter(Boolean).slice(0, 20);
+    try {
+      await ensureArena();
+      const out: Record<string, number> = {};
+      for (const id of ids) {
+        const r = await rows(sql`SELECT COUNT(*) AS k FROM focuslock_sfide WHERE sfidaId = ${id} AND stato = 'attiva' AND updatedAt > (NOW() - INTERVAL 40 DAY)`);
+        out[id] = Number(r[0]?.k || 0);
+      }
+      res.json({ partecipanti: out });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "conteggio non disponibile" });
+    }
+  });
+}

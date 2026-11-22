@@ -1,0 +1,13 @@
+{
+  "_nota": "I messaggi del bot Telegram di DreamMap: parla il Genio, che fa da arbitro al patto. {chi} = chi si impegna, {data} = il giorno, {euro} = la cifra. Si traducono da soli in ogni lingua (dreammapTraduzioni.ts).",
+  "mancato": "Sono il Genio di DreamMap. {chi} ha mancato il patto {data}: ti deve {euro}, da pagarti entro 48 ore. Se non arrivano, chiediglieli: è il patto che ha firmato con te.",
+  "mancatoParola": "Sono il Genio di DreamMap. {chi} ha mancato il patto {data}. Questa volta senza soldi, ma la parola l'aveva data a te.",
+  "scaduto": "Sono il Genio di DreamMap. Sono passate 48 ore e {chi} non ti ha ancora pagato {euro} per {data}. Per me ha mancato la parola: scatta la penitenza che aveva scelto. I soldi restano da darti: chiediglieli.",
+  "pagato": "Sono il Genio di DreamMap. {chi} dice di averti mandato {euro} per {data}. Controlla e conferma nell'app, oppure segna che non ti sono arrivati.",
+  "benvenuto": "Sono il Genio di DreamMap: faccio da arbitro ai patti fra amici. Per ricevere i miei avvisi apri il link dall'app, nella pagina del patto.",
+  "linkScaduto": "Questo link non vale più: aprine uno nuovo dall'app DreamMap.",
+  "collegato": "Fatto. Sono il Genio di DreamMap e faccio da arbitro al patto di {chi}. Ogni giorno guardo se mantiene la parola: quando sgarra te lo scrivo qui, con quanto ti deve.",
+  "amico": "Il tuo amico",
+  "descrizione": "Sono il Genio di DreamMap: faccio da arbitro al patto con un amico. Ogni giorno guardo se mantiene la parola e, quando sgarra, ti scrivo qui quanto ti deve.",
+  "breve": "Il Genio di DreamMap, l'arbitro dei patti fra amici."
+}

@@ -1,0 +1,619 @@
+import type { Express, Request, Response } from "express";
+import { sql } from "drizzle-orm";
+import Anthropic from "@anthropic-ai/sdk";
+import { getDb } from "../db";
+import { whoIs, isIdentity, rows } from "./dreammapRoutes";
+
+/* DreamMap 0.9.301 — LA REVISIONE E IL RIENTRA IN ROTTA, IN CHAT CON IL TUO AGENTE
+ *
+ * Andrea: "nella revisione della sera e nel ricalcolo della rotta non c'e' nessuna conversazione con un LLM. Il Genio
+ * parla a copione con le stesse opzioni: non contestualizza, non dice 'ho capito'". Con Premium la revisione (della
+ * sera, della settimana, del mese, del trimestre, dell'anno) e il Rientra in rotta diventano una chat con il proprio
+ * agente: a ogni messaggio il modello legge la conversazione e i dati veri della giornata (tempo per fascia oraria, app,
+ * sessioni di Full Focus, la priorita'), risponde riprendendo quello che la persona ha detto e fa UNA domanda. Le
+ * risposte pronte di oggi restano come pillole sopra al campo: le sceglie l'app per la fase che il modello indica.
+ * Quando la persona dice cosa l'ha portata fuori strada (il grilletto), il modello propone un piano su misura (un
+ * blocco, un limite, o una prevenzione): l'app lo applica SOLO con il si' della persona.
+ *
+ * Il modello e' quello veloce ed economico gia' acceso su Railway (Gemini Flash-Lite con DREAMMAP_GEMINI_KEY), con
+ * Claude Haiku come riserva (AGENT_LLM_KEY). Niente crediti: un tetto al giorno per persona. Il testo non si salva.
+ * Senza chiavi la rotta risponde 503 e l'app torna al Genio a opzioni.
+ *
+ * I DATI CHE INSEGNANO AL GENIO (alla Akinator). Con il consenso esplicito della persona (l'interruttore "Aiuta il
+ * Genio a imparare", spento di serie), l'app manda tre chiavi prese da elenchi fissi: il tipo di sogno, la causa
+ * dell'uscita di rotta, la contromisura scelta, e la sera dopo se ha aiutato. Niente account, niente id del telefono,
+ * niente testo libero: solo conteggi. Le classifiche escono solo da conteggi di almeno IMPARA_MIN scelte, cosi' nessuna
+ * riga racconta una persona sola. Il Genio a opzioni (gratis) li usa per mettere in cima le risposte piu' probabili per
+ * quel tipo di sogno; l'agente li riceve come contesto. */
+
+const TIPI = ["sera", "settimana", "mese", "trimestre", "anno", "rientro"] as const;
+type Tipo = typeof TIPI[number];
+const SOGNI = new Set(["studio", "corpo", "lavoro", "arte", "carriera", "presenza", "altro"]);
+const CONTESTI = new Set(["sera", "settimana", "mese", "trimestre", "anno", "rientro"]);
+/* le cause: le chiavi delle risposte pronte di revisione.js, revisioni-periodo.js e rientro-genio.js */
+const TRIGGER = new Set(["app", "notifiche", "persone", "testa", "energia", "niente", "imprevisto", "stanco", "idee", "confuso", "paura",
+  "difficile", "noia", "notifica", "idea", "grande", "come", "urgente", "voglia", "impegni", "altro", "automatico", "pausa", "evito",
+  "messaggio", "scroll", "tempo", "fuga", "colpa", "tentazione"]);
+/* le contromisure: le chiavi dei rimedi di quelle stesse schermate, piu' quelle dei piani dell'agente */
+const AIUTI = new Set(["blocca", "blocco", "limite", "stanza", "elimina", "silenzio", "automatizza", "finestre", "avviso", "delega", "caveau",
+  "scrivo", "respiro", "mattina", "sonno", "corto", "uguale", "alza", "notifiche", "cinque", "pezzi", "tutorial", "energia", "focus",
+  "ore", "scadenza", "riparto", "niente", "altro"]);
+const IMPARA_MIN = Math.max(2, Number(process.env.DREAMMAP_IMPARA_MIN || 3));
+
+let pronto: Promise<void> | null = null;
+function tabelle(): Promise<void> {
+  if (!pronto) {
+    pronto = (async () => {
+      const db = await getDb();
+      if (!db) throw new Error("database unavailable");
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS dreammap_genio_impara (
+        sogno VARCHAR(16) NOT NULL,
+        contesto VARCHAR(12) NOT NULL,
+        causa VARCHAR(16) NOT NULL,
+        aiuto VARCHAR(16) NOT NULL DEFAULT '',
+        scelte INT NOT NULL DEFAULT 0,
+        aiutato INT NOT NULL DEFAULT 0,
+        updatedAt DATETIME NULL,
+        PRIMARY KEY (sogno, contesto, causa, aiuto)
+      )`);
+    })().catch((e) => { pronto = null; throw e; });
+  }
+  return pronto;
+}
+
+function cors(res: Response) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+}
+function ipDi(req: Request): string {
+  return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim().slice(0, 64);
+}
+const finestre = new Map<string, number[]>();
+function troppe(chiave: string, max: number, ms: number): boolean {
+  const ora = Date.now();
+  const v = (finestre.get(chiave) || []).filter((t) => ora - t < ms);
+  if (v.length >= max) { finestre.set(chiave, v); return true; }
+  v.push(ora); finestre.set(chiave, v);
+  if (finestre.size > 20000) finestre.clear();
+  return false;
+}
+function pulisci(t: unknown, max: number): string { return String(t ?? "").replace(/\u0000/g, "").trim().slice(0, max); }
+/** Il copy che il modello sbaglia non arriva a schermo: virgolette normali, niente trattini lunghi. */
+function copy(t: unknown, max: number): string {
+  const s = String(t ?? "").replace(/[«»“”]/g, "\"").replace(/\s*[—–]\s*/g, ", ").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return cifre(accenti(s)).slice(0, max);
+}
+/* 0.9.303, Andrea: "novantaquattro minuti", "e'" al posto di "è". Il modello imitava gli apostrofi del prompt: il prompt
+ * adesso ha gli accenti veri, e quello che scappa lo sistema questo filtro prima dello schermo. */
+const ACCENTO: Record<string, string> = { a: "à", e: "è", i: "ì", o: "ò", u: "ù", A: "À", E: "È", I: "Ì", O: "Ò", U: "Ù" };
+function accenti(s: string): string {
+  /* gli apici singoli usati come virgolette ('segno zodiacale') diventano virgolette normali */
+  s = s.replace(/(^|[\s(:])'([^'\n]{2,80}?)'(?=[\s.,;:!?)]|$)/g, "$1\"$2\"");
+  /* la vocale con l'apostrofo in fondo alla parola e' una vocale accentata (tranne "po'"); "perche'" vuole l'acuto */
+  return s.replace(/\b([A-Za-zÀ-ÿ]*?)([aeiouAEIOU])'(?=[\s.,;:!?)"]|$)/g, (m, testa: string, v: string) => {
+    if (/^p$/i.test(testa) && /o/i.test(v)) return m;
+    if (/ch$/i.test(testa) && /e/i.test(v)) return testa + (v === "E" ? "É" : "é");
+    return testa + (ACCENTO[v] || v);
+  });
+}
+const UNITA: Record<string, number> = { due: 2, tre: 3, "tré": 3, quattro: 4, cinque: 5, sei: 6, sette: 7, otto: 8, nove: 9, uno: 1 };
+const DIECI: Record<string, number> = { dieci: 10, undici: 11, dodici: 12, tredici: 13, quattordici: 14, quindici: 15, sedici: 16, diciassette: 17, diciotto: 18, diciannove: 19 };
+const DECINE: Record<string, number> = { venti: 20, trenta: 30, quaranta: 40, cinquanta: 50, sessanta: 60, settanta: 70, ottanta: 80, novanta: 90 };
+/** "novantaquattro" -> 94 (da 2 a 99); null se non e' un numero scritto in lettere. */
+function numeroIt(w: string): number | null {
+  w = w.toLowerCase();
+  if (w in DIECI) return DIECI[w];
+  if (w in UNITA) return w === "uno" ? null : UNITA[w];
+  for (const d of Object.keys(DECINE)) {
+    const radice = d.slice(0, -1);
+    if (w === d) return DECINE[d];
+    if (!w.startsWith(radice)) continue;
+    let resto = w.slice(radice.length);
+    if (resto.startsWith(d.slice(-1))) resto = resto.slice(1);
+    if (resto in UNITA) return DECINE[d] + UNITA[resto];
+  }
+  return null;
+}
+/** I numeri davanti a minuti, ore, giorni... sempre in cifre: "94 minuti", "3 ore". */
+function cifre(s: string): string {
+  return s.replace(/\b([a-zà-ù]{3,16})\s+(minuti|ore|giorni|volte|settimane|mesi|anni|secondi)\b/gi, (m, w: string, u: string) => {
+    const n = numeroIt(w);
+    return n == null ? m : n + " " + u;
+  });
+}
+function jsonDa(t: string): any { const a = t.indexOf("{"), b = t.lastIndexOf("}"); if (a < 0 || b <= a) return null; try { return JSON.parse(t.slice(a, b + 1)); } catch { return null; } }
+let CLAUDE: Anthropic | null = null;
+function claude(): Anthropic { if (!CLAUDE) CLAUDE = new Anthropic({ apiKey: String(process.env.AGENT_LLM_KEY) }); return CLAUDE; }
+
+/* ---------------------------------------------------------------------------------------
+ * COSA COPRE OGNI CONVERSAZIONE. Le fasi sono le stesse del Genio a opzioni: cosi' l'app sa quali pillole mostrare.
+ * --------------------------------------------------------------------------------------- */
+const SCOPO: Record<Tipo, string> = {
+  /* 0.9.310: anche la sera, con il tuo agente personale, e' analisi e verdetto, non pianificazione */
+  sera: periodo("LA REVISIONE DELLA SERA", "oggi", false),
+  /* 0.9.310, Andrea: "domande scriptate senza filo logico". Le revisioni di periodo hanno uno scopo solo (capire se la
+   * persona e' sulla rotta o fuori, cosa l'ha avvicinata, cosa l'ha allontanata, cosa cambia, e ricalcolare solo con il
+   * suo si'), e ogni domanda segue la risposta di prima. Il primo messaggio (il recap e la prima domanda) lo scrive
+   * l'app, subito: il modello continua dalla prima risposta. */
+  settimana: periodo("LA REVISIONE DELLA SETTIMANA", "in questi sette giorni", false),
+  mese: periodo("LA REVISIONE DEL MESE", "nel mese (dati.quando dice quale, per esempio \"a ottobre\")", false),
+  trimestre: periodo("LA REVISIONE DEL TRIMESTRE", "in questi tre mesi", true),
+  anno: periodo("LA REVISIONE DELL'ANNO", "nell'anno (dati.quando dice quale)", true),
+  rientro: [
+    "RIENTRA IN ROTTA: la data in cui arriva al sogno si è spostata, e lo aiuti a rientrare come uno psicologo pratico.",
+    "LO SPOSTAMENTO. Quanto si è spostato l'arrivo e perché sta in dati.spostamento: \"quanto\" (già scritto per intero, per esempio \"13 ore\" o \"1 giorno e 4 ore\": ripetilo uguale, mai arrotondarlo a un giorno) e \"cause\" (le cause vere calcolate dal navigatore dell'app, ognuna con il suo spostamento). Attribuisci lo spostamento SOLO a quelle cause. Il tempo sulle app non ha spostato la data da solo: puoi dire dove è andato il tempo, mai che i minuti su un'app \"hanno fatto slittare\" l'arrivo. Se \"quanto\" è vuoto, la data non si è mossa: non parlare di slittamento.",
+    "Fasi:",
+    "prima: nel primo messaggio di' di quanto si è spostato l'arrivo e la sua causa vera, detta con i fatti di dati.lavoroVero quando ci sono (mai \"non hai lavorato\"), poi chiedi cosa è successo (un imprevisto, una tentazione, niente da segnalare).",
+    "grilletto: il grilletto lo DEDUCI TU dai dati, non lo chiedi. Se c'è dati.sgarro, leggi neiQuarantacinqueMinutiPrima e inizioDelloSgarro (cosa ha aperto e fatto, minuto per minuto, con \"cosa\" quando c'è: la ricerca, il sito, il video, la domanda all'AI) e racconta la sequenza in modo concreto, con gli orari e le app, per esempio: \"Alle 9:05 hai aperto Chrome e cercato \"segno zodiacale ariete\", poi sei rimasto su Google per 21 minuti, e da lì sei passato a Instagram.\" Di' qual è secondo te il grilletto (la prima cosa che ha aperto la porta) e chiedi SOLO di confermare, per esempio \"È andata così?\". Mai fargli ricostruire la giornata a memoria. Quando conferma, scrivi la chiave in \"trigger\". Se non c'è dati.sgarro, chiedi in italiano naturale: \"Cosa stavi facendo subito prima?\" oppure \"Cosa ti ha portato lì?\".",
+    "tenuto: se c'entra un'app, cosa l'ha tenuto lì (una sola domanda, breve).",
+    "piano: proponi una prevenzione CONCRETA legata a quel grilletto, con il \"piano\". Esempio: se lo sgarro è nelle prime ore del giorno (sgarro.nellePrimeOreDelGiorno, e dati.inizioGiornata dice a che ora ha preso il telefono e cosa ha aperto nella prima ora), proponi un \"blocco\" di quelle app dal primo uso fino a 2 o 3 ore dopo, così la prima ora va alla cosa più importante (dati.cosaFare). Il blocco si crea solo se lui dice sì: è l'app a chiederglielo.",
+    "patto: scrivete insieme il patto \"Se succede..., allora io...\"; fine.",
+    "Se non c'è niente da segnalare e i dati lo confermano, chiudi subito con un incoraggiamento.",
+  ].join("\n"),
+};
+
+/* 0.9.310, Andrea (seconda richiesta): "con Premium la revisione non deve chiedere cosa farai: e' l'agente personale
+ * che analizza e ricalcola". Prima l'analisi dei dati veri (la partita, il tempo per ora, la Timeline con cosa faceva
+ * dentro le app), poi il resoconto, le domande solo sul perche', il verdetto e, se e' fuori rotta, il percorso nuovo
+ * proposto dall'agente: lo applica l'app solo con il si' della persona. */
+function periodo(nome: string, quando: string, sogno: boolean): string {
+  return [
+    nome + ". Sei tu che analizzi e ricalcoli: la persona NON deve pianificare. Non chiederle MAI \"cosa farai\", \"cosa cambi\", \"qual è la tua mossa\", \"cosa raddoppi\".",
+    "L'app le ha già mostrato i numeri del periodo (dati.recapDelPeriodo): non ripeterli.",
+    "Le fasi:",
+    "resoconto (il primo messaggio, quando l'evento è \"resoconto\"): analizza " + quando + " con i dati veri: dati.partita (i punti del nuovo te e del vecchio te: quando e perché ha segnato il vecchio te, per fascia oraria e per causa), dati.timeline (cosa faceva davvero dentro le app: le ricerche, i titoli dei video, i siti, le domande agli assistenti, con i minuti e le ore), dati.abitudini e dati.tempo (le fasce orarie più piene, le app). Scrivi in 3-5 frasi brevi dove sta vincendo e dove sta perdendo, concreto: orari, app e contenuti veri (esempio: \"Il vecchio te ha segnato 4 volte fra le 22 e le 23, sempre su YouTube: video di gaming.\"). Distingui il lavoro dalla distrazione: Chrome su un sito di un concorrente o una ricerca su come fare una cosa del sogno può essere lavoro. Se un dato manca, non inventarlo e non nominarlo.",
+    "perche: SOLO se serve a capire il perché di una perdita importante, fai UNA domanda mirata (esempio: \"Alle 22, cosa ti porta su YouTube: la stanchezza, la noia o l'abitudine?\"), con 3 o 4 \"pillole\" come risposte possibili. Al massimo 2 domande in tutta la revisione. Se una cosa nei dati non è chiara (lavoro o distrazione?), chiedila così.",
+    (sogno ? "Se dati.sogno non torna più con quello che fa, chiedi se il sogno è ancora quello.\n" : "") + "verdetto: scrivi \"verdetto\": \"in_rotta\" oppure \"fuori_rotta\". In rotta (nessuna perdita grave e dati.arrivo non peggiora di molto): dillo con le prove, chiudi con fine: true e il riepilogo, niente ricalcolo. Fuori rotta: proponi TU il percorso nuovo in \"percorso\" (gli orizzonti che cambiano: oggi, settimana e mese almeno; un approccio diverso dove serve, i blocchi nelle fasce in cui perde) e, se aiuta, un \"piano\" di blocco per quella fascia. Nel testo spiega in 2-3 frasi cosa cambia rispetto alla roadmap di adesso (dati.roadmap) e chiedi se vuole applicarlo: lo applica l'app solo con il suo sì, con il pulsante \"Applica il nuovo percorso\". Se dati.strada è \"Seguo il Genio\" il percorso lo decidi tu per intero; se è \"Pianifico io\" proponi solo le modifiche e tieni i suoi passi.",
+    "Se l'evento è \"percorso_rifiutato\": rispetta la scelta in una riga, senza insistere, e chiudi con fine: true e il riepilogo.",
+    "fine: una frase calda e il riepilogo.",
+  ].join("\n");
+}
+
+const REGOLE = [
+  "COME PARLI. Ogni risposta comincia riprendendo con parole tue quello che ha appena detto, in modo che si senta capito (per esempio \"Ho capito: alle 10 eri su Instagram per scaricare la tensione.\"). Mai la stessa apertura due volte di fila. Le sue parole riprendile alla seconda persona (lui scrive \"ci sono cascato\", tu dici \"ci sei cascato\"), mai copiate in prima persona.",
+  "Usa i DATI VERI della giornata: nomina le app, le fasce orarie e i minuti che trovi nei dati. Mai inventare un numero che non c'è.",
+  "NUMERI SEMPRE IN CIFRE: \"94 minuti\", \"2 ore\", \"alle 9:05\", mai \"novantaquattro minuti\". Accenti veri: è, perché, più, già, così, può, sì. Mai \"e'\", \"perche'\", \"piu'\".",
+  "Una sola domanda per messaggio, alla fine. Da 2 a 4 frasi brevi, massimo 70 parole. Dai del tu.",
+  "Le domande hanno senso compiuto e suonano come le direbbe una persona: \"Cosa stavi facendo subito prima?\", \"Cosa ti ha portato lì?\". Mai frasi spezzate o rovesciate come \"Subito prima, che cosa c'era?\".",
+  "MAI farlo sentire in colpa, mai prediche, mai \"dovresti\". Gli mostri dove sta andando e se la direzione è ancora quella di partenza: la scelta è sua.",
+  "Italiano semplice e intero: ogni frase con il verbo e la cosa di cui parli, mai \"in quel momento\" senza dire quale. Virgolette solo \"\", mai le caporali né gli apici singoli. Mai il trattino lungo. Mai la forma \"non è X, è Y\". Mai gergo inglese.",
+  "IL PIANO. Quando conosci il grilletto proponi UN piano su misura e concreto, detto in una o due frasi, e chiedi se lo vuole applicare. Il piano può essere: \"blocco\" di app in una fascia oraria (app SOLO fra i pacchetti nei dati, dalle e alle in HH:MM, giorni 7 booleani da lunedì); \"limite\" di minuti al giorno su un'app; oppure una prevenzione senza blocco con \"azione\" fra: focus (una sessione di Full Focus con le notifiche chiuse), caveau (le idee nuove nel caveau), respiro (un respiro guidato prima del lavoro), notifiche (spegnere le notifiche di un'app), mattina (il lavoro difficile quando ha più energia). Il piano NON si applica da solo: l'app chiede il sì alla persona.",
+  "Se la persona dice di sì al piano, non riproporlo: vai alla fase dopo.",
+  "IL LAVORO VERO (app 0.9.344). Le ore \"sul sogno\" contate dal navigatore (dati.spostamento.cause) sono solo le sessioni di Full Focus e i programmi del computer segnati produttivi. Prima di parlare di lavoro guarda dati.lavoroVero: cosa ha fatto davvero al computer ieri e oggi (voci con i minuti; \"non classificato\" può essere lavoro vero) e con le altre AI. MAI scrivere \"non hai lavorato\" o \"non hai lavorato a...\". Se in lavoroVero ci sono ore di lavoro, dillo così: \"Ieri hai lavorato 2 ore su admin.shopify.com e 5 ore su claude.ai, ma senza Full Focus l'app non le ha contate come ore sul sogno: per questo l'arrivo si è spostato.\" e chiedi se era lavoro sulla priorità o su altro. Solo se lavoroVero è vuoto puoi dire che non risultano ore contate, senza accusare.",
+  "LE DECISIONI PRIMA DI TUTTO (app 0.9.348, Andrea: \"le decisioni sono tutto, i soldi amano la velocità\"). dati.decisioni è il primo parametro che guardi in ogni revisione: quante decisioni oggi e quali (lista con l'ora), i giorni di fila con almeno una decisione (serie: è lo slancio), gli ultimi 7 giorni, quanto passa dalla sveglia alla prima mossa e quanti secondi ci mette in media a scrivere e mandare un messaggio alla sua AI (se sono tanti, sta cercando il messaggio perfetto invece di decidere). Comincia la revisione da qui: se è veloce diglielo con i numeri, se è fermo fagli vedere dove si è fermato. Nella settimana confronta le decisioni giorno per giorno.",
+  "UN PASSO È LAVORO VERO (app 0.9.347): nei passi del percorso e nel passo di domani mai una micro decisione (scegliere uno strumento, un'app, una piattaforma, un corso): quella la prendi tu e la scrivi dentro al passo come indicazione. Un passo produce qualcosa e dura almeno 25 minuti.",
+  "TELEFONO E COMPUTER, SEMPRE TUTTI E DUE (app 0.9.346). dati.tempo e dati.app sono della sorgente che sta guardando a schermo; dati.telefonoOggi e dati.lavoroVero (computerOggi, computerIeri) ci sono sempre: analizza tutti e due i dispositivi insieme e di' dove è andato il tempo su ognuno, senza chiedergli di cambiare filtro. Il computer conta solo la finestra in primo piano e solo con la persona davanti (mouse o tastiera negli ultimi due minuti): quei minuti sono uso attivo vero.",
+  "LA DATA NEI PRIMI GIORNI. Se c'è dati.dataVelata, non scrivere nessuna data di arrivo e nessuna previsione di anticipo o ritardo.",
+  "Le statistiche anonime (\"imparato\") dicono cosa capita più spesso e cosa ha aiutato altre persone con un sogno simile: usale solo come ispirazione, mai come fatto su di lui, e mai dire che vengono da altri utenti con nomi o numeri.",
+].join("\n");
+
+const FORMATO = [
+  "Rispondi SOLO in JSON, cosi':",
+  "{\"testo\":\"...\",\"fase\":\"<una delle fasi>\",\"trigger\":\"<chiave o vuoto>\",\"piano\":null oppure {\"tipo\":\"blocco|limite|prevenzione\",\"nome\":\"massimo 4 parole\",\"app\":[\"pacchetto\"],\"dalle\":\"HH:MM\",\"alle\":\"HH:MM\",\"giorni\":[true,true,true,true,true,true,true],\"minutiGiorno\":0,\"azione\":\"focus|caveau|respiro|notifiche|mattina|\",\"aiuto\":\"<chiave della contromisura>\",\"perche\":\"una riga\"},\"pillole\":[\"da 0 a 4 risposte possibili, brevi, in prima persona\"],\"fine\":false,\"riepilogo\":null}",
+  "Alla fine (fine: true) \"riepilogo\" ha le risposte della persona in poche parole: {\"focus\":\"\",\"leva\":\"\",\"interruzione\":\"\",\"contromisura\":\"\",\"imprevisto\":\"\",\"patto\":\"\"} (lascia vuote quelle che non c'entrano).",
+  "Nelle revisioni della settimana, del mese, del trimestre e dell'anno il \"riepilogo\" è invece: {\"rotta\":\"quanto si è avvicinato, in poche parole\",\"sogno\":\"\",\"funzionato\":\"cosa ha funzionato, con il dettaglio\",\"allontanato\":\"cosa gli ha fatto perdere tempo, con il dettaglio\",\"cambio\":\"cosa cambia da domani, in prima persona\",\"mossa\":\"la prossima mossa concreta, con un verbo all'imperativo e il quando\",\"ricalcolo\":\"sì, no o vuoto se non è stato chiesto\"}.",
+  "Nelle revisioni (della sera, della settimana, del mese, del trimestre, dell'anno) aggiungi \"verdetto\" (\"in_rotta\", \"fuori_rotta\" o vuoto finché non lo sai) e, solo quando sei fuori rotta e proponi il percorso nuovo, \"percorso\": {\"oggi\":{\"testo\":\"...\",\"passi\":[\"1-3 passi con un verbo\"]},\"settimana\":{\"testo\":\"...\",\"passi\":[\"...\"]},\"mese\":{\"testo\":\"...\",\"passi\":[\"...\"]},\"anno\":{...},\"cinque\":{...}} (anno e cinque solo se cambiano; al massimo 5 passi per orizzonte). Insieme al verdetto metti già il \"riepilogo\".",
+  "Il \"riepilogo\" delle revisioni: {\"rotta\":\"com'è andata in una frase breve\",\"funzionato\":\"dove vince, concreto\",\"allontanato\":\"dove perde, concreto, con l'ora e l'app\",\"mossa\":\"la prima cosa del percorso nuovo o del piano, all'imperativo e con il quando\",\"ricalcolo\":\"sì, no o vuoto\"}.",
+  "Metti il \"piano\" solo nel messaggio in cui lo proponi. Le \"pillole\" solo se le risposte pronte della fase non vanno bene per la tua domanda.",
+].join("\n");
+
+const USATI = new Map<string, { g: string; n: number }>();
+/** I modelli che hanno appena risposto "sovraccarico": si saltano fino all'ora scritta qui. */
+const SOVRACCARICO = new Map<string, number>();
+const TETTO = Math.max(30, Number(process.env.DREAMMAP_CONVERSA_MAX_DAY || 300));
+
+/* ---------------------------------------------------------------------------------------
+ * LE STATISTICHE ANONIME, per il Genio a opzioni e per l'agente
+ * --------------------------------------------------------------------------------------- */
+let cacheImpara: { at: number; righe: any[] } | null = null;
+async function righeImpara(): Promise<any[]> {
+  if (cacheImpara && Date.now() - cacheImpara.at < 10 * 60000) return cacheImpara.righe;
+  await tabelle();
+  const r = await rows(sql`SELECT sogno, contesto, causa, aiuto, scelte, aiutato FROM dreammap_genio_impara WHERE scelte >= ${IMPARA_MIN} ORDER BY scelte DESC LIMIT 2000`);
+  cacheImpara = { at: Date.now(), righe: r };
+  return r;
+}
+/** Per un tipo di sogno e un contesto: le cause piu' frequenti e, per ognuna, le contromisure che hanno aiutato di piu'. */
+async function classifica(sogno: string, contesto: string) {
+  const r = (await righeImpara()).filter((x: any) => x.sogno === sogno && (!contesto || x.contesto === contesto || (contesto !== "rientro" && x.contesto !== "rientro")));
+  const cause: Record<string, number> = {};
+  const aiuti: Record<string, Record<string, { scelte: number; aiutato: number }>> = {};
+  for (const x of r) {
+    const c = String(x.causa), a = String(x.aiuto || "");
+    if (!a) { cause[c] = (cause[c] || 0) + Number(x.scelte || 0); continue; }
+    aiuti[c] = aiuti[c] || {};
+    const v = aiuti[c][a] = aiuti[c][a] || { scelte: 0, aiutato: 0 };
+    v.scelte += Number(x.scelte || 0); v.aiutato += Number(x.aiutato || 0);
+  }
+  return {
+    cause: Object.keys(cause).map((k) => ({ k, n: cause[k] })).sort((a, b) => b.n - a.n).slice(0, 8),
+    aiuti: Object.fromEntries(Object.keys(aiuti).map((c) => [c, Object.keys(aiuti[c]).map((k) => ({ k, scelte: aiuti[c][k].scelte, aiutato: aiuti[c][k].aiutato }))
+      .sort((a, b) => (b.aiutato / Math.max(1, b.scelte) - a.aiutato / Math.max(1, a.scelte)) || b.scelte - a.scelte).slice(0, 5)])),
+  };
+}
+
+export function registerDreamMapConversaRoutes(app: Express) {
+  app.options("/api/focuslock/genio/impara", (_req: Request, res: Response) => { cors(res); res.status(204).end(); });
+
+  /** POST { sogno, contesto, causa, aiuto?, esito: "scelto" | "aiutato" } -> { ok }. Pubblica: niente account, niente id. */
+  app.post("/api/focuslock/genio/impara", async (req: Request, res: Response) => {
+    cors(res);
+    const b = req.body ?? {};
+    const sogno = String(b.sogno || "altro"), contesto = String(b.contesto || ""), causa = String(b.causa || ""), aiuto = String(b.aiuto || "");
+    const esito = b.esito === "aiutato" ? "aiutato" : "scelto";
+    if (!SOGNI.has(sogno) || !CONTESTI.has(contesto) || !TRIGGER.has(causa) || (aiuto && !AIUTI.has(aiuto))) { res.status(400).json({ error: "chiavi non valide" }); return; }
+    if (esito === "aiutato" && !aiuto) { res.status(400).json({ error: "serve la contromisura" }); return; }
+    if (troppe("impara:" + ipDi(req), 40, 3600000)) { res.status(429).json({ error: "troppe richieste" }); return; }
+    try {
+      await tabelle();
+      if (esito === "aiutato") {
+        await rows(sql`INSERT INTO dreammap_genio_impara (sogno, contesto, causa, aiuto, scelte, aiutato, updatedAt) VALUES (${sogno}, ${contesto}, ${causa}, ${aiuto}, 0, 1, NOW())
+          ON DUPLICATE KEY UPDATE aiutato = aiutato + 1, updatedAt = NOW()`);
+      } else {
+        /* la causa da sola (aiuto vuoto) conta quante volte capita; con la contromisura, quante volte e' stata scelta */
+        await rows(sql`INSERT INTO dreammap_genio_impara (sogno, contesto, causa, aiuto, scelte, aiutato, updatedAt) VALUES (${sogno}, ${contesto}, ${causa}, '', 1, 0, NOW())
+          ON DUPLICATE KEY UPDATE scelte = scelte + 1, updatedAt = NOW()`);
+        if (aiuto) await rows(sql`INSERT INTO dreammap_genio_impara (sogno, contesto, causa, aiuto, scelte, aiutato, updatedAt) VALUES (${sogno}, ${contesto}, ${causa}, ${aiuto}, 1, 0, NOW())
+          ON DUPLICATE KEY UPDATE scelte = scelte + 1, updatedAt = NOW()`);
+      }
+      cacheImpara = null;
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+
+  /** GET ?sogno=&contesto= -> { cause: [{k,n}], aiuti: { causa: [{k, scelte, aiutato}] } } (solo conteggi >= IMPARA_MIN) */
+  app.get("/api/focuslock/genio/impara", async (req: Request, res: Response) => {
+    cors(res);
+    if (troppe("impara-l:" + ipDi(req), 120, 3600000)) { res.status(429).json({ error: "troppe richieste" }); return; }
+    const sogno = String(req.query.sogno || "altro"), contesto = String(req.query.contesto || "");
+    if (!SOGNI.has(sogno) || (contesto && !CONTESTI.has(contesto))) { res.status(400).json({ error: "chiavi non valide" }); return; }
+    try { res.json(await classifica(sogno, contesto)); }
+    catch (e: any) { res.status(500).json({ error: "db: " + (e?.message || String(e)) }); }
+  });
+
+  /* ---- LA CHAT DELLA REVISIONE E DEL RIENTRO ----
+   * POST { tipo, nomeAgente, messaggi: [{ chi: "genio" | "io", t }], dati: {...}, fasi: { fase: ["risposta pronta"] },
+   *        sogno } -> { testo, fase, trigger, piano, pillole, fine, riepilogo, modello } */
+  app.post("/api/focuslock/agent/conversa", async (req: Request, res: Response) => {
+    const who = await whoIs(req);
+    if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
+    await conversaRispondi(req.body ?? {}, who.sub, res);
+  });
+
+  /* ---- LA PROVA DELLA CONSAPEVOLEZZA (0.9.303) ----
+   * "Ti ricordi cosa stavi facendo stamattina alle 9?" "Si'." "Cosa stavi facendo?" La persona lo scrive o lo detta, e
+   * il suo agente lo confronta con quello che dice il telefono in quell'ora.
+   * POST { domanda, momento, risposta, nomeAgente, dati: { ora, app: [{ nome, min }], eventi: [{ ora, app, min, cosa? }] } }
+   *   -> { esito: "preso" | "vicino" | "sbagliato" | "nonsi", testo, modello } */
+  app.post("/api/focuslock/agent/verifica", async (req: Request, res: Response) => {
+    const who = await whoIs(req);
+    if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
+    await verificaRispondi(req.body ?? {}, who.sub, res);
+  });
+
+  /* ---- LA LETTURA DEL FUTURO PREPARATA IN ANTICIPO (0.9.304) ----
+   * Andrea: con Premium la lettura del Genio la fa il tuo agente. L'app chiama questa rotta appena si apre la lettura,
+   * mentre la persona conferma il sogno: quando arrivano le domande sono gia' pronte, legate al suo sogno.
+   * POST { sogno, tipo, nomeAgente, dati, domande: [{ id, t }], trigger: [{ id, t }] }
+   *   -> { persona, domande: { id: testo }, trigger: { id: testo }, modello } */
+  app.post("/api/focuslock/agent/lettura", async (req: Request, res: Response) => {
+    const who = await whoIs(req);
+    if (!isIdentity(who)) { res.status(who.status).json({ error: who.error }); return; }
+    await letturaRispondi(req.body ?? {}, who.sub, res);
+  });
+}
+
+/** La lettura del futuro con le parole del sogno: il tipo di persona che lo realizza e le domande riscritte (stesso senso). */
+export async function letturaRispondi(b: any, sub: string, res: Risposta) {
+  const g = new Date().toISOString().slice(0, 10);
+  const u = USATI.get(sub); const n = u && u.g === g ? u.n : 0;
+  if (n >= TETTO) { res.status(429).json({ error: "troppi messaggi oggi" }); return; }
+  USATI.set(sub, { g, n: n + 1 });
+  const sogno = pulisci(b.sogno, 300);
+  if (!sogno) { res.status(400).json({ error: "manca il sogno" }); return; }
+  const nome = pulisci(b.nomeAgente, 40).replace(/[<>{}\[\]`*_#|\\"]/g, "") || "Genio";
+  const tipo = pulisci(b.tipo, 16).replace(/[^a-z]/g, "");
+  const domande = (Array.isArray(b.domande) ? b.domande : []).slice(0, 24)
+    .map((x: any) => ({ id: pulisci(x?.id, 8), t: pulisci(x?.t, 200) })).filter((x: any) => /^q\d{1,2}$/.test(x.id) && x.t);
+  const trigger = (Array.isArray(b.trigger) ? b.trigger : []).slice(0, 10)
+    .map((x: any) => ({ id: pulisci(x?.id, 12), t: pulisci(x?.t, 120) })).filter((x: any) => /^[a-z]{2,12}$/.test(x.id) && x.t);
+  let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 4000); } catch { dati = "{}"; }
+  const sistema = [
+    `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap, l'app che la porta verso il suo sogno un passo alla volta.`,
+    "Stai per farle la lettura del futuro: un gioco come Akinator. Con domande chiuse e con i dati del telefono, alla fine le dici chi rischia di diventare se continua così, e che probabilità ha oggi di diventare la persona che realizza il suo sogno. Adesso prepari il testo in anticipo, mentre lei conferma il sogno.",
+    "1. \"persona\": l'identità di chi realizza QUESTO sogno senza sforzo, perché per lui è normale fare il 20% delle azioni che portano l'80% dei risultati di quel sogno (per un negozio online: pubblicare prodotti, lanciare campagne, parlare con i clienti). Se nei dati c'è il suo freno principale (\"freni\"), la persona è il suo capovolgimento (freno della concentrazione: una persona che sa concentrarsi e scegliere la cosa che conta; paura di investire: una persona che investe su di sé senza paura). Comincia con \"una persona che\", al massimo 14 parole. Mai nomi di app (niente Telegram, Instagram, WhatsApp), mai orari per andare a dormire o il telefono in camera, a meno che il sogno non parli di salute o di sonno. Esempio per il sogno \"aprire la mia palestra\": \"una persona che ogni giorno fa la cosa che porta iscritti, anche quando ha paura\".",
+    "2. \"domande\": riscrivi ogni domanda della lettura in modo che parli del suo sogno, quando ha senso. Regole ferree: stesso significato e stesso verso (chi risponderebbe sì alla domanda originale deve rispondere sì anche alla tua); sempre una domanda chiusa, a cui si risponde Sì, Probabilmente sì, Non lo so, Probabilmente no o No; il soggetto e il momento detti per intero, mai \"in quel momento\" da solo; al massimo 120 caratteri; finisce con il punto di domanda. Se una domanda non si lega al sogno, lasciala uguale. Usa le stesse chiavi (q1, q2...).",
+    "3. \"trigger\": le risposte alla domanda \"In quale momento prendi il telefono senza pensarci?\". Riscrivile legate alla sua vita quando ha senso, con lo stesso significato, al massimo 60 caratteri. Ogni risposta deve completare la frase \"Prendo il telefono senza pensarci...\": comincia SEMPRE dal momento (Quando..., Mentre..., Prima di..., Appena..., Dopo...), mai da un verbo (sbagliato: \"Vado a letto, prima di dormire\"; giusto: \"Prima di dormire o appena sveglio\"). Usa le stesse chiavi.",
+    "Italiano corretto e semplice, dai del tu. Accenti veri (è, perché, più). Virgolette solo \"\". Mai il trattino lungo, mai gergo inglese, mai \"noi\".",
+    "Rispondi SOLO in JSON: {\"persona\":\"una persona che ...\",\"domande\":{\"q1\":\"...\"},\"trigger\":{\"letto\":\"...\"}}",
+  ].join("\n\n");
+  const utente = "IL SUO SOGNO: " + sogno + (tipo ? "\nIL CAMPO DEL SOGNO: " + tipo : "")
+    + "\n\nQUELLO CHE L'APP SA DI LUI (JSON):\n" + dati
+    + "\n\nLE DOMANDE DELLA LETTURA:\n" + domande.map((x: any) => x.id + ": " + x.t).join("\n")
+    + "\n\nLE RISPOSTE ALLA DOMANDA SUL MOMENTO IN CUI PRENDE IL TELEFONO:\n" + trigger.map((x: any) => x.id + ": " + x.t).join("\n");
+  try {
+    const r = await modelloJson(sistema, utente, 1400);
+    if (!r) {
+      if (process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.AGENT_LLM_KEY) { res.status(502).json({ error: "il modello non ha risposto" }); return; }
+      res.status(503).json({ error: "la lettura non ha un modello acceso", spento: true }); return;
+    }
+    const j = jsonDa(r.testo);
+    if (!j || typeof j !== "object") { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
+    let persona = copy(j.persona, 140).replace(/[.!]+$/, "");
+    if (!/^una persona che /i.test(persona)) persona = "";
+    else persona = "una persona che " + persona.slice("una persona che ".length);
+    const outD: Record<string, string> = {};
+    const jd = j.domande && typeof j.domande === "object" ? j.domande : {};
+    for (const x of domande) {
+      const t = copy(jd[x.id], 160);
+      if (t && t.length >= 10 && t.endsWith("?")) outD[x.id] = t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    const outT: Record<string, string> = {};
+    const jt = j.trigger && typeof j.trigger === "object" ? j.trigger : {};
+    for (const x of trigger) {
+      const t = copy(jt[x.id], 80).replace(/[.?!]+$/, "");
+      if (t && t.length >= 4) outT[x.id] = t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    if (!persona && !Object.keys(outD).length) { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
+    res.json({ persona, domande: outD, trigger: outT, modello: r.modello });
+  } catch (e: any) {
+    res.status(502).json({ error: "lettura: " + (e?.message || String(e)) });
+  }
+}
+
+/** Il modello veloce (Gemini Flash-Lite, Claude Haiku di riserva): il testo JSON della risposta, o null. */
+async function modelloJson(sistema: string, utente: string, maxTok: number): Promise<{ testo: string; modello: string } | null> {
+  const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
+  if (chiaveG) {
+    const modello = process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || process.env.DREAMMAP_VAR_MODELLO || "gemini-3.5-flash-lite";
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+        method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utente }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: maxTok, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } } }),
+      });
+      const j: any = await r.json().catch(() => ({}));
+      const t = r.ok ? (j?.candidates?.[0]?.content?.parts || []).map((x: any) => x.text || "").join("") : "";
+      if (t) return { testo: t, modello };
+    } catch { /* si prova la riserva */ }
+  }
+  if (process.env.AGENT_LLM_KEY) {
+    const modello = process.env.DREAMMAP_CONVERSA_CLAUDE || process.env.DREAMMAP_RIENTRO_CLAUDE || "claude-haiku-5-5";
+    const r = await claude().messages.create({ model: modello, max_tokens: maxTok, temperature: 0.3, system: sistema, messages: [{ role: "user", content: utente }] });
+    const t = r.content.filter((x) => x.type === "text").map((x) => (x.type === "text" ? x.text : "")).join("");
+    if (t) return { testo: t, modello };
+  }
+  return null;
+}
+
+const ESITI = new Set(["preso", "vicino", "sbagliato", "nonsi"]);
+export async function verificaRispondi(b: any, sub: string, res: Risposta) {
+  const g = new Date().toISOString().slice(0, 10);
+  const u = USATI.get(sub); const n = u && u.g === g ? u.n : 0;
+  if (n >= TETTO) { res.status(429).json({ error: "troppi messaggi oggi" }); return; }
+  USATI.set(sub, { g, n: n + 1 });
+  const risposta = pulisci(b.risposta, 600), momento = pulisci(b.momento, 60);
+  if (!risposta || !momento) { res.status(400).json({ error: "manca la risposta o il momento" }); return; }
+  const nome = pulisci(b.nomeAgente, 40).replace(/[<>{}\[\]`*_#|\\"]/g, "") || "Genio";
+  let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 5000); } catch { dati = "{}"; }
+  const sistema = [
+    `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap. Le hai chiesto cosa stava facendo ${momento}: ha risposto, e adesso confronti la sua risposta con quello che dice il telefono in quell'ora.`,
+    "Il telefono vede solo il telefono: le app aperte, i minuti, e quando c'è \"cosa\" la ricerca, il sito, il video. Quello che faceva lontano dal telefono non lo vede.",
+    "Gli esiti: \"preso\" SOLO se la sua risposta corrisponde all'attività principale di quell'ora (la prima app in \"app\", quella con più minuti) (anche con parole diverse: \"guardavo reel\" vale Instagram, \"cercavo una cosa\" vale Google o Chrome); \"vicino\" se ha detto un'app o una cosa che c'era ma non la principale (per esempio la seconda app), o la principale detta in modo vago; \"sbagliato\" se ha detto una cosa diversa da quello che dice il telefono; \"nonsi\" se parla di una cosa fuori dal telefono (\"studiavo\", \"ero in palestra\") e il telefono in quell'ora è stato usato poco, quindi non si può dire. Esempio: il telefono dice Google 33 minuti e lui scrive \"lavoravo al logo\": è \"sbagliato\" (il telefono in quell'ora era su Google per più di mezz'ora), e lo dici senza accusarlo.",
+    "Prima di decidere scrivi in \"confronto\" in poche parole cosa ha detto lui e qual è l'attività principale per il telefono: l'esito viene da quel confronto.",
+    "Il \"testo\" è il verdetto: 1 o 2 frasi brevi, che cominciano dall'esito (\"Ci hai preso:\", \"Ci sei andato vicino:\", \"A me non risulta:\") e dicono cosa dice il telefono con il quando per intero (\"" + momento + "\"), le app e i minuti. Metti tra asterischi singoli (*così*) il nome dell'app principale. Mai colpe, mai prediche, mai \"dovresti\".",
+    "Mai contraddirlo in modo secco (mai \"Non era così\", mai \"non è vero\"): il telefono può non vedere tutto. Se ha detto che lavorava al computer (Claude, codice, PC, sito) e nei dati il computer non c'è o ha pochi minuti, dillo così: \"A me non risulta: dal telefono vedo ... Se lavoravi al computer, è collegato a DreamMap? Senza, quel lavoro non lo vedo.\"",
+    "Numeri sempre in cifre (\"33 minuti\", \"alle 9:05\"). Accenti veri (è, perché, più). Virgolette solo \"\". Mai il trattino lungo. Dai del tu.",
+    "Rispondi SOLO in JSON: {\"confronto\":\"lui dice ...; il telefono dice ...\",\"esito\":\"preso|vicino|sbagliato|nonsi\",\"testo\":\"...\"}",
+  ].join("\n\n");
+  const utente = "LA DOMANDA: " + pulisci(b.domanda, 200) + "\n\nLA SUA RISPOSTA: " + risposta + "\n\nCOSA DICE IL TELEFONO IN QUELL'ORA (JSON):\n" + dati;
+  try {
+    const r = await modelloJson(sistema, utente, 300);
+    if (!r) {
+      if (process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || process.env.AGENT_LLM_KEY) { res.status(502).json({ error: "il modello non ha risposto" }); return; }
+      res.status(503).json({ error: "la verifica non ha un modello acceso", spento: true }); return;
+    }
+    const j = jsonDa(r.testo);
+    const testo = j ? copy(j.testo, 320) : "";
+    if (!testo) { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
+    res.json({ esito: ESITI.has(String(j.esito)) ? String(j.esito) : "nonsi", testo, modello: r.modello });
+  } catch (e: any) {
+    res.status(502).json({ error: "verifica: " + (e?.message || String(e)) });
+  }
+}
+
+type Risposta = { status: (n: number) => Risposta; json: (x: any) => any };
+/** Il cuore della chat, separato dalla rotta: si prova anche senza un token Google (il controllo e' nella rotta). */
+export async function conversaRispondi(b: any, sub: string, res: Risposta) {
+    const tipo = (TIPI as readonly string[]).includes(String(b.tipo)) ? (String(b.tipo) as Tipo) : null;
+    if (!tipo) { res.status(400).json({ error: "tipo sconosciuto" }); return; }
+    const g = new Date().toISOString().slice(0, 10);
+    const u = USATI.get(sub); const n = u && u.g === g ? u.n : 0;
+    if (n >= TETTO) { res.status(429).json({ error: "troppi messaggi oggi" }); return; }
+    USATI.set(sub, { g, n: n + 1 });
+    const nome = pulisci(b.nomeAgente, 40).replace(/[<>{}\[\]`*_#|\\"]/g, "") || "Genio";
+    const messaggi = (Array.isArray(b.messaggi) ? b.messaggi : []).slice(-24)
+      .map((m: any) => ({ chi: m?.chi === "io" ? "io" : "genio", t: pulisci(m?.t, 1500) })).filter((m: any) => m.t);
+    let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 14000); } catch { dati = "{}"; }
+    let fasi: Record<string, string[]> = {};
+    try {
+      const f = b.fasi && typeof b.fasi === "object" ? b.fasi : {};
+      for (const k of Object.keys(f).slice(0, 12)) if (/^[a-z0-9]{1,16}$/i.test(k) && Array.isArray(f[k])) fasi[k] = f[k].slice(0, 8).map((x: any) => pulisci(x, 80)).filter(Boolean);
+    } catch { fasi = {}; }
+    const chiaviFasi = Object.keys(fasi).concat(["fine"]);
+    /* i pacchetti che si possono bloccare: solo quelli che l'app ha mandato, mai uno inventato */
+    const pacchetti = new Set<string>();
+    try { const d = b.dati ?? {}; for (const l of [d.app, d.appTutte, d.appGiorno, d.timeline && d.timeline.cose]) for (const a of (Array.isArray(l) ? l : [])) if (a && typeof a.pkg === "string") pacchetti.add(a.pkg); } catch { /* niente */ }
+    let imparato: any = null;
+    const sogno = SOGNI.has(String(b.sogno)) ? String(b.sogno) : "";
+    if (sogno) { try { imparato = await classifica(sogno, tipo === "rientro" ? "rientro" : tipo); } catch { imparato = null; } }
+    const turni = messaggi.filter((m: any) => m.chi === "io").length;
+    const sistema = [
+      `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap, l'app che la porta verso il suo sogno un passo alla volta. Conosci la sua giornata dai dati che l'app ti passa.`,
+      SCOPO[tipo], REGOLE,
+      "Le chiavi possibili per \"trigger\": " + Array.from(TRIGGER).join(", ") + ". Per \"aiuto\": " + Array.from(AIUTI).join(", ") + ".",
+      "Le fasi di questa conversazione: " + chiaviFasi.join(", ") + ". In \"fase\" scrivi la fase della domanda che stai facendo adesso.",
+      "Dopo 6 risposte della persona chiudi con fine: true.",
+      FORMATO,
+    ].join("\n\n");
+    const utenteTxt = "I DATI VERI (JSON):\n" + dati
+      + "\n\nLE RISPOSTE PRONTE PER FASE (l'app le mostra come pillole):\n" + JSON.stringify(fasi)
+      + (imparato ? "\n\nIMPARATO DA PERSONE CON UN SOGNO SIMILE (conteggi anonimi):\n" + JSON.stringify(imparato).slice(0, 1500) : "")
+      + "\n\nLA CONVERSAZIONE FINORA:\n" + (messaggi.length ? messaggi.map((m: any) => (m.chi === "io" ? "Persona: " : "Tu: ") + m.t).join("\n") : "(comincia tu: saluta in una riga, di' cosa hai visto nei dati di più importante e fai la prima domanda)")
+      + (b.evento === "piano_applicato" ? "\n\nLA PERSONA HA APPENA DETTO SÌ AL PIANO e l'app l'ha applicato: confermalo in una riga, senza riproporlo, e passa alla fase dopo con la sua domanda." : "")
+      + (b.evento === "resoconto" ? "\n\nEVENTO \"resoconto\": scrivi adesso il resoconto iniziale dai dati (dove vince, dove perde), e solo se serve una domanda sul perché." : "")
+      + (b.evento === "percorso_rifiutato" ? "\n\nLA PERSONA HA DETTO NO AL PERCORSO NUOVO: rispetta la scelta in una riga e chiudi con fine: true e il riepilogo." : "")
+      + (b.evento === "piano_rifiutato" ? "\n\nLA PERSONA HA DETTO NO AL PIANO: rispetta la scelta in una riga, senza insistere, e passa alla fase dopo con la sua domanda." : "")
+      + "\n\nRisposte della persona finora: " + turni +(turni >= 6 ? ". CHIUDI ADESSO con fine: true e il riepilogo." : ".");
+    const ora = (t: unknown) => { const m = String(t ?? "").match(/^(\d{1,2})[:.](\d{2})$/); return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
+    const leggi = (t: string) => {
+      const j = jsonDa(String(t || ""));
+      if (!j || typeof j !== "object") return null;
+      const testo = copy(j.testo, 700);
+      if (!testo) return null;
+      const fase = chiaviFasi.includes(String(j.fase)) ? String(j.fase) : "";
+      const trigger = TRIGGER.has(String(j.trigger)) ? String(j.trigger) : "";
+      let piano: any = null;
+      const p = j.piano;
+      if (p && typeof p === "object") {
+        const tipoP = ["blocco", "limite", "prevenzione"].includes(String(p.tipo)) ? String(p.tipo) : "prevenzione";
+        const app = (Array.isArray(p.app) ? p.app : []).map(String).filter((x: string) => pacchetti.has(x)).slice(0, 6);
+        const dalle = ora(p.dalle), alle = ora(p.alle);
+        const giorni = Array.isArray(p.giorni) && p.giorni.length === 7 ? p.giorni.map((x: any) => !!x) : [true, true, true, true, true, true, true];
+        const min = Math.round(Number(p.minutiGiorno) || 0);
+        const azione = ["focus", "caveau", "respiro", "notifiche", "mattina"].includes(String(p.azione)) ? String(p.azione) : "";
+        const aiuto = AIUTI.has(String(p.aiuto)) ? String(p.aiuto) : (tipoP === "limite" ? "limite" : tipoP === "blocco" ? "blocco" : azione || "altro");
+        const base = { nome: copy(p.nome, 40) || "Il mio piano", perche: copy(p.perche, 160), aiuto };
+        if (tipoP === "blocco" && app.length && dalle && alle && dalle !== alle) piano = { ...base, tipo: "blocco", app, dalle, alle, giorni };
+        else if (tipoP === "limite" && app.length && min >= 5 && min <= 600) piano = { ...base, tipo: "limite", app, minutiGiorno: min, giorni };
+        else if (azione) piano = { ...base, tipo: "prevenzione", azione, app: app.slice(0, 1) };
+      }
+      const pillole = (Array.isArray(j.pillole) ? j.pillole : []).map((x: any) => copy(x, 70)).filter(Boolean).slice(0, 4);
+      const fine = !!j.fine || turni >= 7;
+      let riepilogo: any = null;
+      if (j.riepilogo && typeof j.riepilogo === "object") {
+        riepilogo = {};
+        for (const k of ["focus", "leva", "interruzione", "contromisura", "imprevisto", "patto", "rotta", "sogno", "funzionato", "allontanato", "cambio", "mossa", "ricalcolo"]) riepilogo[k] = copy(j.riepilogo[k], 200);
+      }
+      /* 0.9.310: il verdetto e il percorso nuovo (gli orizzonti della roadmap), che l'app applica solo con il si' */
+      const verdetto = ["in_rotta", "fuori_rotta"].includes(String(j.verdetto)) ? String(j.verdetto) : "";
+      let percorso: any = null;
+      if (j.percorso && typeof j.percorso === "object") {
+        const out: Record<string, { testo: string; passi: string[] }> = {};
+        for (const k of ["cinque", "anno", "mese", "settimana", "oggi"]) {
+          const x = j.percorso[k];
+          const testo = x && typeof x === "object" ? copy(x.testo, 160) : "";
+          if (!testo) continue;
+          out[k] = { testo, passi: (Array.isArray(x.passi) ? x.passi : []).map((t: any) => copy(t, 160)).filter(Boolean).slice(0, 5) };
+        }
+        if (out.settimana || out.oggi || out.mese) percorso = out;
+      }
+      return { testo, fase: fine ? "fine" : fase, trigger, piano, pillole, fine, riepilogo, verdetto, percorso };
+    };
+    /* app 0.9.321: le foto e i file allegati all'ultimo messaggio. I testi entrano nel messaggio, foto e PDF restano allegati veri */
+    const allegati = (Array.isArray(b.allegati) ? b.allegati : []).slice(0, 3)
+      .map((a: any) => ({ tipo: String(a?.tipo || ""), mime: String(a?.mime || ""), nome: pulisci(a?.nome, 120), dati: String(a?.dati || "") }))
+      .filter((a: any) => a.dati && a.dati.length < 12000000);
+    const allTesto = allegati.filter((a: any) => a.tipo === "text").map((a: any) => { let t = ""; try { t = Buffer.from(a.dati, "base64").toString("utf8").slice(0, 20000); } catch { t = ""; } return "\n\nIL FILE ALLEGATO \"" + a.nome + "\":\n" + t; }).join("");
+    const allMedia = allegati.filter((a: any) => a.tipo !== "text" && /^(image\/|application\/pdf)/.test(a.mime));
+    const chiaveG = process.env.DREAMMAP_GEMINI_KEY || process.env.AGENT_GEMINI_KEY || "";
+    try {
+      if (chiaveG) {
+        /* app 0.9.335, Andrea: "nel Rientra le risposte sono immediate, non pensa, non ragiona, e fanno cagare". Era il modello
+         * leggero con il ragionamento al minimo. Ora la persona sceglie come nella chat del suo agente: "attento" (di serie)
+         * = Flash con il ragionamento alto, "veloce" = Flash-Lite con un ragionamento basso. Se il primo non risponde, c'e' l'altro. */
+        const attento = b.scelta !== "veloce";
+        /* app 0.9.346, Andrea: "Il Genio non ha risposto. Perché? Deve rispondere, punto". LA CAUSA, misurata: il modello "attento"
+         * (Flash) nelle ore di punta risponde 503 "high demand" dopo 32 secondi, o resta appeso; senza un tempo massimo la richiesta
+         * superava i 75 secondi che l'app aspetta, e la riserva (Flash-Lite, che risponde in mezzo secondo) non partiva mai.
+         * Adesso: ogni tentativo ha il suo tempo massimo; un modello che ha appena fallito per sovraccarico si salta per tre minuti;
+         * la riserva prova prima con il ragionamento medio e poi basso; e una risposta non in JSON si usa lo stesso come testo. */
+        /* app 0.9.347, Andrea: "anche con Veloce dice sovraccarico e ci mette 20 anni; Google AI Mode risponde subito".
+         * LA CAUSA, dai log: alle 14 erano sovraccarichi TUTTI E DUE i modelli 3.5 (Flash e Flash-Lite, 503 "high demand"),
+         * e i tentativi andavano in fila uno dopo l'altro, ognuno con la sua attesa. Il trucco di AI Mode e' non aspettare
+         * un modello solo: si lanciano richieste di riserva su modelli DIVERSI (che hanno code diverse) dopo pochi secondi,
+         * o subito se il primo risponde "sovraccarico", e vince la prima risposta buona; le altre si annullano.
+         * Misurati il 12/11: 3.5-flash-lite 0,6-0,9 s, 3-flash-preview 1,3 s, 3.1-flash-lite-preview 1,9 s, 3.6-flash 3 s. */
+        const principale = process.env.DREAMMAP_CONVERSA_ATTENTO || "gemini-3.5-flash";
+        const riserva = process.env.DREAMMAP_CONVERSA_MODELLO || process.env.DREAMMAP_RIENTRO_MODELLO || "gemini-3.5-flash-lite";
+        const altri = (process.env.DREAMMAP_CONVERSA_RISERVE || "gemini-3-flash-preview,gemini-3.1-flash-lite-preview,gemini-3.6-flash").split(",").map((x) => x.trim()).filter(Boolean);
+        /* [modello, ragionamento, token, tempo massimo, partenza dopo ms] */
+        const piano: [string, string, number, number, number][] = attento
+          ? [[principale, "high", 6000, 28000, 0], [riserva, "medium", 4000, 20000, 12000], [altri[0] || riserva, "low", 3000, 18000, 15000], [altri[1] || riserva, "low", 2400, 15000, 18000], [altri[2] || riserva, "low", 2400, 15000, 21000]]
+          : [[riserva, "low", 2400, 12000, 0], [altri[0] || riserva, "minimal", 2400, 12000, 2500], [altri[1] || riserva, "minimal", 2400, 12000, 4500], [altri[2] || riserva, "low", 2400, 14000, 7000]];
+        /* chi e' sovraccarico da poco parte per ultimo, non per primo */
+        piano.sort((x, y) => (SOVRACCARICO.get(x[0])! > Date.now() ? 1 : 0) - (SOVRACCARICO.get(y[0])! > Date.now() ? 1 : 0));
+        piano.forEach((p, i) => { p[4] = i === 0 ? 0 : Math.max(p[4], piano[i - 1][4] + 1500); });
+        let ultimoTesto = "";
+        const vinta: any = await new Promise((risolvi) => {
+          let finita = false, inCorso = 0, prossimo = 0;
+          const controlli: AbortController[] = [];
+          const timers: any[] = [];
+          const chiudi = (v: any) => { if (finita) return; finita = true; timers.forEach(clearTimeout); controlli.forEach((c) => { try { c.abort(); } catch { /* */ } }); risolvi(v); };
+          const lancia = () => {
+            if (finita || prossimo >= piano.length) { if (!finita && inCorso === 0) chiudi(null); return; }
+            const [modello, livello, maxOut, tempo] = piano[prossimo++];
+            inCorso++;
+            const ac = new AbortController(); controlli.push(ac);
+            const timer = setTimeout(() => ac.abort(), tempo);
+            (async () => {
+              try {
+                const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modello}:generateContent`, {
+                  method: "POST", headers: { "x-goog-api-key": chiaveG, "content-type": "application/json" }, signal: ac.signal,
+                  body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: utenteTxt + allTesto }, ...allMedia.map((a: any) => ({ inlineData: { mimeType: a.mime, data: a.dati } }))] }],
+                    generationConfig: { temperature: 0.6, maxOutputTokens: maxOut, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: livello } } }),
+                });
+                const j: any = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                  if (!finita) console.warn("[conversa] " + modello + " (" + livello + ") -> " + r.status + " " + String(j?.error?.message || "").slice(0, 120));
+                  if (r.status === 503 || r.status === 429 || r.status === 500) SOVRACCARICO.set(modello, Date.now() + 3 * 60000);
+                } else {
+                  const grezzo = (j?.candidates?.[0]?.content?.parts || []).filter((x: any) => !x.thought).map((x: any) => x.text || "").join("");
+                  if (grezzo) ultimoTesto = grezzo;
+                  const v = leggi(grezzo);
+                  if (v) { chiudi({ ...v, modello, scelta: attento ? "attento" : "veloce" }); return; }
+                  if (!finita) console.warn("[conversa] " + modello + " (" + livello + ") risposta non leggibile, fine: " + String(j?.candidates?.[0]?.finishReason || ""));
+                }
+              } catch (e: any) {
+                if (!finita) {
+                  console.warn("[conversa] " + modello + " (" + livello + ") " + (ac.signal.aborted ? "oltre " + tempo + " ms" : String(e?.message || e).slice(0, 120)));
+                  if (ac.signal.aborted) SOVRACCARICO.set(modello, Date.now() + 3 * 60000);
+                }
+              } finally {
+                clearTimeout(timer); inCorso--;
+                /* un tentativo fallito fa partire SUBITO il prossimo, senza aspettare il suo turno */
+                if (!finita) lancia();
+              }
+            })();
+          };
+          lancia();
+          piano.forEach((p, i) => { if (i > 0) timers.push(setTimeout(() => { if (!finita && prossimo <= i) lancia(); }, p[4])); });
+          timers.push(setTimeout(() => chiudi(null), attento ? 60000 : 40000));
+        });
+        if (vinta) { res.json(vinta); return; }
+        /* nessun JSON buono, ma un testo c'e': il JSON tagliato a meta' porta comunque la frase, e una frase vale piu' di un errore */
+        if (ultimoTesto) {
+          const m = /"testo"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(ultimoTesto);
+          let frase = "";
+          try { frase = m ? JSON.parse('"' + m[1] + '"') : ""; } catch { frase = m ? m[1] : ""; }
+          if (!frase && !/^\s*[{\[]/.test(ultimoTesto)) frase = ultimoTesto;
+          frase = copy(frase, 700);
+          if (frase.length >= 20) { res.json({ testo: frase, fase: "", trigger: "", piano: null, pillole: [], fine: false, riepilogo: null, verdetto: "", percorso: null, modello: riserva, scelta: "veloce", recuperata: true }); return; }
+        }
+      }
+      if (process.env.AGENT_LLM_KEY) {
+        const modello = process.env.DREAMMAP_CONVERSA_CLAUDE || process.env.DREAMMAP_RIENTRO_CLAUDE || "claude-haiku-5-5";
+        const blocchi: any[] = allMedia.map((a: any) => a.mime === "application/pdf"
+          ? { type: "document", source: { type: "base64", media_type: a.mime, data: a.dati } }
+          : { type: "image", source: { type: "base64", media_type: a.mime, data: a.dati } });
+        const r = await claude().messages.create({ model: modello, max_tokens: 900, temperature: 0.6, system: sistema, messages: [{ role: "user", content: blocchi.length ? [...blocchi, { type: "text", text: utenteTxt + allTesto }] : utenteTxt + allTesto }] });
+        const v = leggi(r.content.filter((x) => x.type === "text").map((x) => (x.type === "text" ? x.text : "")).join(""));
+        if (v) { res.json({ ...v, modello }); return; }
+      }
+      if (chiaveG || process.env.AGENT_LLM_KEY) { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
+      res.status(503).json({ error: "la conversazione non ha un modello acceso", spento: true });
+    } catch (e: any) {
+      res.status(502).json({ error: "conversa: " + (e?.message || String(e)) });
+    }
+}
