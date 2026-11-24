@@ -465,6 +465,10 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
       + (b.evento === "resoconto" ? "\n\nEVENTO \"resoconto\": scrivi adesso il resoconto iniziale dai dati (dove vince, dove perde), e solo se serve una domanda sul perché." : "")
       + (b.evento === "percorso_rifiutato" ? "\n\nLA PERSONA HA DETTO NO AL PERCORSO NUOVO: rispetta la scelta in una riga e chiudi con fine: true e il riepilogo." : "")
       + (b.evento === "piano_rifiutato" ? "\n\nLA PERSONA HA DETTO NO AL PIANO: rispetta la scelta in una riga, senza insistere, e passa alla fase dopo con la sua domanda." : "")
+      /* DreamMap 0.9.388 (Andrea, 24/11): dopo l'imprevisto raccontato nella revisione della sera nessuno rispondeva; e il passo di domani
+         ha la (i) con perché, priorità e tempo. Due risposte brevi, senza domande: l'app le mostra in un riquadro e va avanti da sola. */
+      + (b.evento === "imprevisto" ? "\n\nEVENTO \"imprevisto\": la persona ha appena raccontato un imprevisto. In 2-3 frasi brevi: di' che l'hai segnato, cosa cambia concretamente per domani o per il piano (orari, passo, durata), e una cosa sola da fare. Niente domande. Chiudi con fine: true." : "")
+      + (b.evento === "passo_domani" ? "\n\nEVENTO \"passo_domani\": rispondi SOLO con le tre righe che la persona chiede, nell'ordine e con le etichette esatte \"Perché:\", \"Priorità:\" (alta, media o bassa) e \"Tempo:\" (un numero di minuti). Niente altro testo, niente domande. Chiudi con fine: true." : "")
       + "\n\nRisposte della persona finora: " + turni +(turni >= 6 ? ". CHIUDI ADESSO con fine: true e il riepilogo." : ".");
     const ora = (t: unknown) => { const m = String(t ?? "").match(/^(\d{1,2})[:.](\d{2})$/); return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
     const leggi = (t: string) => {
