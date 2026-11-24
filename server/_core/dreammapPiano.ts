@@ -263,9 +263,12 @@ export function registerDreamMapPianoRoutes(app: Express) {
           if (!via) { try { const o = JSON.parse(dati); if (!o || typeof o !== "object") throw new Error("x"); } catch { out.push({ id, ok: false, motivo: "nota illeggibile" }); continue; } }
           const seq = seqNuovo();
           /* l'ordine conta: modAt si aggiorna per ultimo, cosi' gli IF di prima confrontano con il valore vecchio */
+          /* 24/11/2026, DreamMap 0.9.388. Andrea: "ho perso tutte le note passando alla nuova DreamMap". Una nota tolta (via = 1) cancellava
+             anche il suo testo qui: quando la nuova app le ha date tutte per tolte per sbaglio, il server non ne aveva piu' una copia.
+             Adesso una nota tolta tiene il suo ultimo testo: GET la manda comunque senza testo (dati: null), ma si puo' sempre recuperare. */
           await rows(sql`INSERT INTO focuslock_note_sync (chiave, id, dati, modAt, via, seq, updatedAt) VALUES (${k}, ${id}, ${dati}, ${mod}, ${via}, ${seq}, NOW())
             ON DUPLICATE KEY UPDATE
-              dati = IF(VALUES(modAt) > modAt, VALUES(dati), dati),
+              dati = IF(VALUES(modAt) > modAt AND VALUES(via) = 0, VALUES(dati), dati),
               via = IF(VALUES(modAt) > modAt, VALUES(via), via),
               seq = IF(VALUES(modAt) > modAt, VALUES(seq), seq),
               updatedAt = IF(VALUES(modAt) > modAt, NOW(), updatedAt),
