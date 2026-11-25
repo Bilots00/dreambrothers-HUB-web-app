@@ -227,7 +227,8 @@ export function registerDreamMapPianoRoutes(app: Express) {
      seq cresce a ogni scrittura (millisecondi * 1000 + contatore): il client ricorda l'ultimo che ha letto. */
   let seqUltimo = 0;
   const seqNuovo = () => { const s = Math.max(Date.now() * 1000, seqUltimo + 1); seqUltimo = s; return s; };
-  const MAX_NOTA = 2 * 1024 * 1024;
+  /* 25/11/2026: una nota con tante immagini puo' superare i 2 MB; la colonna e' LONGTEXT. Nessuna nota resta fuori per il peso. */
+  const MAX_NOTA = 40 * 1024 * 1024;
   app.get("/api/focuslock/piano/:k/note-sync", async (req: Request, res: Response) => {
     cors(res); res.setHeader("Cache-Control", "no-store");
     const k = String(req.params.k || "");

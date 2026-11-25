@@ -32,7 +32,10 @@ const FOCUSLOCK_WEB_CLIENT_ID = process.env.FOCUSLOCK_GOOGLE_CLIENT_ID
    "backup too large", l'app lo ingoiava in silenzio e il computer e' rimasto per due settimane al viaggio del 15/10
    (livello 1, mappa e tappe di prima del reset del 28/10). Anche il backup personale del telefono era fermo al 15/10.
    La colonna e' MEDIUMTEXT (16 MB): 8 MB stanno larghi sopra ai 3 MB del telefono anche con le virgolette escapate. */
-const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
+/* 25/11/2026, Andrea: "non mettere nessun limite: quando un utente fa il backup ci devono essere anche le note". Il telefono adesso
+   manda tutto (note comprese, flWebDump senza tetto per chiave): l'unico tetto che resta e' quello fisico della colonna MEDIUMTEXT
+   (16.777.215 byte). Si conta in byte, non in caratteri. */
+const MAX_BACKUP_BYTES = 16_700_000;
 const FORBIDDEN_KEYS = ["strict", "strictMode", "pin", "pinHash", "pinSalt"];
 
 let tableReady: Promise<void> | null = null;
@@ -205,7 +208,7 @@ export function registerDreamMapRoutes(app: Express) {
     if (!deviceId) { res.status(400).json({ error: "deviceId is required" }); return; }
     if (!backup || typeof backup !== "object") { res.status(400).json({ error: "backup object is required" }); return; }
     const payload = JSON.stringify(backup);
-    if (payload.length > MAX_BACKUP_BYTES) { res.status(413).json({ error: "backup too large" }); return; }
+    if (Buffer.byteLength(payload, "utf8") > MAX_BACKUP_BYTES) { res.status(413).json({ error: "backup too large" }); return; }
     // The app knows its own format better than this file does: when it sends a summary, that
     // is the one stored. The server's count is the fallback, not the authority.
     const own = body.summary && typeof body.summary === "object" ? body.summary : null;
