@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "../db";
 import { whoIs, isIdentity, rows } from "./dreammapRoutes";
 import { REGOLA_PASSO_AVANZA } from "./dreammapRegolaPassi";
+import { REGOLA_SPECCHIO, immagineDiSeDa, immagineDiSeTesto } from "./dreammapSpecchio";
 
 /* DreamMap 0.9.301 — LA REVISIONE E IL RIENTRA IN ROTTA, IN CHAT CON IL TUO AGENTE
  *
@@ -298,7 +299,9 @@ export function registerDreamMapConversaRoutes(app: Express) {
   /* ---- LA LETTURA DEL FUTURO PREPARATA IN ANTICIPO (0.9.304) ----
    * Andrea: con Premium la lettura del Genio la fa il tuo agente. L'app chiama questa rotta appena si apre la lettura,
    * mentre la persona conferma il sogno: quando arrivano le domande sono gia' pronte, legate al suo sogno.
-   * POST { sogno, tipo, nomeAgente, dati, domande: [{ id, t }], trigger: [{ id, t }] }
+   * POST { sogno, tipo, nomeAgente, dati, domande: [{ id, t }], trigger: [{ id, t }], immagineDiSe?: { archetipo, frase, forza, impresa, risposte } }
+   * 0.9.391 (BUG-124): l'immagine di se' (il quiz Come ti vedi) arriva prima delle abitudini; il Genio le fa da specchio e la tiene
+   * distinta dalla traiettoria (REGOLA_SPECCHIO, dreammapSpecchio.ts). Le app di prima non la mandano: la lettura va come prima.
    *   -> { persona, domande: { id: testo }, trigger: { id: testo }, modello } */
   app.post("/api/focuslock/agent/lettura", async (req: Request, res: Response) => {
     const who = await whoIs(req);
@@ -322,16 +325,19 @@ export async function letturaRispondi(b: any, sub: string, res: Risposta) {
   const trigger = (Array.isArray(b.trigger) ? b.trigger : []).slice(0, 10)
     .map((x: any) => ({ id: pulisci(x?.id, 12), t: pulisci(x?.t, 120) })).filter((x: any) => /^[a-z]{2,12}$/.test(x.id) && x.t);
   let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 4000); } catch { dati = "{}"; }
+  const ids = immagineDiSeDa(b.immagineDiSe);
   const sistema = [
     `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap, l'app che la porta verso il suo sogno un passo alla volta.`,
     "Stai per farle la lettura del futuro: un gioco come Akinator. Con domande chiuse e con i dati del telefono, alla fine le dici chi rischia di diventare se continua così, e che probabilità ha oggi di diventare la persona che realizza il suo sogno. Adesso prepari il testo in anticipo, mentre lei conferma il sogno.",
-    "1. \"persona\": l'identità di chi realizza QUESTO sogno senza sforzo, perché per lui è normale fare il 20% delle azioni che portano l'80% dei risultati di quel sogno (per un negozio online: pubblicare prodotti, lanciare campagne, parlare con i clienti). Se nei dati c'è il suo freno principale (\"freni\"), la persona è il suo capovolgimento (freno della concentrazione: una persona che sa concentrarsi e scegliere la cosa che conta; paura di investire: una persona che investe su di sé senza paura). Comincia con \"una persona che\", al massimo 14 parole. Mai nomi di app (niente Telegram, Instagram, WhatsApp), mai orari per andare a dormire o il telefono in camera, a meno che il sogno non parli di salute o di sonno. Esempio per il sogno \"aprire la mia palestra\": \"una persona che ogni giorno fa la cosa che porta iscritti, anche quando ha paura\".",
+    REGOLA_SPECCHIO,
+    "1. \"persona\": l'identità di chi realizza QUESTO sogno senza sforzo, perché per lui è normale fare il 20% delle azioni che portano l'80% dei risultati di quel sogno (per un negozio online: pubblicare prodotti, lanciare campagne, parlare con i clienti). Se nei dati c'è il suo freno principale (\"freni\"), la persona è il suo capovolgimento (freno della concentrazione: una persona che sa concentrarsi e scegliere la cosa che conta; paura di investire: una persona che investe su di sé senza paura). Comincia con \"una persona che\", al massimo 14 parole. Mai nomi di app (niente Telegram, Instagram, WhatsApp), mai orari per andare a dormire o il telefono in camera, a meno che il sogno non parli di salute o di sonno. Esempio per il sogno \"aprire la mia palestra\": \"una persona che ogni giorno fa la cosa che porta iscritti, anche quando ha paura\". Se c'è COME SI VEDE, la persona tiene la forza del suo archetipo e non lo contraddice.",
     "2. \"domande\": riscrivi ogni domanda della lettura in modo che parli del suo sogno, quando ha senso. Regole ferree: stesso significato e stesso verso (chi risponderebbe sì alla domanda originale deve rispondere sì anche alla tua); sempre una domanda chiusa, a cui si risponde Sì, Probabilmente sì, Non lo so, Probabilmente no o No; il soggetto e il momento detti per intero, mai \"in quel momento\" da solo; al massimo 120 caratteri; finisce con il punto di domanda. Se una domanda non si lega al sogno, lasciala uguale. Usa le stesse chiavi (q1, q2...).",
     "3. \"trigger\": le risposte alla domanda \"In quale momento prendi il telefono senza pensarci?\". Riscrivile legate alla sua vita quando ha senso, con lo stesso significato, al massimo 60 caratteri. Ogni risposta deve completare la frase \"Prendo il telefono senza pensarci...\": comincia SEMPRE dal momento (Quando..., Mentre..., Prima di..., Appena..., Dopo...), mai da un verbo (sbagliato: \"Vado a letto, prima di dormire\"; giusto: \"Prima di dormire o appena sveglio\"). Usa le stesse chiavi.",
     "Italiano corretto e semplice, dai del tu. Accenti veri (è, perché, più). Virgolette solo \"\". Mai il trattino lungo, mai gergo inglese, mai \"noi\".",
     "Rispondi SOLO in JSON: {\"persona\":\"una persona che ...\",\"domande\":{\"q1\":\"...\"},\"trigger\":{\"letto\":\"...\"}}",
   ].join("\n\n");
   const utente = "IL SUO SOGNO: " + sogno + (tipo ? "\nIL CAMPO DEL SOGNO: " + tipo : "")
+    + (ids ? "\n\n" + immagineDiSeTesto(ids) : "")
     + "\n\nQUELLO CHE L'APP SA DI LUI (JSON):\n" + dati
     + "\n\nLE DOMANDE DELLA LETTURA:\n" + domande.map((x: any) => x.id + ": " + x.t).join("\n")
     + "\n\nLE RISPOSTE ALLA DOMANDA SUL MOMENTO IN CUI PRENDE IL TELEFONO:\n" + trigger.map((x: any) => x.id + ": " + x.t).join("\n");
