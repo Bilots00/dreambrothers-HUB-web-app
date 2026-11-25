@@ -331,6 +331,8 @@ async function aiutoPensa(task: string, domanda: string, ctx: any): Promise<any 
     "Chi ti scrive e' bloccato su una cosa da fare oggi. Rispondi in italiano, con il tu, senza premesse e senza moralismi.",
     "Dai i passi nell'ordine in cui si fanno: il primo deve essere cosi' piccolo da poterlo fare in due minuti (aprire un file, scrivere una riga, telefonare a una persona).",
     "Ogni passo sta dentro una sessione di 25 minuti. Niente teoria: azioni. Se un passo si impara meglio guardando, dillo nel passo.",
+    /* app 0.9.390 (BUG-122), Andrea: "guardare i numeri lo fa l'intelligenza artificiale in 2 secondi: servono passi concreti" */
+    "Niente passi di sola raccolta di dati o di ricerca (guardare, controllare, cercare, leggere numeri): se serve un dato, lo scrivi tu dentro al passo che lo usa.",
     "Le ricerche per il tutorial: in italiano, concrete, come le scriverebbe una persona su YouTube (es. «come aprire partita iva forfettaria 2026 tutorial»).",
     ctx && ctx.freno ? "Tieni conto del suo freno: " + String(ctx.freno).slice(0, 200) : "",
   ].filter(Boolean).join("\n");

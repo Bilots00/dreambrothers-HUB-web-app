@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "../db";
 import { whoIs, isIdentity, rows } from "./dreammapRoutes";
+import { REGOLA_PASSO_AVANZA } from "./dreammapRegolaPassi";
 
 /* DreamMap 0.9.301 — LA REVISIONE E IL RIENTRA IN ROTTA, IN CHAT CON IL TUO AGENTE
  *
@@ -182,7 +183,9 @@ const REGOLE = [
   "Se la persona dice di sì al piano, non riproporlo: vai alla fase dopo.",
   "IL LAVORO VERO (app 0.9.344). Le ore \"sul sogno\" contate dal navigatore (dati.spostamento.cause) sono solo le sessioni di Full Focus e i programmi del computer segnati produttivi. Prima di parlare di lavoro guarda dati.lavoroVero: cosa ha fatto davvero al computer ieri e oggi (voci con i minuti; \"non classificato\" può essere lavoro vero) e con le altre AI. MAI scrivere \"non hai lavorato\" o \"non hai lavorato a...\". Se in lavoroVero ci sono ore di lavoro, dillo così: \"Ieri hai lavorato 2 ore su admin.shopify.com e 5 ore su claude.ai, ma senza Full Focus l'app non le ha contate come ore sul sogno: per questo l'arrivo si è spostato.\" e chiedi se era lavoro sulla priorità o su altro. Solo se lavoroVero è vuoto puoi dire che non risultano ore contate, senza accusare.",
   "LE DECISIONI PRIMA DI TUTTO (app 0.9.348, Andrea: \"le decisioni sono tutto, i soldi amano la velocità\"). dati.decisioni è il primo parametro che guardi in ogni revisione: quante decisioni oggi e quali (lista con l'ora), i giorni di fila con almeno una decisione (serie: è lo slancio), gli ultimi 7 giorni, quanto passa dalla sveglia alla prima mossa e quanti secondi ci mette in media a scrivere e mandare un messaggio alla sua AI (se sono tanti, sta cercando il messaggio perfetto invece di decidere). Comincia la revisione da qui: se è veloce diglielo con i numeri, se è fermo fagli vedere dove si è fermato. Nella settimana confronta le decisioni giorno per giorno.",
-  "UN PASSO È LAVORO VERO (app 0.9.347): nei passi del percorso e nel passo di domani mai una micro decisione (scegliere uno strumento, un'app, una piattaforma, un corso): quella la prendi tu e la scrivi dentro al passo come indicazione. Un passo produce qualcosa e dura almeno 25 minuti.",
+  "UN PASSO È LAVORO VERO (app 0.9.347): nei passi del percorso e nel passo di domani mai una micro decisione (scegliere uno strumento, un'app, una piattaforma, un corso): quella la prendi tu e la scrivi dentro al passo come indicazione. Un passo produce qualcosa e dura il tempo vero di quel compito.",
+  /* app 0.9.390 (BUG-122): anche i passi del percorso nuovo delle revisioni e il passo di domani */
+  REGOLA_PASSO_AVANZA,
   "TELEFONO E COMPUTER, SEMPRE TUTTI E DUE (app 0.9.346). dati.tempo e dati.app sono della sorgente che sta guardando a schermo; dati.telefonoOggi e dati.lavoroVero (computerOggi, computerIeri) ci sono sempre: analizza tutti e due i dispositivi insieme e di' dove è andato il tempo su ognuno, senza chiedergli di cambiare filtro. Il computer conta solo la finestra in primo piano e solo con la persona davanti (mouse o tastiera negli ultimi due minuti): quei minuti sono uso attivo vero.",
   "LA DATA NEI PRIMI GIORNI. Se c'è dati.dataVelata, non scrivere nessuna data di arrivo e nessuna previsione di anticipo o ritardo.",
   "Le statistiche anonime (\"imparato\") dicono cosa capita più spesso e cosa ha aiutato altre persone con un sogno simile: usale solo come ispirazione, mai come fatto su di lui, e mai dire che vengono da altri utenti con nomi o numeri.",
@@ -468,7 +471,9 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
       /* DreamMap 0.9.388 (Andrea, 24/11): dopo l'imprevisto raccontato nella revisione della sera nessuno rispondeva; e il passo di domani
          ha la (i) con perché, priorità e tempo. Due risposte brevi, senza domande: l'app le mostra in un riquadro e va avanti da sola. */
       + (b.evento === "imprevisto" ? "\n\nEVENTO \"imprevisto\": la persona ha appena raccontato un imprevisto. In 2-3 frasi brevi: di' che l'hai segnato, cosa cambia concretamente per domani o per il piano (orari, passo, durata), e una cosa sola da fare. Niente domande. Chiudi con fine: true." : "")
-      + (b.evento === "passo_domani" ? "\n\nEVENTO \"passo_domani\": rispondi SOLO con le tre righe che la persona chiede, nell'ordine e con le etichette esatte \"Perché:\", \"Priorità:\" (alta, media o bassa) e \"Tempo:\" (un numero di minuti). Niente altro testo, niente domande. Chiudi con fine: true." : "")
+      + (b.evento === "passo_domani" ? "\n\nEVENTO \"passo_domani\": rispondi SOLO con le tre righe che la persona chiede, nell'ordine e con le etichette esatte \"Perché:\", \"Priorità:\" (alta, media o bassa) e \"Tempo:\" (un numero di minuti). Niente altro testo, niente domande. Chiudi con fine: true."
+        /* app 0.9.390 (BUG-122), Andrea: "Guarda quali prodotti hanno venduto di più, 45 minuti: non ci vogliono 45 minuti". Il passo diceva 15 */
+        + " Il Tempo è quello che il compito richiede davvero (UN PASSO FA AVANZARE), mai 45 minuti di serie: se la persona scrive quanto lo stima il percorso, tieni quel numero, a meno che sia davvero sbagliato. Se il passo è solo guardare dati, leggere numeri o cercare informazioni: nel Perché di' in una frase che quel lavoro lo fa l'intelligenza artificiale in pochi secondi e qual è l'azione da fare con quel dato, Priorità bassa, Tempo 5 minuti." : "")
       + "\n\nRisposte della persona finora: " + turni +(turni >= 6 ? ". CHIUDI ADESSO con fine: true e il riepilogo." : ".");
     const ora = (t: unknown) => { const m = String(t ?? "").match(/^(\d{1,2})[:.](\d{2})$/); return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
     const leggi = (t: string) => {

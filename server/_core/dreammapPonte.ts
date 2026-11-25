@@ -4,6 +4,8 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { rows } from "./dreammapSocial";
 import { whoIs, isIdentity } from "./dreammapRoutes";
+/* app 0.9.390 (BUG-122): anche la roadmap scritta dall'AI dell'utente ha passi che fanno avanzare */
+import { REGOLA_PASSO_AVANZA_BREVE } from "./dreammapRegolaPassi";
 
 /* DreamMap: IL PONTE CON LE ALTRE AI (app 0.9.333).
  *
@@ -236,7 +238,7 @@ const STRUMENTI = [
   },
   {
     name: "scrivi_roadmap",
-    description: "Scrive su DreamMap la roadmap dell'utente verso il suo sogno, dopo avergli fatto le domande che servono (una alla volta). La catena va dal lontano al vicino: fra cinque anni, quest'anno, questo mese, questa settimana, oggi; metti solo gli anelli che finiscono prima della data del sogno. L'utente la vede nell'app e la applica lui.",
+    description: "Scrive su DreamMap la roadmap dell'utente verso il suo sogno, dopo avergli fatto le domande che servono (una alla volta). La catena va dal lontano al vicino: fra cinque anni, quest'anno, questo mese, questa settimana, oggi; metti solo gli anelli che finiscono prima della data del sogno. L'utente la vede nell'app e la applica lui. " + REGOLA_PASSO_AVANZA_BREVE,
     inputSchema: {
       type: "object",
       properties: { piano: { type: "object", properties: { cinque: ANELLO, anno: ANELLO, mese: ANELLO, settimana: ANELLO, oggi: ANELLO }, description: "Gli anelli della roadmap." } },
