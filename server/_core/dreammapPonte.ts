@@ -86,6 +86,11 @@ function ensure(): Promise<void> {
       /* app 0.9.371: quando la sua AI ha usato il collegamento l'ultima volta. "Collegata" vuol dire che l'AI l'ha usato davvero, non
          solo che la chiave esiste. La colonna si aggiunge una volta; se c'e' gia', l'errore si ignora */
       try { await db.execute(sql`ALTER TABLE focuslock_ponte_chiavi ADD COLUMN usatoAt TIMESTAMP NULL`); } catch { /* gia' presente */ }
+      /* 26/11: la roadmap che l'utente vede (JSON, con i passi, o la proposta del Genio non ancora applicata), quando il telefono l'ha
+         mandata, e fino a quale roadmap scritta con scrivi_roadmap l'app ha gia' mostrato (rmVista, ms). Vedi leggi_piano. */
+      try { await db.execute(sql`ALTER TABLE focuslock_ponte_chiavi ADD COLUMN pianoJson TEXT NULL`); } catch { /* gia' presente */ }
+      try { await db.execute(sql`ALTER TABLE focuslock_ponte_chiavi ADD COLUMN pianoAt TIMESTAMP NULL`); } catch { /* gia' presente */ }
+      try { await db.execute(sql`ALTER TABLE focuslock_ponte_chiavi ADD COLUMN rmVista BIGINT NULL`); } catch { /* gia' presente */ }
     })().catch((e) => { pronto = null; throw e; });
   }
   return pronto;
@@ -128,10 +133,10 @@ function pulisciBivio(b: any, periodo: string): any {
   const x = { revisione, domanda: c(b.domanda, 140), resto: c(b.resto, 60), cambio: c(b.cambio, 60) };
   return revisione && (x.domanda || x.resto || x.cambio) ? x : null;
 }
-function pulisciPiano(p: any): any {
-  if (!p || typeof p !== "object") return null;
+const ANELLI = ["cinque", "anno", "mese", "settimana", "oggi"];
+function anelliPuliti(p: any): any {
   const out: any = {};
-  for (const k of ["cinque", "anno", "mese", "settimana", "oggi"]) {
+  for (const k of ANELLI) {
     const x = p[k];
     if (!x || typeof x !== "object") continue;
     const testo = String(x.testo ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
@@ -141,7 +146,62 @@ function pulisciPiano(p: any): any {
   }
   const bivi = (Array.isArray(p.bivi) ? p.bivi : []).map((b: any) => pulisciBivio(b, "")).filter(Boolean).slice(0, 8);
   if (bivi.length) out.bivi = bivi;
+  return out;
+}
+function pulisciPiano(p: any): any {
+  if (!p || typeof p !== "object") return null;
+  const out = anelliPuliti(p);
   return out.settimana || out.oggi || out.mese ? out : null;
+}
+
+/* 26/11, LEGGI_PIANO LEGGEVA UN'ALTRA COSA. Sull'account vero rispondeva "Quest'anno: da scrivere, Questo mese: da scrivere..." con la
+ * roadmap del Genio fatta il giorno prima. Il telefono mandava solo cinque righe costruite con gli anelli GIA' APPLICATI (www/js/
+ * albero-maestro.js, amAlbero: fl_orizzonti), senza passi; la roadmap su misura del Genio invece resta nella sua chat, nella carta con
+ * "Applica la roadmap" (agente.js, agPianoHtml), finche' l'utente non la tocca. Adesso il telefono (ponte.js, pntRoadmapVista) manda anche
+ * la roadmap che l'utente vede: gli anelli applicati con i passi ancora da fare, oppure, se non ce ne sono, l'ultima proposta del Genio.
+ * Qui si pulisce (stessi limiti di scrivi_roadmap) e leggi_piano la racconta. */
+export function pulisciVista(v: any): any {
+  if (!v || typeof v !== "object") return null;
+  const out: any = anelliPuliti(v);
+  delete out.bivi;
+  const riga = (t: unknown, n: number) => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  out.fonte = v.fonte === "genio" ? "genio" : "app";
+  const at = Math.round(Number(v.at) || 0);
+  if (at > 0) out.at = at;
+  const sogno = riga(v.sogno, 160), adesso = riga(v.adesso, 200);
+  if (sogno) out.sogno = sogno;
+  if (adesso) out.adesso = adesso;
+  return ANELLI.some((k) => out[k]) || sogno ? out : null;
+}
+const NOMI_ANELLI: Record<string, string> = { cinque: "Fra cinque anni", anno: "Quest'anno", mese: "Questo mese", settimana: "Questa settimana", oggi: "Oggi" };
+const quando = (ms: number) => new Date(ms).toLocaleString("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", " alle");
+/** Il testo di leggi_piano. `testo` sono le cinque righe di sempre (anche dalle app di prima), `vista` la roadmap che si vede (pulisciVista),
+ *  `proposta` quando la sua AI ha scritto l'ultima roadmap con scrivi_roadmap e `rmVista` fin dove l'app l'ha mostrata (ms, 0 = non si sa). */
+export function testoLeggiPiano(x: { testo: string; vista: any; pianoAt: number; rmVista: number; proposta: number }): string {
+  const righe: string[] = [];
+  const v = x.vista;
+  if (v && ANELLI.some((k) => v[k])) {
+    if (v.sogno) righe.push("Il sogno: " + v.sogno);
+    if (v.fonte === "genio") righe.push("Questa è la roadmap proposta dal Genio di DreamMap" + (v.at ? " il " + quando(v.at) : "") + ": l'utente la vede nella chat del Genio, ma non l'ha ancora applicata al suo percorso (nell'app si applica toccando \"Applica la roadmap\" sotto la proposta). Trattala come il suo piano.");
+    for (const k of ANELLI) {
+      const a = v[k]; if (!a) continue;
+      righe.push(NOMI_ANELLI[k] + ": " + (a.testo || "da scrivere"));
+      for (const p of a.passi || []) righe.push("  - " + p);
+    }
+    if (v.adesso) righe.push("Adesso, una cosa sola: " + v.adesso);
+  } else {
+    righe.push(String(x.testo || "").trim());
+    if (v?.sogno && !/^Il sogno:/m.test(righe[0])) righe.unshift("Il sogno: " + v.sogno);
+    const vuoto = ["Quest'anno", "Questo mese", "Questa settimana"].every((n) => new RegExp("^" + n + ": da scrivere$", "m").test(righe.join("\n")));
+    if (vuoto) righe.push("", "Nel percorso dell'app non c'è ancora una roadmap applicata. Se l'utente dice che il Genio gliel'ha già fatta, è nella chat del Genio: chiedigli di toccare \"Applica la roadmap\" sotto la proposta e di riaprire DreamMap, poi rileggi. Altrimenti fagli le domande una alla volta e scrivila tu con scrivi_roadmap.");
+  }
+  if (x.proposta) {
+    righe.push("", x.rmVista >= x.proposta
+      ? "La roadmap che hai scritto con scrivi_roadmap il " + quando(x.proposta) + " l'utente l'ha già vista nell'app."
+      : "La roadmap che hai scritto con scrivi_roadmap il " + quando(x.proposta) + " l'app non l'ha ancora mostrata all'utente: comparirà quando apre DreamMap, con il pulsante \"Applica il percorso\".");
+  }
+  if (x.pianoAt) righe.push("(Piano mandato dal telefono il " + quando(x.pianoAt) + ".)");
+  return righe.join("\n").trim();
 }
 /* app 0.9.367, Andrea: "il mio agente deve poter creare trigger su misura per la chiamata dei sogni: per esempio una nuova idea che
  * mi distrae dal piano. Prima di dare il punto nella partita me lo fa notare con una chiamata, e dopo la risposta il bivio con la data
@@ -173,7 +233,9 @@ async function scriviRoadmap(chiave: string, a: any): Promise<string> {
   if (!db) throw new Error("database unavailable");
   const j = JSON.stringify(piano);
   await db.execute(sql`INSERT INTO focuslock_ponte_roadmap (chiave, piano, createdAt) VALUES (${chiave}, ${j}, NOW()) ON DUPLICATE KEY UPDATE piano = ${j}, createdAt = NOW()`);
-  return "Roadmap inviata a DreamMap: l'utente la vede nell'app e la applica con un tocco.";
+  /* 26/11: prima diceva "l'utente la vede nell'app" anche quando l'app non la cercava (ponte.js controllava solo nei tre giorni dopo il
+     foglio del resoconto della sera). Si dice quello che succede davvero, e leggi_piano dice se l'app l'ha gia' mostrata. */
+  return "Roadmap inviata a DreamMap: compare quando l'utente apre DreamMap, e la applica con un tocco (Applica il percorso). Con leggi_piano vedi se l'app gliel'ha già mostrata.";
 }
 /* app 0.9.351: la conferma della sua AI che una tappa e' fatta, con la prova. Non segna niente da sola: la legge la verifica. */
 const MAX_VERIFICHE_GIORNO = 50;
@@ -292,7 +354,7 @@ const STRUMENTI = [
   },
 ];
 
-async function rispondiMcp(chiave: string, m: any): Promise<any> {
+export async function rispondiMcp(chiave: string, m: any): Promise<any> {
   const id = m?.id ?? null;
   const ok = (result: unknown) => ({ jsonrpc: "2.0", id, result });
   const ko = (code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
@@ -318,8 +380,16 @@ async function rispondiMcp(chiave: string, m: any): Promise<any> {
         if (nome === "crea_condizione_chiamata") return ok({ content: [{ type: "text", text: await scriviCondizione(chiave, a) }] });
         if (nome === "fai_squillare") return ok({ content: [{ type: "text", text: await scriviSquillo(chiave, a) }] });
         if (nome === "leggi_piano") {
-          const r = await rows(sql`SELECT piano FROM focuslock_ponte_chiavi WHERE chiave = ${chiave} LIMIT 1`);
-          return ok({ content: [{ type: "text", text: String(r[0]?.piano || "Il piano non e' ancora arrivato: chiedi all'utente di aprire DreamMap.") }] });
+          /* 26/11: oltre alle cinque righe, la roadmap che l'utente vede (pianoJson) e se l'ultima di scrivi_roadmap l'app l'ha mostrata */
+          let r: any[];
+          try { r = await rows(sql`SELECT piano, pianoJson, UNIX_TIMESTAMP(pianoAt) * 1000 AS pianoAt, rmVista FROM focuslock_ponte_chiavi WHERE chiave = ${chiave} LIMIT 1`); }
+          catch { r = await rows(sql`SELECT piano FROM focuslock_ponte_chiavi WHERE chiave = ${chiave} LIMIT 1`); }
+          let vista: any = null; try { vista = r[0]?.pianoJson ? pulisciVista(JSON.parse(String(r[0].pianoJson))) : null; } catch { vista = null; }
+          if (!r[0]?.piano && !vista) return ok({ content: [{ type: "text", text: "Il piano non e' ancora arrivato: chiedi all'utente di aprire DreamMap." }] });
+          let proposta = 0;
+          try { const p = await rows(sql`SELECT createdAt FROM focuslock_ponte_roadmap WHERE chiave = ${chiave} LIMIT 1`); proposta = p[0]?.createdAt ? new Date(p[0].createdAt as any).getTime() || 0 : 0; } catch { proposta = 0; }
+          const text = testoLeggiPiano({ testo: String(r[0]?.piano || ""), vista, pianoAt: Number(r[0]?.pianoAt) || 0, rmVista: Number(r[0]?.rmVista) || 0, proposta });
+          return ok({ content: [{ type: "text", text }] });
         }
         return ko(-32602, "strumento sconosciuto");
       } catch (e: any) {
@@ -436,7 +506,9 @@ export function registerDreamMapPonteRoutes(app: Express) {
       res.json({ piano, at: r[0].createdAt ? new Date(r[0].createdAt as any).getTime() : 0 });
     } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
   });
-  /* l'app manda il piano di oggi, cosi' l'AI puo' leggerlo */
+  /* l'app manda il piano di oggi, cosi' l'AI puo' leggerlo.
+   * 26/11: con `roadmap` (la roadmap che l'utente vede, pulisciVista) e `rmVista` (fino a quale roadmap di scrivi_roadmap l'app ha
+   * mostrato, ms). Le app di prima mandano solo `piano`: la roadmap che c'era resta. */
   app.post("/api/focuslock/ponte/piano", async (req: Request, res: Response) => {
     const chiave = String(req.body?.chiave || "");
     try {
@@ -444,7 +516,19 @@ export function registerDreamMapPonteRoutes(app: Express) {
       if (!(await esiste(chiave))) { res.status(404).json({ error: "chiave sconosciuta" }); return; }
       const db = await getDb();
       if (!db) throw new Error("database unavailable");
-      await db.execute(sql`UPDATE focuslock_ponte_chiavi SET piano = ${String(req.body?.piano || "").slice(0, 4000)} WHERE chiave = ${chiave}`);
+      const testo = String(req.body?.piano || "").slice(0, 4000);
+      const vista = req.body?.roadmap !== undefined ? pulisciVista(req.body.roadmap) : undefined;
+      try {
+        if (vista === undefined) await db.execute(sql`UPDATE focuslock_ponte_chiavi SET piano = ${testo}, pianoAt = NOW() WHERE chiave = ${chiave}`);
+        else {
+          const j = vista ? JSON.stringify(vista).slice(0, 12000) : null;
+          const rmVista = Math.max(0, Math.round(Number(req.body?.rmVista) || 0));
+          await db.execute(sql`UPDATE focuslock_ponte_chiavi SET piano = ${testo}, pianoJson = ${j}, pianoAt = NOW(), rmVista = ${rmVista} WHERE chiave = ${chiave}`);
+        }
+      } catch {
+        /* senza le colonne nuove (ALTER non riuscito) resta almeno il piano di sempre */
+        await db.execute(sql`UPDATE focuslock_ponte_chiavi SET piano = ${testo} WHERE chiave = ${chiave}`);
+      }
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: e?.message || "non disponibile" }); }
   });
