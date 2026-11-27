@@ -564,6 +564,9 @@ function AzioniPubblicazione({ d, onModifica, onElimina }: { d: BozzaConStato; o
   const subito = trpc.social.publishNow.useMutation({ onSuccess: ricarica, onError: (e) => toast.error(e.message) });
   const annulla = trpc.social.cancelPublish.useMutation({ onSuccess: ricarica, onError: (e) => toast.error(e.message) });
   const approva = trpc.social.draftUpdate.useMutation({ onSuccess: ricarica });
+  // Instagram e' il canale principale; Facebook solo se la Pagina e' davvero collegata.
+  const canali = trpc.social.publishStatus.useQuery(undefined, { staleTime: 5 * 60_000, retry: false });
+  const pubblicabile = d.platform === "instagram" || (d.platform === "facebook" && !!canali.data?.facebookAttivo);
   const [aperto, setAperto] = useState(false);
   const [quando, setQuando] = useState(prossimaOra);
   const occupato = pianifica.isPending || subito.isPending || annulla.isPending;
@@ -590,8 +593,9 @@ function AzioniPubblicazione({ d, onModifica, onElimina }: { d: BozzaConStato; o
     );
   }
 
-  // Pinterest, blog, X: niente pubblicazione via API qui. Resta l'approvazione di prima.
-  if (!PUBBLICABILI.has(d.platform)) {
+  // Pinterest, blog, X (e Facebook finche' la Pagina non e' collegata): niente
+  // pubblicazione via API qui. Resta l'approvazione di prima.
+  if (!PUBBLICABILI.has(d.platform) || !pubblicabile) {
     return (
       <div className="flex gap-2 mt-3 pt-3 items-center" style={piede}>
         <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={onModifica}><Pencil className="w-3.5 h-3.5 mr-1" />Modifica</Button>

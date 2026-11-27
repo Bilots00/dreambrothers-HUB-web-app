@@ -454,3 +454,84 @@ describe("conversione per Instagram (solo JPEG)", () => {
     expect(meta.hasAlpha).toBe(false);
   });
 });
+
+describe("Instagram con Instagram Login (senza Pagina)", () => {
+  it("client su graph.instagram.com: host giusto, token in query per le GET, nel corpo per le POST", async () => {
+    const { createGraphClient: crea, IG_HOST } = await import("./socialPublish");
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ id: "x" }) }));
+    const g = crea(TOKEN, { fetchImpl, host: IG_HOST, version: "v23.0" });
+    await g.get("/me", { fields: "user_id" });
+    await g.post("/17841/media", { image_url: "https://x/y.jpg" });
+    const [urlGet, initGet] = fetchImpl.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
+    expect(urlGet.startsWith("https://graph.instagram.com/v23.0/me?")).toBe(true);
+    expect(new URL(urlGet).searchParams.get("access_token")).toBe(TOKEN);
+    expect(initGet.headers.Authorization).toBeUndefined();
+    const [urlPost, initPost] = fetchImpl.mock.calls[1] as unknown as [string, { body: string }];
+    expect(urlPost).toBe("https://graph.instagram.com/v23.0/17841/media");
+    expect(new URLSearchParams(initPost.body).get("access_token")).toBe(TOKEN);
+  });
+
+  it("errore di rete con l'URL nel messaggio: il token esce ripulito", async () => {
+    const { createGraphClient: crea, IG_HOST } = await import("./socialPublish");
+    const fetchImpl = async (url: string) => { throw new TypeError(`fetch failed for ${url}`); };
+    const e = await crea(TOKEN, { fetchImpl, host: IG_HOST }).get("/me").catch((x) => x);
+    expect(String(e.message)).not.toContain(TOKEN);
+  });
+
+  it("controllaTokenInstagram: account e permesso di pubblicare ok", async () => {
+    const { controllaTokenInstagram } = await import("./socialPublish");
+    const { graph, chiamate } = grafoFinto((m, path) => path === "/me"
+      ? { user_id: "IG42", username: "dreambrothers", account_type: "BUSINESS" }
+      : { data: [{ quota_usage: 1 }] });
+    const s = await controllaTokenInstagram(graph);
+    expect(s).toEqual({ valido: true, igUserId: "IG42", igUsername: "dreambrothers", permessiMancanti: [], problemi: [] });
+    expect(chiamate[1].path).toBe("/IG42/content_publishing_limit");
+  });
+
+  it("controllaTokenInstagram: senza permesso di pubblicazione lo dice", async () => {
+    const { controllaTokenInstagram } = await import("./socialPublish");
+    const { graph } = grafoFinto((m, path) => {
+      if (path === "/me") return { user_id: "IG42", username: "db", account_type: "MEDIA_CREATOR" };
+      throw new ErrorePubblicazione("Meta 10: permission", true, 10);
+    });
+    const s = await controllaTokenInstagram(graph);
+    expect(s.permessiMancanti).toEqual(["instagram_business_content_publish"]);
+  });
+
+  it("controllaTokenInstagram: account personale = problema chiaro", async () => {
+    const { controllaTokenInstagram } = await import("./socialPublish");
+    const { graph } = grafoFinto((m, path) => path === "/me" ? { user_id: "1", username: "x", account_type: "PERSONAL" } : {});
+    const s = await controllaTokenInstagram(graph);
+    expect(s.problemi.join(" ")).toMatch(/professionale/);
+  });
+
+  it("rinnovaTokenInstagram: chiama refresh_access_token e calcola la scadenza", async () => {
+    const { rinnovaTokenInstagram } = await import("./socialPublish");
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ access_token: "NUOVO", expires_in: 5184000 }) }));
+    const prima = Date.now();
+    const r = await rinnovaTokenInstagram(TOKEN, fetchImpl);
+    const url = new URL((fetchImpl.mock.calls[0] as unknown as [string])[0]);
+    expect(url.origin + url.pathname).toBe("https://graph.instagram.com/refresh_access_token");
+    expect(url.searchParams.get("grant_type")).toBe("ig_refresh_token");
+    expect(r.token).toBe("NUOVO");
+    expect(r.scadeIl.getTime() - prima).toBeGreaterThanOrEqual(5184000 * 1000 - 1000);
+  });
+
+  it("rinnovaTokenInstagram: errore Meta senza token nel messaggio", async () => {
+    const { rinnovaTokenInstagram } = await import("./socialPublish");
+    const fetchImpl = async () => ({ ok: false, status: 400, json: async () => ({ error: { code: 190, message: `bad ${TOKEN}` } }) });
+    const e = await rinnovaTokenInstagram(TOKEN, fetchImpl).catch((x) => x);
+    expect(e.message).toMatch(/Rinnovo del token Instagram non riuscito/);
+    expect(e.message).not.toContain(TOKEN);
+  });
+
+  it("scegliToken: usa il rinnovato solo se nasce dal token che sta su Railway", async () => {
+    const { scegliToken } = await import("./socialPublishStore");
+    const { createHash } = await import("node:crypto");
+    const h = (t: string) => createHash("sha256").update(t).digest("hex");
+    const riga = { token: "RINNOVATO", sourceHash: h("ENV1"), expiresAt: null, refreshedAt: null };
+    expect(scegliToken("ENV1", riga)).toBe("RINNOVATO");
+    expect(scegliToken("ENV2", riga)).toBe("ENV2"); // Andrea ha incollato un token nuovo: vince quello
+    expect(scegliToken("ENV1", null)).toBe("ENV1");
+  });
+});

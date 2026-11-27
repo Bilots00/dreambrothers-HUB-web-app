@@ -10,7 +10,7 @@ import { riprendiWallartAuto } from "../productArtistApprovals";
 import { sincronizzaChargebacks } from "../shopifyChargebacks";
 import { giroWatchdog } from "../careWatchdog";
 import { runNightlyBatch, resumeQueueOnBoot } from "../music/service";
-import { eseguiCicloPubblicazione, configMeta } from "../socialPublishStore";
+import { eseguiCicloPubblicazione, pubblicazioneAttiva, rinnovaTokenSeServe, tokenInstagramEnv } from "../socialPublishStore";
 
 // Scheduler in-process (il server Railway è always-on): job giornalieri a orario
 // fisso italiano, indipendenti dai bottoni della UI e dal browser aperto.
@@ -200,8 +200,8 @@ export function registerDailySchedules() {
 
   // Pubblicazione social ogni 5 minuti: le bozze che Andrea ha approvato e
   // pianificato da Bozze escono su Instagram / Pagina Facebook all'ora scelta.
-  // Senza token di Pagina non c'e' niente da pubblicare e il job resta spento.
-  if (configMeta()) {
+  // Senza nessun canale collegato non c'e' niente da pubblicare e il job resta spento.
+  if (pubblicazioneAttiva()) {
     const SOCIAL_PUBLISH_MS = 5 * 60 * 1000;
     const giroSocial = async () => {
       try {
@@ -218,7 +218,22 @@ export function registerDailySchedules() {
     socialTimer.unref?.();
     console.log("[Scheduler] \"social-publish\" attivo ogni 5 min (bozze approvate e pianificate)");
   } else {
-    console.log("[Scheduler] social-publish spento — manca META_PAGE_ACCESS_TOKEN");
+    console.log("[Scheduler] social-publish spento — manca META_IG_ACCESS_TOKEN (o META_PAGE_ACCESS_TOKEN)");
+  }
+
+  // Il token Instagram dura 60 giorni: si rinnova da solo una volta a settimana
+  // (il controllo e' giornaliero, il rinnovo parte solo se sono passati 7 giorni).
+  if (tokenInstagramEnv()) {
+    const rinnovo = async () => {
+      try {
+        const r = await rinnovaTokenSeServe();
+        if (r === "rinnovato") console.log("[Scheduler] instagram-token: rinnovato per altri 60 giorni");
+      } catch (err) {
+        console.warn("[Scheduler] instagram-token: rinnovo fallito:", err instanceof Error ? err.message : err);
+      }
+    };
+    setTimeout(rinnovo, 120_000).unref?.();
+    scheduleDaily(4, 10, "instagram-token-refresh", rinnovo);
   }
 
   // Wall art in automatico: le pubblicazioni approvate che aspettano i file di

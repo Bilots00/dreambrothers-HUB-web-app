@@ -34,7 +34,7 @@ export const MAX_CAPTION = 2200;
 export const MAX_HASHTAG = 30;
 export const MAX_CAROSELLO = 20;
 
-type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
+export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
   ok: boolean;
   status: number;
   json(): Promise<unknown>;
@@ -71,9 +71,22 @@ function traduciErrore(err: { message?: string; code?: number; error_subcode?: n
   return `Meta ${code || "?"}: ${base}`;
 }
 
-export function createGraphClient(token: string, opts: { fetchImpl?: FetchLike; version?: string } = {}): GraphClient {
-  const f: FetchLike = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
-  const base = `https://graph.facebook.com/${opts.version ?? GRAPH_VERSION}`;
+export function createGraphClient(token: string, opts: { fetchImpl?: FetchLike; version?: string; host?: string } = {}): GraphClient {
+  const fetchGrezzo: FetchLike = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  // Un errore di rete puo' riportare l'URL: il token esce ripulito anche da li'.
+  const f: FetchLike = async (url, init) => {
+    try {
+      return await fetchGrezzo(url, init);
+    } catch (e) {
+      const err = new TypeError(pulisci(e instanceof Error ? e.message : String(e), token));
+      throw err;
+    }
+  };
+  const host = opts.host ?? "graph.facebook.com";
+  const base = `https://${host}/${opts.version ?? GRAPH_VERSION}`;
+  // graph.instagram.com documenta il token come parametro: li' va in query
+  // (mai loggata). Su graph.facebook.com resta nell'header Authorization.
+  const tokenInQuery = host === "graph.instagram.com";
 
   const leggi = async <T>(res: Awaited<ReturnType<FetchLike>>): Promise<T> => {
     let json: Record<string, unknown>;
@@ -92,10 +105,10 @@ export function createGraphClient(token: string, opts: { fetchImpl?: FetchLike; 
 
   return {
     async get<T>(path: string, params: Record<string, string> = {}) {
-      const qs = new URLSearchParams(params).toString();
+      const qs = new URLSearchParams(tokenInQuery ? { ...params, access_token: token } : params).toString();
       const res = await f(`${base}${path}${qs ? `?${qs}` : ""}`, {
         method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: tokenInQuery ? {} : { Authorization: `Bearer ${token}` },
       });
       return leggi<T>(res);
     },
@@ -322,6 +335,9 @@ export interface StatoToken {
   permessiMancanti: string[];
   scadeIl: string | null; // null = non scade
   problemi: string[];
+  /** "instagram-login" = Instagram senza Pagina; "pagina" = tutto tramite la Pagina Facebook. */
+  modo?: "instagram-login" | "pagina" | null;
+  facebookAttivo?: boolean;
 }
 
 /**
@@ -384,4 +400,71 @@ export async function controllaToken(
     stato.problemi.push(`Permessi mancanti: ${stato.permessiMancanti.join(", ")}.`);
   }
   return stato;
+}
+
+// ─── Instagram API con Instagram Login (senza Pagina Facebook) ──────────────
+// Fonte: developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login
+// "This API setup does not require a Facebook Page to be linked". Host
+// graph.instagram.com, permessi instagram_business_basic e
+// instagram_business_content_publish. Il token della dashboard dura 60 giorni
+// e si rinnova con /refresh_access_token (token vivo e vecchio di almeno 24 ore).
+
+export const IG_HOST = "graph.instagram.com";
+export const PERMESSI_IG_LOGIN = ["instagram_business_basic", "instagram_business_content_publish"] as const;
+
+export interface StatoInstagram {
+  valido: boolean;
+  igUserId: string | null;
+  igUsername: string | null;
+  permessiMancanti: string[];
+  problemi: string[];
+}
+
+/** Il token Instagram funziona? E puo' pubblicare? (content_publishing_limit richiede il permesso di pubblicazione). */
+export async function controllaTokenInstagram(graph: GraphClient): Promise<StatoInstagram> {
+  const s: StatoInstagram = { valido: false, igUserId: null, igUsername: null, permessiMancanti: [], problemi: [] };
+  try {
+    const me = await graph.get<{ user_id?: string; id?: string; username?: string; account_type?: string }>(
+      "/me", { fields: "user_id,username,account_type" },
+    );
+    s.valido = true;
+    s.igUserId = me.user_id ?? me.id ?? null;
+    s.igUsername = me.username ?? null;
+    if (me.account_type && !/BUSINESS|MEDIA_CREATOR|CREATOR/i.test(me.account_type)) {
+      s.problemi.push(`L'account Instagram e' di tipo ${me.account_type}: serve un account professionale (Business o Creator).`);
+    }
+  } catch (e) {
+    s.problemi.push(e instanceof Error ? e.message : String(e));
+    return s;
+  }
+  try {
+    await graph.get(`/${s.igUserId}/content_publishing_limit`, { fields: "quota_usage" });
+  } catch (e) {
+    if (e instanceof ErrorePubblicazione && (e.codiceMeta === 10 || e.codiceMeta === 200)) {
+      s.permessiMancanti.push("instagram_business_content_publish");
+      s.problemi.push("Il token non ha il permesso di pubblicare (instagram_business_content_publish).");
+    } else {
+      s.problemi.push(`Non riesco a leggere il limite di pubblicazione: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return s;
+}
+
+/** Rinnova il token Instagram: nuovo token valido altri 60 giorni. */
+export async function rinnovaTokenInstagram(
+  token: string,
+  fetchImpl: FetchLike = globalThis.fetch as unknown as FetchLike,
+): Promise<{ token: string; scadeIl: Date }> {
+  const url = `https://${IG_HOST}/refresh_access_token?${new URLSearchParams({ grant_type: "ig_refresh_token", access_token: token })}`;
+  let res: Awaited<ReturnType<FetchLike>>;
+  try {
+    res = await fetchImpl(url, { method: "GET" });
+  } catch (e) {
+    throw new ErrorePubblicazione(pulisci(`Rinnovo del token Instagram non riuscito: ${e instanceof Error ? e.message : String(e)}`, token));
+  }
+  const j = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: { message?: string; code?: number } };
+  if (j.error || !j.access_token) {
+    throw new ErrorePubblicazione(pulisci(`Rinnovo del token Instagram non riuscito: ${j.error?.message ?? `HTTP ${res.status}`}`, token), false, j.error?.code);
+  }
+  return { token: j.access_token, scadeIl: new Date(Date.now() + (j.expires_in ?? 60 * 86_400) * 1000) };
 }

@@ -12,17 +12,20 @@
  *     non si riprova da sola.
  *  3. Al massimo 3 tentativi, con attesa crescente; gli errori definitivi
  *     (permesso mancante, caption troppo lunga) fermano subito.
- *  4. Il token sta nelle variabili Railway (META_PAGE_ACCESS_TOKEN), come gli
- *     altri segreti dell'Hub: mai nel client, mai nei log.
+ *  4. Il token sta nelle variabili Railway (META_IG_ACCESS_TOKEN per Instagram
+ *     senza Pagina, META_PAGE_ACCESS_TOKEN per la Pagina Facebook), come gli
+ *     altri segreti dell'Hub: mai nel client, mai nei log. Quello Instagram
+ *     rinnovato vive nella tabella social_tokens, solo lato server.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { sql } from "drizzle-orm";
 import { getDb, getSocialDraftById, getSocialDraftAssets } from "./db";
 import { basePubblica } from "./artworkLink";
 import {
-  createGraphClient, controllaToken, pubblicaInstagram, pubblicaFacebook, ErrorePubblicazione,
+  createGraphClient, controllaToken, controllaTokenInstagram, rinnovaTokenInstagram, IG_HOST,
+  pubblicaInstagram, pubblicaFacebook, ErrorePubblicazione,
   type EsitoPubblicazione, type GraphClient, type MediaPubblico, type PostDaPubblicare, type StatoToken,
 } from "./socialPublish";
 
@@ -146,26 +149,143 @@ export function configMeta(): ConfigMeta | null {
   };
 }
 
+// ─── Instagram con Instagram Login: token che si rinnova da solo ─────────────
+// La Pagina Facebook non serve. Il token della dashboard Meta dura 60 giorni:
+// l'Hub lo rinnova ogni settimana e tiene il token nuovo in una tabella sua
+// (social_tokens), MAI in user_settings, che la pagina Impostazioni legge dal
+// client. Se Andrea incolla un token nuovo su Railway, vince quello.
+
+const RINNOVO_OGNI_MS = 7 * 86_400_000;
+
+function impronta(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export function tokenInstagramEnv(): string | null {
+  return (process.env.META_IG_ACCESS_TOKEN || "").trim() || null;
+}
+
+let tabellaToken: Promise<void> | null = null;
+function ensureTabellaToken(): Promise<void> {
+  if (!tabellaToken) {
+    tabellaToken = esegui(sql`CREATE TABLE IF NOT EXISTS social_tokens (
+      name VARCHAR(32) PRIMARY KEY,
+      token TEXT NOT NULL,
+      sourceHash CHAR(64) NOT NULL,
+      expiresAt TIMESTAMP NULL,
+      refreshedAt TIMESTAMP NULL
+    )`).then(() => undefined).catch((e) => { tabellaToken = null; throw e; });
+  }
+  return tabellaToken;
+}
+
+interface RigaToken { token: string; sourceHash: string; expiresAt: Date | null; refreshedAt: Date | null }
+
+async function rigaToken(): Promise<RigaToken | null> {
+  await ensureTabellaToken();
+  const rs = await righe(sql`SELECT token, sourceHash, expiresAt, refreshedAt FROM social_tokens WHERE name = 'instagram' LIMIT 1`);
+  return (rs[0] as RigaToken | undefined) ?? null;
+}
+
+/** Il token da usare adesso: quello rinnovato, se nasce dallo stesso token che sta su Railway. */
+export function scegliToken(env: string, riga: RigaToken | null): string {
+  return riga && riga.sourceHash === impronta(env) ? riga.token : env;
+}
+
+export async function tokenInstagramAttuale(): Promise<string | null> {
+  const env = tokenInstagramEnv();
+  if (!env) return null;
+  try {
+    return scegliToken(env, await rigaToken());
+  } catch {
+    return env; // senza DB si usa quello di Railway
+  }
+}
+
+let ultimoErroreRinnovo: string | null = null;
+
+/** Rinnova il token se l'ultimo rinnovo ha piu' di 7 giorni (o non c'e' mai stato). */
+export async function rinnovaTokenSeServe(
+  deps: { rinnova?: typeof rinnovaTokenInstagram; ora?: () => number } = {},
+): Promise<"rinnovato" | "non-serve" | "spento"> {
+  const env = tokenInstagramEnv();
+  if (!env) return "spento";
+  const ora = deps.ora?.() ?? Date.now();
+  const riga = await rigaToken();
+  const daRigaGiusta = riga && riga.sourceHash === impronta(env);
+  if (daRigaGiusta && riga!.refreshedAt && ora - new Date(riga!.refreshedAt).getTime() < RINNOVO_OGNI_MS) return "non-serve";
+  try {
+    const nuovo = await (deps.rinnova ?? rinnovaTokenInstagram)(scegliToken(env, riga));
+    await esegui(sql`INSERT INTO social_tokens (name, token, sourceHash, expiresAt, refreshedAt)
+      VALUES ('instagram', ${nuovo.token}, ${impronta(env)}, ${nuovo.scadeIl}, ${new Date(ora)})
+      ON DUPLICATE KEY UPDATE token = VALUES(token), sourceHash = VALUES(sourceHash),
+        expiresAt = VALUES(expiresAt), refreshedAt = VALUES(refreshedAt)`);
+    ultimoErroreRinnovo = null;
+    cacheStato = null;
+    return "rinnovato";
+  } catch (e) {
+    ultimoErroreRinnovo = e instanceof Error ? e.message : String(e);
+    throw e;
+  }
+}
+
+/** C'e' almeno un canale collegato? Senza, lo scheduler resta spento. */
+export function pubblicazioneAttiva(): boolean {
+  return !!tokenInstagramEnv() || !!configMeta();
+}
+
 let cacheStato: { quando: number; stato: StatoToken } | null = null;
 
-/** Il controllo del token per la pagina Bozze (cache 10 minuti, il token non esce mai). */
+/**
+ * Il controllo dei collegamenti per la pagina Bozze (cache 10 minuti, il token
+ * non esce mai). Instagram e' il canale che conta; Facebook e' facoltativo e
+ * non collegato non e' un problema.
+ */
 export async function statoToken(forza = false): Promise<StatoToken> {
+  if (!forza && cacheStato && Date.now() - cacheStato.quando < 10 * 60_000) return cacheStato.stato;
   const cfg = configMeta();
-  if (!cfg) {
-    return {
+  const igToken = await tokenInstagramAttuale();
+  let stato: StatoToken;
+
+  if (igToken) {
+    const ig = await controllaTokenInstagram(createGraphClient(igToken, { host: IG_HOST }));
+    const riga = await rigaToken().catch(() => null);
+    stato = {
+      configurato: true, valido: ig.valido, pagina: null, pageId: null,
+      igUserId: (process.env.META_IG_USER_ID || "").trim() || ig.igUserId, igUsername: ig.igUsername,
+      permessiMancanti: ig.permessiMancanti, scadeIl: riga?.expiresAt ? new Date(riga.expiresAt).toISOString() : null,
+      problemi: [...ig.problemi], modo: "instagram-login", facebookAttivo: false,
+    };
+    if (ultimoErroreRinnovo) stato.problemi.push(ultimoErroreRinnovo);
+    if (cfg) {
+      const fb = await controllaToken(createGraphClient(cfg.token), cfg.token, cfg.pageId, { graphDebug: graphDebugApp() });
+      stato.pagina = fb.pagina;
+      stato.pageId = fb.pageId;
+      // Per la Pagina contano solo i permessi della Pagina: Instagram passa dall'altro token.
+      const problemiFb = fb.problemi.filter((p) => !/Instagram/i.test(p));
+      stato.facebookAttivo = fb.valido && problemiFb.length === 0;
+      stato.problemi.push(...problemiFb.map((p) => `Facebook: ${p}`));
+    }
+  } else if (cfg) {
+    stato = await controllaToken(createGraphClient(cfg.token), cfg.token, cfg.pageId, { graphDebug: graphDebugApp() });
+    if (cfg.igUserId) stato.igUserId = cfg.igUserId;
+    stato.modo = "pagina";
+    stato.facebookAttivo = stato.valido && !!stato.pageId;
+  } else {
+    stato = {
       configurato: false, valido: false, pagina: null, pageId: null, igUserId: null, igUsername: null,
-      permessiMancanti: [], scadeIl: null,
-      problemi: ["Manca META_PAGE_ACCESS_TOKEN nelle variabili Railway: la pubblicazione automatica e' spenta."],
+      permessiMancanti: [], scadeIl: null, modo: null, facebookAttivo: false,
+      problemi: ["Instagram non e' ancora collegato: manca META_IG_ACCESS_TOKEN nelle variabili Railway."],
     };
   }
-  if (!forza && cacheStato && Date.now() - cacheStato.quando < 10 * 60_000) return cacheStato.stato;
-  const appId = (process.env.META_APP_ID || "").trim();
-  const appSecret = (process.env.META_APP_SECRET || "").trim();
-  const graphDebug = appId && appSecret ? createGraphClient(`${appId}|${appSecret}`) : undefined;
-  const stato = await controllaToken(createGraphClient(cfg.token), cfg.token, cfg.pageId, { graphDebug });
-  if (cfg.igUserId) stato.igUserId = cfg.igUserId;
   cacheStato = { quando: Date.now(), stato };
   return stato;
+}
+
+function graphDebugApp(): GraphClient | undefined {
+  const appId = (process.env.META_APP_ID || "").trim();
+  const appSecret = (process.env.META_APP_SECRET || "").trim();
+  return appId && appSecret ? createGraphClient(`${appId}|${appSecret}`) : undefined;
 }
 
 // ─── Link pubblici e firmati alle immagini ───────────────────────────────────
@@ -296,13 +416,23 @@ async function risolviIg(graph: GraphClient, cfg: ConfigMeta): Promise<string> {
   return ig;
 }
 
+let igDaLogin: { token: string; igUserId: string } | null = null;
+
+async function igIdDaLogin(graph: GraphClient, token: string): Promise<string> {
+  const daEnv = (process.env.META_IG_USER_ID || "").trim();
+  if (daEnv) return daEnv;
+  if (igDaLogin?.token === token) return igDaLogin.igUserId;
+  const me = await graph.get<{ user_id?: string; id?: string }>("/me", { fields: "user_id" });
+  const id = me.user_id ?? me.id;
+  if (!id) throw new ErrorePubblicazione("Instagram non mi dice l'id dell'account: rigenera il token dalla dashboard Meta.", true);
+  igDaLogin = { token, igUserId: id };
+  return id;
+}
+
 /** Pubblica davvero UNA bozza. Chiamata solo dal ciclo, dopo la prenotazione. */
-export async function pubblicaBozza(id: number, deps: { graph?: GraphClient; cfg?: ConfigMeta | null } = {}): Promise<EsitoPubblicazione> {
-  const cfg = deps.cfg === undefined ? configMeta() : deps.cfg;
-  if (!cfg) throw new ErrorePubblicazione("Manca META_PAGE_ACCESS_TOKEN nelle variabili Railway.", true);
+export async function pubblicaBozza(id: number): Promise<EsitoPubblicazione> {
   const bozza = await getSocialDraftById(id);
   if (!bozza) throw new ErrorePubblicazione("Bozza non trovata.", true);
-  const graph = deps.graph ?? createGraphClient(cfg.token);
   const post: PostDaPubblicare = {
     platform: bozza.platform,
     format: bozza.format,
@@ -310,10 +440,25 @@ export async function pubblicaBozza(id: number, deps: { graph?: GraphClient; cfg
     hashtags: bozza.hashtags,
     media: mediaPerMeta(id, leggiAsset(await getSocialDraftAssets(id))),
   };
-  if (bozza.platform === "instagram") return pubblicaInstagram(graph, await risolviIg(graph, cfg), post);
+  const cfg = configMeta();
+
+  if (bozza.platform === "instagram") {
+    // Prima strada: Instagram Login, senza Pagina Facebook.
+    const igToken = await tokenInstagramAttuale();
+    if (igToken) {
+      const graph = createGraphClient(igToken, { host: IG_HOST });
+      return pubblicaInstagram(graph, await igIdDaLogin(graph, igToken), post);
+    }
+    // Seconda strada: Instagram collegato a una Pagina.
+    if (cfg) {
+      const graph = createGraphClient(cfg.token);
+      return pubblicaInstagram(graph, await risolviIg(graph, cfg), post);
+    }
+    throw new ErrorePubblicazione("Instagram non e' collegato: manca META_IG_ACCESS_TOKEN nelle variabili Railway.", true);
+  }
   if (bozza.platform === "facebook") {
-    if (!cfg.pageId) throw new ErrorePubblicazione("Manca META_PAGE_ID nelle variabili Railway.", true);
-    return pubblicaFacebook(graph, cfg.pageId, post);
+    if (!cfg?.pageId) throw new ErrorePubblicazione("La Pagina Facebook non e' collegata (META_PAGE_ACCESS_TOKEN e META_PAGE_ID).", true);
+    return pubblicaFacebook(createGraphClient(cfg.token), cfg.pageId, post);
   }
   throw new ErrorePubblicazione(`La pubblicazione automatica copre Instagram e Facebook, non ${bozza.platform}.`, true);
 }
@@ -436,7 +581,7 @@ let ancoraUnGiro = false;
  * subito un altro appena finisce, invece di aspettare i 5 minuti.
  */
 export function eseguiCicloPubblicazione(): Promise<EsitoCiclo> {
-  if (!configMeta()) return Promise.resolve({ pubblicate: [], fallite: [], saltate: [] });
+  if (!pubblicazioneAttiva()) return Promise.resolve({ pubblicate: [], fallite: [], saltate: [] });
   if (inCorso) {
     ancoraUnGiro = true;
     return inCorso;
