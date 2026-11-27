@@ -5,6 +5,7 @@ import { getDb } from "../db";
 import { whoIs, isIdentity, rows } from "./dreammapRoutes";
 import { REGOLA_PASSO_AVANZA } from "./dreammapRegolaPassi";
 import { REGOLA_SPECCHIO, immagineDiSeDa, immagineDiSeTesto } from "./dreammapSpecchio";
+import { taraturaDa, taraturaTesto, taraturaRegistra } from "./dreammapTaratura";
 
 /* DreamMap 0.9.301 — LA REVISIONE E IL RIENTRA IN ROTTA, IN CHAT CON IL TUO AGENTE
  *
@@ -299,7 +300,9 @@ export function registerDreamMapConversaRoutes(app: Express) {
   /* ---- LA LETTURA DEL FUTURO PREPARATA IN ANTICIPO (0.9.304) ----
    * Andrea: con Premium la lettura del Genio la fa il tuo agente. L'app chiama questa rotta appena si apre la lettura,
    * mentre la persona conferma il sogno: quando arrivano le domande sono gia' pronte, legate al suo sogno.
-   * POST { sogno, tipo, nomeAgente, dati, domande: [{ id, t }], trigger: [{ id, t }], immagineDiSe?: { archetipo, frase, forza, impresa, risposte } }
+   * POST { sogno, tipo, nomeAgente, dati, domande: [{ id, t }], trigger: [{ id, t }], immagineDiSe?: { archetipo, frase, forza, impresa, risposte },
+ *        taratura?: [{ giorno, risposta, stima, sonno, focus, riposo, dopamina, lavoroMin, ... }] }
+ * app 0.9.397: `taratura` sono le righe della domanda di controllo sull'energia (dreammapTaratura.ts).
    * 0.9.391 (BUG-124): l'immagine di se' (il quiz Come ti vedi) arriva prima delle abitudini; il Genio le fa da specchio e la tiene
    * distinta dalla traiettoria (REGOLA_SPECCHIO, dreammapSpecchio.ts). Le app di prima non la mandano: la lettura va come prima.
    *   -> { persona, domande: { id: testo }, trigger: { id: testo }, modello } */
@@ -326,6 +329,10 @@ export async function letturaRispondi(b: any, sub: string, res: Risposta) {
     .map((x: any) => ({ id: pulisci(x?.id, 12), t: pulisci(x?.t, 120) })).filter((x: any) => /^[a-z]{2,12}$/.test(x.id) && x.t);
   let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 4000); } catch { dati = "{}"; }
   const ids = immagineDiSeDa(b.immagineDiSe);
+  /* app 0.9.397: le righe di taratura dell'energia (la risposta accanto ai valori misurati quel giorno): si registrano per tarare la
+     stima della dopamina, e il Genio le legge come contesto. Le app di prima non le mandano: la lettura va come prima */
+  const taratura = taraturaDa(b.taratura);
+  taraturaRegistra(sub, taratura);
   const sistema = [
     `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap, l'app che la porta verso il suo sogno un passo alla volta.`,
     "Stai per farle la lettura del futuro: un gioco come Akinator. Con domande chiuse e con i dati del telefono, alla fine le dici chi rischia di diventare se continua così, e che probabilità ha oggi di diventare la persona che realizza il suo sogno. Adesso prepari il testo in anticipo, mentre lei conferma il sogno.",
@@ -339,6 +346,7 @@ export async function letturaRispondi(b: any, sub: string, res: Risposta) {
   const utente = "IL SUO SOGNO: " + sogno + (tipo ? "\nIL CAMPO DEL SOGNO: " + tipo : "")
     + (ids ? "\n\n" + immagineDiSeTesto(ids) : "")
     + "\n\nQUELLO CHE L'APP SA DI LUI (JSON):\n" + dati
+    + (taratura.length ? "\n\n" + taraturaTesto(taratura) : "")
     + "\n\nLE DOMANDE DELLA LETTURA:\n" + domande.map((x: any) => x.id + ": " + x.t).join("\n")
     + "\n\nLE RISPOSTE ALLA DOMANDA SUL MOMENTO IN CUI PRENDE IL TELEFONO:\n" + trigger.map((x: any) => x.id + ": " + x.t).join("\n");
   try {
