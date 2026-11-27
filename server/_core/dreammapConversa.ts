@@ -190,12 +190,15 @@ const REGOLE = [
   REGOLA_PASSO_AVANZA,
   "TELEFONO E COMPUTER, SEMPRE TUTTI E DUE (app 0.9.346). dati.tempo e dati.app sono della sorgente che sta guardando a schermo; dati.telefonoOggi e dati.lavoroVero (computerOggi, computerIeri) ci sono sempre: analizza tutti e due i dispositivi insieme e di' dove è andato il tempo su ognuno, senza chiedergli di cambiare filtro. Il computer conta solo la finestra in primo piano e solo con la persona davanti (mouse o tastiera negli ultimi due minuti): quei minuti sono uso attivo vero.",
   "LA DATA NEI PRIMI GIORNI. Se c'è dati.dataVelata, non scrivere nessuna data di arrivo e nessuna previsione di anticipo o ritardo.",
+  /* app 0.9.400 (BUG-181), Andrea: "quando l'utente dice di non stare bene, l'agente chiede perché (cosa è successo) come il controllo
+   * dell'umore, e se c'è ansia propone l'esercizio di respirazione di 3 minuti dicendo in una riga perché aiuta" */
+  "QUANDO DICE DI NON STARE BENE (umore basso, dati.umore con un voto di 1 o 2 su 5, ansia, una giornata pesante, giù, stanco morto): prima dei dati e prima di ogni piano chiedigli, con UNA domanda breve e calda, cosa è successo oggi, o cosa non è successo come sperava, come fa il controllo quotidiano dell'umore. Niente consigli prima di averlo capito, mai prediche. Se c'è ansia (agitazione, panico, preoccupazione, stress, il cuore a mille), proponigli il respiro di 3 minuti dell'app e di' in una riga perché aiuta: espirare più a lungo di quanto inspiri rallenta il battito e calma il sistema nervoso, così l'ansia scende. In quel messaggio metti \"respiro\": true (l'app mostra il pulsante \"Respira con me, 3 minuti\"); una volta sola in tutta la conversazione. Poi la revisione va avanti con calma.",
   "Le statistiche anonime (\"imparato\") dicono cosa capita più spesso e cosa ha aiutato altre persone con un sogno simile: usale solo come ispirazione, mai come fatto su di lui, e mai dire che vengono da altri utenti con nomi o numeri.",
 ].join("\n");
 
 const FORMATO = [
   "Rispondi SOLO in JSON, cosi':",
-  "{\"testo\":\"...\",\"fase\":\"<una delle fasi>\",\"trigger\":\"<chiave o vuoto>\",\"piano\":null oppure {\"tipo\":\"blocco|limite|prevenzione\",\"nome\":\"massimo 4 parole\",\"app\":[\"pacchetto\"],\"dalle\":\"HH:MM\",\"alle\":\"HH:MM\",\"giorni\":[true,true,true,true,true,true,true],\"minutiGiorno\":0,\"azione\":\"focus|caveau|respiro|notifiche|mattina|\",\"aiuto\":\"<chiave della contromisura>\",\"perche\":\"una riga\"},\"pillole\":[\"da 0 a 4 risposte possibili, brevi, in prima persona\"],\"fine\":false,\"riepilogo\":null}",
+  "{\"testo\":\"...\",\"fase\":\"<una delle fasi>\",\"trigger\":\"<chiave o vuoto>\",\"piano\":null oppure {\"tipo\":\"blocco|limite|prevenzione\",\"nome\":\"massimo 4 parole\",\"app\":[\"pacchetto\"],\"dalle\":\"HH:MM\",\"alle\":\"HH:MM\",\"giorni\":[true,true,true,true,true,true,true],\"minutiGiorno\":0,\"azione\":\"focus|caveau|respiro|notifiche|mattina|\",\"aiuto\":\"<chiave della contromisura>\",\"perche\":\"una riga\"},\"pillole\":[\"da 0 a 4 risposte possibili, brevi, in prima persona\"],\"respiro\":false,\"fine\":false,\"riepilogo\":null}",
   "Alla fine (fine: true) \"riepilogo\" ha le risposte della persona in poche parole: {\"focus\":\"\",\"leva\":\"\",\"interruzione\":\"\",\"contromisura\":\"\",\"imprevisto\":\"\",\"patto\":\"\"} (lascia vuote quelle che non c'entrano).",
   "Nelle revisioni della settimana, del mese, del trimestre e dell'anno il \"riepilogo\" è invece: {\"rotta\":\"quanto si è avvicinato, in poche parole\",\"sogno\":\"\",\"funzionato\":\"cosa ha funzionato, con il dettaglio\",\"allontanato\":\"cosa gli ha fatto perdere tempo, con il dettaglio\",\"cambio\":\"cosa cambia da domani, in prima persona\",\"mossa\":\"la prossima mossa concreta, con un verbo all'imperativo e il quando\",\"ricalcolo\":\"sì, no o vuoto se non è stato chiesto\"}.",
   "Nelle revisioni (della sera, della settimana, del mese, del trimestre, dell'anno) aggiungi \"verdetto\" (\"in_rotta\", \"fuori_rotta\" o vuoto finché non lo sai) e, solo quando sei fuori rotta e proponi il percorso nuovo, \"percorso\": {\"oggi\":{\"testo\":\"...\",\"passi\":[\"1-3 passi con un verbo\"]},\"settimana\":{\"testo\":\"...\",\"passi\":[\"...\"]},\"mese\":{\"testo\":\"...\",\"passi\":[\"...\"]},\"anno\":{...},\"cinque\":{...}} (anno e cinque solo se cambiano; al massimo 5 passi per orizzonte). Insieme al verdetto metti già il \"riepilogo\".",
@@ -405,6 +408,13 @@ async function modelloJson(sistema: string, utente: string, maxTok: number): Pro
 }
 
 const ESITI = new Set(["preso", "vicino", "sbagliato", "nonsi"]);
+/** app 0.9.400 (BUG-171): la schermata Home, il blocco schermo e la barra di sistema non sono app. */
+export function nonEApp(nome: unknown): boolean {
+  const n = String(nome ?? "").toLowerCase().trim();
+  return !n || /^one ui( home)?$/.test(n) || /\blauncher\b/.test(n) || n === "home" || n === "schermata home" || /system ?ui|interfaccia di sistema|blocco schermo|schermata di blocco/.test(n);
+}
+/** La risposta parla di lavoro al computer. */
+const PAROLE_PC = /computer|\bpc\b|portatile|laptop|desktop|claude|chatgpt|gemini|cursor|codice|programm|\bsito\b|google ads|campagn|excel|figma|shopify|lavorav/i;
 export async function verificaRispondi(b: any, sub: string, res: Risposta) {
   const g = new Date().toISOString().slice(0, 10);
   const u = USATI.get(sub); const n = u && u.g === g ? u.n : 0;
@@ -413,18 +423,30 @@ export async function verificaRispondi(b: any, sub: string, res: Risposta) {
   const risposta = pulisci(b.risposta, 600), momento = pulisci(b.momento, 60);
   if (!risposta || !momento) { res.status(400).json({ error: "manca la risposta o il momento" }); return; }
   const nome = pulisci(b.nomeAgente, 40).replace(/[<>{}\[\]`*_#|\\"]/g, "") || "Genio";
-  let dati = "{}"; try { dati = JSON.stringify(b.dati ?? {}).slice(0, 5000); } catch { dati = "{}"; }
+  /* app 0.9.400 (BUG-171), Andrea: "A me non risulta: dal telefono vedo One UI Home per 35 minuti". La schermata Home, il blocco schermo e la
+   * barra di sistema non sono app: si tolgono qui anche se un'app vecchia li manda. E il computer di quell'ora arriva in dati.computer
+   * (l'app lo chiede al server prima del verdetto); senza, vale come "non arrivati": mai contraddire chi dice che lavorava al computer. */
+  const datiIn: any = (b.dati && typeof b.dati === "object") ? { ...b.dati } : {};
+  try {
+    if (Array.isArray(datiIn.app)) datiIn.app = datiIn.app.filter((a: any) => !nonEApp(a?.nome));
+    if (Array.isArray(datiIn.eventi)) datiIn.eventi = datiIn.eventi.filter((e: any) => !nonEApp(e?.app));
+    if (!datiIn.computer || typeof datiIn.computer !== "object") datiIn.computer = { stato: "non_arrivati", nota: "I dati del computer non sono arrivati." };
+  } catch { /* si tiene quello che c'e' */ }
+  const pcOk = String(datiIn.computer?.stato || "") === "ok";
+  let dati = "{}"; try { dati = JSON.stringify(datiIn).slice(0, 5000); } catch { dati = "{}"; }
   const sistema = [
-    `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap. Le hai chiesto cosa stava facendo ${momento}: ha risposto, e adesso confronti la sua risposta con quello che dice il telefono in quell'ora.`,
-    "Il telefono vede solo il telefono: le app aperte, i minuti, e quando c'è \"cosa\" la ricerca, il sito, il video. Quello che faceva lontano dal telefono non lo vede.",
+    `Sei ${nome === "Genio" ? "il Genio" : nome}, l'agente personale di questa persona dentro DreamMap. Le hai chiesto cosa stava facendo ${momento}: ha risposto, e adesso confronti la sua risposta con quello che dicono il telefono e il computer in quell'ora.`,
+    "\"app\" ed \"eventi\" sono del telefono: le app aperte, i minuti, e quando c'è \"cosa\" la ricerca, il sito, il video. \"computer\" è il computer nella stessa ora: con stato \"ok\" i minuti e i programmi o i siti; con un altro stato (\"non_arrivati\", \"vuoto\", \"giorno\", \"non_collegato\") il computer in quell'ora non si vede, e \"nota\" dice perché. Quello che faceva lontano dagli schermi non lo vede nessuno dei due.",
+    "LA SCHERMATA HOME NON È UN'APP. La schermata Home del telefono (One UI Home, qualunque launcher), il blocco schermo e la barra di sistema non contano come attività e non sono una prova di niente: non nominarli mai.",
+    "IL COMPUTER. Se ha detto che lavorava al computer (PC, portatile, Claude, ChatGPT, codice, un sito, una campagna) e computer.stato è \"ok\", giudica sul computer: \"preso\" se i minuti al computer ci sono (meglio ancora se nomina un programma o un sito che c'è), e nel testo di' quanti minuti e su cosa. Se computer.stato NON è \"ok\", l'esito è \"nonsi\": MAI \"sbagliato\", MAI \"A me non risulta\", mai contraddirlo. Di' in una frase cosa vede il telefono e nell'altra che i dati del computer di quell'ora non ci sono (con le parole di computer.nota). Non chiedere se il computer è collegato e non dire cosa fare: lo mostra l'app in un riquadro sotto al tuo verdetto.",
     "Gli esiti: \"preso\" SOLO se la sua risposta corrisponde all'attività principale di quell'ora (la prima app in \"app\", quella con più minuti) (anche con parole diverse: \"guardavo reel\" vale Instagram, \"cercavo una cosa\" vale Google o Chrome); \"vicino\" se ha detto un'app o una cosa che c'era ma non la principale (per esempio la seconda app), o la principale detta in modo vago; \"sbagliato\" se ha detto una cosa diversa da quello che dice il telefono; \"nonsi\" se parla di una cosa fuori dal telefono (\"studiavo\", \"ero in palestra\") e il telefono in quell'ora è stato usato poco, quindi non si può dire. Esempio: il telefono dice Google 33 minuti e lui scrive \"lavoravo al logo\": è \"sbagliato\" (il telefono in quell'ora era su Google per più di mezz'ora), e lo dici senza accusarlo.",
     "Prima di decidere scrivi in \"confronto\" in poche parole cosa ha detto lui e qual è l'attività principale per il telefono: l'esito viene da quel confronto.",
     "Il \"testo\" è il verdetto: 1 o 2 frasi brevi, che cominciano dall'esito (\"Ci hai preso:\", \"Ci sei andato vicino:\", \"A me non risulta:\") e dicono cosa dice il telefono con il quando per intero (\"" + momento + "\"), le app e i minuti. Metti tra asterischi singoli (*così*) il nome dell'app principale. Mai colpe, mai prediche, mai \"dovresti\".",
-    "Mai contraddirlo in modo secco (mai \"Non era così\", mai \"non è vero\"): il telefono può non vedere tutto. Se ha detto che lavorava al computer (Claude, codice, PC, sito) e nei dati il computer non c'è o ha pochi minuti, dillo così: \"A me non risulta: dal telefono vedo ... Se lavoravi al computer, è collegato a DreamMap? Senza, quel lavoro non lo vedo.\"",
+    "Mai contraddirlo in modo secco (mai \"Non era così\", mai \"non è vero\"): il telefono può non vedere tutto.",
     "Numeri sempre in cifre (\"33 minuti\", \"alle 9:05\"). Accenti veri (è, perché, più). Virgolette solo \"\". Mai il trattino lungo. Dai del tu.",
     "Rispondi SOLO in JSON: {\"confronto\":\"lui dice ...; il telefono dice ...\",\"esito\":\"preso|vicino|sbagliato|nonsi\",\"testo\":\"...\"}",
   ].join("\n\n");
-  const utente = "LA DOMANDA: " + pulisci(b.domanda, 200) + "\n\nLA SUA RISPOSTA: " + risposta + "\n\nCOSA DICE IL TELEFONO IN QUELL'ORA (JSON):\n" + dati;
+  const utente = "LA DOMANDA: " + pulisci(b.domanda, 200) + "\n\nLA SUA RISPOSTA: " + risposta + "\n\nCOSA DICONO IL TELEFONO E IL COMPUTER IN QUELL'ORA (JSON):\n" + dati;
   try {
     const r = await modelloJson(sistema, utente, 300);
     if (!r) {
@@ -434,7 +456,16 @@ export async function verificaRispondi(b: any, sub: string, res: Risposta) {
     const j = jsonDa(r.testo);
     const testo = j ? copy(j.testo, 320) : "";
     if (!testo) { res.status(502).json({ error: "il modello ha risposto in un modo che non si legge" }); return; }
-    res.json({ esito: ESITI.has(String(j.esito)) ? String(j.esito) : "nonsi", testo, modello: r.modello });
+    let esito = ESITI.has(String(j.esito)) ? String(j.esito) : "nonsi";
+    /* il computer non si vede e lui parlava del computer: il verdetto non lo contraddice, qualunque cosa scriva il modello */
+    let testoOk = testo;
+    if (!pcOk && PAROLE_PC.test(risposta) && (esito === "sbagliato" || /non\s+(mi\s+)?risulta/i.test(testo))) {
+      esito = "nonsi";
+      testoOk = testo.replace(/^\s*A me non risulta:?\s*/i, "").replace(/^./, (c) => c.toUpperCase());
+    }
+    /* la domanda "e' collegato a DreamMap?" la fa il riquadro dell'app, non il testo */
+    testoOk = testoOk.split(/(?<=[.!?])\s+/).filter((f) => !/collegat\w*\s+a\s+DreamMap|senza,? quel lavoro/i.test(f)).join(" ").trim() || testoOk;
+    res.json({ esito, testo: testoOk, modello: r.modello });
   } catch (e: any) {
     res.status(502).json({ error: "verifica: " + (e?.message || String(e)) });
   }
@@ -532,7 +563,9 @@ export async function conversaRispondi(b: any, sub: string, res: Risposta) {
         }
         if (out.settimana || out.oggi || out.mese) percorso = out;
       }
-      return { testo, fase: fine ? "fine" : fase, trigger, piano, pillole, fine, riepilogo, verdetto, percorso };
+      /* app 0.9.400 (BUG-181): il respiro di 3 minuti, quando c'è ansia */
+      const respiro = j.respiro === true;
+      return { testo, fase: fine ? "fine" : fase, trigger, piano, pillole, fine, riepilogo, verdetto, percorso, respiro };
     };
     /* app 0.9.321: le foto e i file allegati all'ultimo messaggio. I testi entrano nel messaggio, foto e PDF restano allegati veri */
     const allegati = (Array.isArray(b.allegati) ? b.allegati : []).slice(0, 3)
