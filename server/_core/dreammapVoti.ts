@@ -20,7 +20,14 @@ import { getDb } from "../db";
  *
  * Il VPS (regista/voti.py) scarica i voti negativi nuovi ogni 5 minuti con lo stesso segreto, li manda ad Andrea
  * su Telegram (il token del bot sta solo sul VPS) e li mette nella posta del ciclo notturno dell'agente che
- * corregge l'app. Le email degli utenti non escono mai da qui. */
+ * corregge l'app. Le email degli utenti non escono mai da qui.
+ *
+ * DOVE SI LEGGONO I VOTI (app 0.9.397), per migliorare il Genio:
+ * · la tabella focuslock_agent_voti (un voto per risposta e per persona: msgId, voto 1 o -1, categoria, testo, tipoSogno, versione);
+ *   la domanda e la risposta si ritrovano con msgId -> focuslock_agent_msgs (inReplyTo per la domanda);
+ * · GET /api/focuslock/agent/voti/riepilogo (con x-care-secret): il quadro dei 30 giorni, problemi per tipo e per sogno, le ultime parole;
+ * · GET /api/focuslock/agent/voti/nuovi: i "non mi piace" non ancora mandati ad Andrea su Telegram (regista/voti.py sul VPS);
+ * · i voti delle chat della revisione e del rientro stanno in focuslock_voti_chat (dreammapArena.ts), letti da /voti/genio. */
 
 type Chi = { sub: string; email?: string | null };
 type Utente = (req: Request, res: Response) => Promise<Chi | null>;
@@ -29,6 +36,8 @@ type Utente = (req: Request, res: Response) => Promise<Chi | null>;
 export const VOTO_CATEGORIE: Record<string, { nome: string; regola: string }> = {
   capito: { nome: "Non ha capito cosa volevo", regola: "Prima di rispondere capisci bene cosa ti chiede: se la richiesta non è chiara, fai una domanda sola invece di tirare a indovinare." },
   inventato: { nome: "Ha sbagliato o si è inventato qualcosa", regola: "Non inventare fatti, numeri, titoli, persone o funzioni dell'app: se non sei sicuro, dillo chiaramente." },
+  /* app 0.9.397, Andrea: "Non mi e' utile" fra le scelte veloci del pollice giu' (agente-voti.js, AGV_TIPI) */
+  utile: { nome: "Non mi è stata utile", regola: "Ogni risposta gli lascia una cosa che può usare subito: un passo concreto, un testo pronto, un numero suo. Niente risposte generiche." },
   incompleta: { nome: "Ha lasciato la risposta a metà", regola: "Chiudi ogni risposta con il passo concreto da fare adesso: niente risposte a metà." },
   lunga: { nome: "Ha scritto troppo, o in modo difficile", regola: "Rispondi corto e semplice: al massimo 6 righe, una frase per idea, parole di tutti i giorni. I dettagli solo se li chiede." },
   sogno: { nome: "Non ha tenuto conto del mio sogno", regola: "Collega ogni consiglio al suo sogno e ai dati di QUELLO CHE L'APP SA DI LUI: niente consigli generici." },
