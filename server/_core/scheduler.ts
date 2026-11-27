@@ -10,6 +10,7 @@ import { riprendiWallartAuto } from "../productArtistApprovals";
 import { sincronizzaChargebacks } from "../shopifyChargebacks";
 import { giroWatchdog } from "../careWatchdog";
 import { runNightlyBatch, resumeQueueOnBoot } from "../music/service";
+import { eseguiCicloPubblicazione, configMeta } from "../socialPublishStore";
 
 // Scheduler in-process (il server Railway è always-on): job giornalieri a orario
 // fisso italiano, indipendenti dai bottoni della UI e dal browser aperto.
@@ -196,6 +197,29 @@ export function registerDailySchedules() {
   const watchdogTimer = setInterval(eseguiWatchdog, WATCHDOG_MS);
   watchdogTimer.unref?.();
   console.log("[Scheduler] \"care-watchdog\" attivo ogni ora (silenzio dei canali clienti)");
+
+  // Pubblicazione social ogni 5 minuti: le bozze che Andrea ha approvato e
+  // pianificato da Bozze escono su Instagram / Pagina Facebook all'ora scelta.
+  // Senza token di Pagina non c'e' niente da pubblicare e il job resta spento.
+  if (configMeta()) {
+    const SOCIAL_PUBLISH_MS = 5 * 60 * 1000;
+    const giroSocial = async () => {
+      try {
+        const r = await eseguiCicloPubblicazione();
+        if (r.pubblicate.length || r.fallite.length) {
+          console.log(`[Scheduler] social-publish: pubblicate=${r.pubblicate.length} fallite=${r.fallite.length}`);
+        }
+      } catch (err) {
+        console.warn("[Scheduler] social-publish fallito:", err instanceof Error ? err.message : err);
+      }
+    };
+    setTimeout(giroSocial, 60_000).unref?.();
+    const socialTimer = setInterval(giroSocial, SOCIAL_PUBLISH_MS);
+    socialTimer.unref?.();
+    console.log("[Scheduler] \"social-publish\" attivo ogni 5 min (bozze approvate e pianificate)");
+  } else {
+    console.log("[Scheduler] social-publish spento — manca META_PAGE_ACCESS_TOKEN");
+  }
 
   // Wall art in automatico: le pubblicazioni approvate che aspettano i file di
   // stampa dal VPS. Il poller le riprende appena i PNG compaiono nella repo

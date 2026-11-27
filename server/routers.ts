@@ -19,7 +19,7 @@ import {
   getTrackingConfigByAccount, upsertTrackingConfig,
   getAllUserSettings, upsertUserSetting,
   getCsConversationsForUser, getCsMessagesForConversation, recordCsReply, updateCsConversation, getCsConversationById,
-  getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, getSocialDraftAssets, updateSocialDraft, deleteSocialDraft,
+  getSocialChatMessages, insertSocialChatMessage, getSocialDraftsForUser, getSocialDraftById, getSocialDraftAssets, updateSocialDraft, deleteSocialDraft,
   createClaudeSession, getClaudeSessionById, getClaudeSessions, getClaudeSessionMessages,
   insertClaudeMessage, updateClaudeSession, deleteClaudeSession,
   insertClaudeAttachment, getClaudeAttachmentsForSession, attachClaudeAttachmentsToMessage,
@@ -36,6 +36,7 @@ import { sincronizzaChargebacks, eAperto } from "./shopifyChargebacks";
 import { controllaCanali, giroWatchdog } from "./careWatchdog";
 import { dreamTeamStanza, dreamTeamAgenti, dreamTeamInvia } from "./dreamTeam";
 import { musicRouter } from "./music/router";
+import { statoPubblicazione, mettiInCoda, togliDallaCoda, eseguiCicloPubblicazione, statoToken, PIATTAFORME_PUBBLICABILI } from "./socialPublishStore";
 import { getApifyBudget } from "./apifyBudget";
 import {
   refreshResearch, enrichPendingResearch, generateContentFromResearch,
@@ -279,8 +280,75 @@ export const appRouter = router({
       return { success: true, id } as const;
     }),
     draftsList: protectedProcedure.query(async ({ ctx }) => {
-      return getSocialDraftsForUser(ctx.user.id);
+      const bozze = await getSocialDraftsForUser(ctx.user.id);
+      // Lo stato della pubblicazione automatica (errore, tentativi, permalink).
+      // Se la lettura fallisce la lista si mostra lo stesso, senza quei campi.
+      const stato = await statoPubblicazione(bozze.map((b) => b.id)).catch((e) => {
+        console.warn("[social/draftsList] stato pubblicazione:", e instanceof Error ? e.message : e);
+        return new Map();
+      });
+      return bozze.map((b) => {
+        const p = stato.get(b.id);
+        return {
+          ...b,
+          inCoda: !!p?.publishQueuedAt,
+          inPubblicazione: !!p?.publishingStartedAt,
+          tentativi: p?.publishAttempts ?? 0,
+          errorePubblicazione: p?.publishError ?? null,
+          permalink: p?.publishedPermalink ?? null,
+          pubblicataIl: p?.publishedAt ?? null,
+        };
+      });
     }),
+
+    // ─── Pubblicazione automatica (Graph API) ─────────────────────────────────
+    /** Token e permessi: cosa manca per pubblicare. Il token non esce mai dal server. */
+    publishStatus: protectedProcedure
+      .input(z.object({ forza: z.boolean().optional() }).optional())
+      .query(async ({ input }) => statoToken(input?.forza ?? false)),
+
+    /** "Approva e pianifica": la bozza esce da sola all'ora scelta. */
+    schedulePublish: protectedProcedure
+      .input(z.object({ id: z.number(), scheduledAt: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const bozza = await getSocialDraftById(input.id);
+        if (!bozza || bozza.userId !== ctx.user.id) throw new Error("Bozza non trovata");
+        if (!(PIATTAFORME_PUBBLICABILI as readonly string[]).includes(bozza.platform)) {
+          throw new Error(`La pubblicazione automatica copre Instagram e Facebook, non ${bozza.platform}.`);
+        }
+        const quando = new Date(input.scheduledAt);
+        if (Number.isNaN(quando.getTime())) throw new Error("Data non valida");
+        await mettiInCoda(input.id, quando);
+        await esitoBozzaSuReference(input.id, "approvata").catch(() => {});
+        // Data gia' passata = esce al prossimo giro, che facciamo partire subito.
+        if (quando.getTime() <= Date.now()) void eseguiCicloPubblicazione().catch(() => {});
+        return { success: true } as const;
+      }),
+
+    /** "Pubblica ora": come pianificare adesso, e il giro parte subito. */
+    publishNow: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const bozza = await getSocialDraftById(input.id);
+        if (!bozza || bozza.userId !== ctx.user.id) throw new Error("Bozza non trovata");
+        if (!(PIATTAFORME_PUBBLICABILI as readonly string[]).includes(bozza.platform)) {
+          throw new Error(`La pubblicazione automatica copre Instagram e Facebook, non ${bozza.platform}.`);
+        }
+        await mettiInCoda(input.id, new Date());
+        await esitoBozzaSuReference(input.id, "approvata").catch(() => {});
+        void eseguiCicloPubblicazione().catch((e) => console.warn("[social/publishNow]", e instanceof Error ? e.message : e));
+        return { success: true } as const;
+      }),
+
+    /** Toglie dalla coda una bozza non ancora uscita. */
+    cancelPublish: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const bozza = await getSocialDraftById(input.id);
+        if (!bozza || bozza.userId !== ctx.user.id) throw new Error("Bozza non trovata");
+        await togliDallaCoda(input.id);
+        return { success: true } as const;
+      }),
     /** Le immagini di UNA bozza: mai tutte insieme, o la lista non risponde piu'. */
     draftAssets: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -311,6 +379,10 @@ export const appRouter = router({
         if (input.status !== undefined) patch.status = input.status;
         if (input.scheduledAt !== undefined) patch.scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
         await updateSocialDraft(input.id, patch);
+        // Riportata a bozza o scartata: esce anche dalla coda di pubblicazione.
+        if (input.status && input.status !== "scheduled" && input.status !== "published") {
+          await togliDallaCoda(input.id, { tornaBozza: false }).catch(() => {});
+        }
 
         // La reference che ha generato questa bozza segue il verdetto: approvata
         // (o pianificata/pubblicata) e' consumata per sempre, scartata torna

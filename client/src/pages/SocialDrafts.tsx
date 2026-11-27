@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, type ElementType } from "react";
-import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter, Sparkles, Upload, Loader2, X as XIcon, Calendar1, ChevronDown, Moon, PowerOff } from "lucide-react";
+import { Instagram, Facebook, MessageSquare, Clock, Pencil, Bot, Inbox, Check, Trash2, FileText, Twitter, Sparkles, Upload, Loader2, X as XIcon, Calendar1, ChevronDown, Moon, PowerOff, Send, ExternalLink, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -489,6 +489,195 @@ const PLATFORMS: Record<string, { label: string; icon: ElementType; color: strin
 const STATUS_LABEL: Record<string, string> = { draft: "Bozza", scheduled: "Pianificato", published: "Pubblicato", rejected: "Rifiutato" };
 
 /* ------------------------------------------------------------------ */
+/* Pubblicazione automatica (Graph API Meta)                            */
+/*                                                                     */
+/* Instagram e Pagina Facebook escono da soli all'ora scelta: lo        */
+/* scheduler dell'Hub gira ogni 5 minuti. Pinterest resta fuori (API in */
+/* Trial): li' si va di CSV in blocco.                                  */
+/* ------------------------------------------------------------------ */
+
+const PUBBLICABILI = new Set(["instagram", "facebook"]);
+
+/** Valore per <input type="datetime-local"> nell'ora locale: la prossima ora piena. */
+const prossimaOra = () => {
+  const d = new Date(Date.now() + 60 * 60_000);
+  d.setMinutes(0, 0, 0);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+const quandoLeggibile = (v: unknown) =>
+  v ? new Date(v as string).toLocaleString("it-IT", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+
+/** Stato del token: si fa vedere solo quando qualcosa manca. Quando va tutto bene, una riga grigia. */
+function StatoPubblicazione() {
+  const q = trpc.social.publishStatus.useQuery(undefined, { staleTime: 5 * 60_000, retry: false });
+  const utils = trpc.useUtils();
+  const s = q.data;
+  if (q.isLoading) return null;
+  if (q.error) {
+    return <div className="text-xs opacity-60">Non riesco a controllare il collegamento con Meta: {q.error.message}</div>;
+  }
+  if (!s) return null;
+
+  const ok = s.configurato && s.valido && s.problemi.length === 0;
+  if (ok) {
+    return (
+      <div className="text-xs opacity-55 flex items-center gap-2 flex-wrap">
+        <Check className="w-3.5 h-3.5" />
+        Pubblicazione automatica attiva su {s.igUsername ? <b>@{s.igUsername}</b> : "Instagram"}{s.pagina ? <> e sulla Pagina <b>{s.pagina}</b></> : null}
+        {s.scadeIl ? <> · il token scade il {new Date(s.scadeIl).toLocaleDateString("it-IT")}</> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl p-4 space-y-3" style={{ background: "oklch(0.2 0.05 70 / 0.35)", border: "1px solid oklch(0.6 0.14 70 / 0.5)" }}>
+      <h2 className="text-sm font-semibold flex items-center gap-2" style={{ color: "oklch(0.85 0.13 75)" }}>
+        <AlertTriangle className="w-4 h-4" /> La pubblicazione automatica non puo' partire
+      </h2>
+      <ul className="text-xs space-y-1.5 opacity-85">
+        {s.problemi.map((p) => <li key={p}>{p}</li>)}
+      </ul>
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] opacity-50">Come si sistema: docs/social-autopublish.md nel repo dell'Hub.</span>
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs ml-auto"
+                onClick={() => utils.social.publishStatus.fetch({ forza: true }).then(() => q.refetch())}>
+          Ricontrolla
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type BozzaConStato = {
+  id: number; platform: string; status: string; scheduledAt: unknown;
+  inCoda?: boolean; inPubblicazione?: boolean; tentativi?: number;
+  errorePubblicazione?: string | null; permalink?: string | null; pubblicataIl?: unknown;
+};
+
+/** Il piede della card: un solo pulsante principale, quello giusto per lo stato della bozza. */
+function AzioniPubblicazione({ d, onModifica, onElimina }: { d: BozzaConStato; onModifica: () => void; onElimina: () => void }) {
+  const utils = trpc.useUtils();
+  const ricarica = () => utils.social.draftsList.invalidate();
+  const pianifica = trpc.social.schedulePublish.useMutation({ onSuccess: ricarica, onError: (e) => toast.error(e.message) });
+  const subito = trpc.social.publishNow.useMutation({ onSuccess: ricarica, onError: (e) => toast.error(e.message) });
+  const annulla = trpc.social.cancelPublish.useMutation({ onSuccess: ricarica, onError: (e) => toast.error(e.message) });
+  const approva = trpc.social.draftUpdate.useMutation({ onSuccess: ricarica });
+  const [aperto, setAperto] = useState(false);
+  const [quando, setQuando] = useState(prossimaOra);
+  const occupato = pianifica.isPending || subito.isPending || annulla.isPending;
+  const nome = PLATFORMS[d.platform]?.label ?? d.platform;
+  const piede = { borderTop: "1px solid oklch(0.2 0.015 260)" };
+
+  const pubblicaOra = () => {
+    if (!window.confirm(`Pubblico subito su ${nome}? Il post diventa pubblico e da qui non si puo' ritirare.`)) return;
+    subito.mutate({ id: d.id });
+  };
+
+  // Pubblicata: il link al post, e basta.
+  if (d.status === "published" || d.permalink) {
+    return (
+      <div className="flex items-center gap-2 mt-3 pt-3 text-xs" style={piede}>
+        <Check className="w-3.5 h-3.5" style={{ color: "oklch(0.75 0.15 150)" }} />
+        <span className="opacity-70">Pubblicata {quandoLeggibile(d.pubblicataIl)}</span>
+        {d.permalink && (
+          <a href={d.permalink} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 hover:underline">
+            Apri il post <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  // Pinterest, blog, X: niente pubblicazione via API qui. Resta l'approvazione di prima.
+  if (!PUBBLICABILI.has(d.platform)) {
+    return (
+      <div className="flex gap-2 mt-3 pt-3 items-center" style={piede}>
+        <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={onModifica}><Pencil className="w-3.5 h-3.5 mr-1" />Modifica</Button>
+        <Button size="sm" variant="ghost" className="h-8 px-2 text-xs text-red-400" onClick={onElimina}><Trash2 className="w-3.5 h-3.5 mr-1" />Elimina</Button>
+        <Button size="sm" className="h-8 px-3 text-xs text-white ml-auto" style={{ background: "var(--gradient-primary)" }}
+                disabled={approva.isPending || d.status === "scheduled"}
+                onClick={() => approva.mutate({ id: d.id, status: "scheduled" })}>
+          <Check className="w-3.5 h-3.5 mr-1" />{d.status === "scheduled" ? "Approvata" : "Approva"}
+        </Button>
+      </div>
+    );
+  }
+
+  // In coda: quando esce, l'eventuale errore, e la possibilita' di cambiare idea.
+  if (d.inCoda && d.status === "scheduled") {
+    const fermo = (d.tentativi ?? 0) >= 3;
+    return (
+      <div className="mt-3 pt-3 space-y-3" style={piede}>
+        {d.inPubblicazione ? (
+          <div className="text-xs flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sto pubblicando su {nome}…</div>
+        ) : (
+          <div className="text-xs flex items-center gap-2 opacity-80">
+            <Clock className="w-3.5 h-3.5" /> Esce {quandoLeggibile(d.scheduledAt)}
+          </div>
+        )}
+        {d.errorePubblicazione && (
+          <div className="text-xs rounded-lg px-3 py-2" style={{ background: "oklch(0.25 0.08 25 / 0.35)", color: "oklch(0.85 0.1 30)" }}>
+            {fermo ? "Ferma: " : `Tentativo ${d.tentativi} di 3 fallito: `}{d.errorePubblicazione}
+          </div>
+        )}
+        {!d.inPubblicazione && (
+          <div className="flex gap-2 items-center">
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" disabled={occupato} onClick={() => annulla.mutate({ id: d.id })}>
+              <XIcon className="w-3.5 h-3.5 mr-1" />Annulla
+            </Button>
+            <Button size="sm" variant="outline" className="h-8 px-3 text-xs ml-auto" disabled={occupato} onClick={pubblicaOra}>
+              <Send className="w-3.5 h-3.5 mr-1" />{fermo ? "Riprova ora" : "Pubblica ora"}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Bozza: "Approva e pianifica" e' il pulsante principale, "Pubblica ora" il secondo.
+  return (
+    <div className="flex gap-2 mt-3 pt-3 items-center flex-wrap" style={piede}>
+      <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={onModifica}><Pencil className="w-3.5 h-3.5 mr-1" />Modifica</Button>
+      <Button size="sm" variant="ghost" className="h-8 px-2 text-xs text-red-400" onClick={onElimina}><Trash2 className="w-3.5 h-3.5 mr-1" />Elimina</Button>
+      <div className="ml-auto flex gap-2">
+        <Button size="sm" variant="outline" className="h-8 px-3 text-xs" disabled={occupato} onClick={pubblicaOra}>
+          <Send className="w-3.5 h-3.5 mr-1" />Pubblica ora
+        </Button>
+        <Popover open={aperto} onOpenChange={(v) => { setAperto(v); if (v) setQuando(prossimaOra()); }}>
+          <PopoverTrigger asChild>
+            <Button size="sm" className="h-8 px-3 text-xs text-white" style={{ background: "var(--gradient-primary)" }} disabled={occupato}>
+              <Clock className="w-3.5 h-3.5 mr-1" />Approva e pianifica
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-72 p-5 space-y-5" style={CARD}>
+            <div>
+              <div className="text-sm font-semibold">Quando esce su {nome}?</div>
+              <div className="text-xs opacity-55 mt-2">Esce da sola a quell'ora, entro 5 minuti.</div>
+            </div>
+            <input type="datetime-local" value={quando} onChange={(e) => setQuando(e.target.value)}
+                   className="w-full rounded-lg px-3 py-2 text-sm tabular-nums outline-none"
+                   style={{ background: "oklch(0.18 0.015 260)", border: "1px solid oklch(0.24 0.015 260)", colorScheme: "dark" }} />
+            <Button size="sm" className="w-full h-9 text-white" style={{ background: "var(--gradient-primary)" }}
+                    disabled={!quando || pianifica.isPending}
+                    onClick={() => {
+                      const data = new Date(quando);
+                      if (Number.isNaN(data.getTime())) { toast.error("Data non valida"); return; }
+                      pianifica.mutate({ id: d.id, scheduledAt: data.toISOString() }, {
+                        onSuccess: () => { setAperto(false); toast.success(`In coda: esce ${quandoLeggibile(data)}`); },
+                      });
+                    }}>
+              <Check className="w-3.5 h-3.5 mr-1" />Approva e metti in coda
+            </Button>
+          </PopoverContent>
+        </Popover>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Automazione notturna: interruttore + orario.                        */
 /*                                                                     */
 /* Nasce da una notte persa (23/08/2026): il job serale delle 23:00 si */
@@ -610,6 +799,8 @@ export default function SocialDrafts() {
       </div>
 
 
+      <StatoPubblicazione />
+
       <AutomazioneNotturna />
 
       <MaterialeNotteSocial />
@@ -650,7 +841,7 @@ export default function SocialDrafts() {
                 <div className="rounded-lg flex items-center justify-center" style={{ width: 28, height: 28, background: `${p.color}22`, border: `1px solid ${p.color}44` }}><Icon className="w-3.5 h-3.5" style={{ color: p.color }} /></div>
                 <span className="text-sm font-medium">{p.label}</span>
                 <span className="text-xs px-2 py-0.5 rounded-full ml-auto" style={{ background: "oklch(0.2 0.02 260)", color: "oklch(0.7 0.02 260)" }}>{d.format}</span>
-                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "oklch(0.65 0.2 265 / 0.15)", color: "oklch(0.75 0.15 265)" }}>{STATUS_LABEL[d.status] ?? d.status}</span>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "oklch(0.65 0.2 265 / 0.15)", color: "oklch(0.75 0.15 265)" }}>{d.inCoda && d.status === "scheduled" ? "In coda" : STATUS_LABEL[d.status] ?? d.status}</span>
               </div>
 
               {!editing && <ImmagineBozza id={d.id} />}
@@ -670,11 +861,7 @@ export default function SocialDrafts() {
                   <h3 className="font-semibold text-sm mb-1">{d.title || "(senza titolo)"}</h3>
                   <p className="text-xs text-muted-foreground flex-1 whitespace-pre-line line-clamp-5">{d.caption || "—"}</p>
                   {d.hashtags && <p className="text-xs text-primary mt-2 line-clamp-2">{d.hashtags}</p>}
-                  <div className="flex gap-2 mt-3 pt-3 items-center" style={{ borderTop: "1px solid oklch(0.2 0.015 260)" }}>
-                    <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => startEdit(d)}><Pencil className="w-3.5 h-3.5 mr-1" />Modifica</Button>
-                    <Button size="sm" variant="ghost" className="h-8 px-2 text-xs text-red-400" onClick={() => del.mutate({ id: d.id })}><Trash2 className="w-3.5 h-3.5 mr-1" />Elimina</Button>
-                    <Button size="sm" className="h-8 px-3 text-xs text-white ml-auto" style={{ background: "var(--gradient-primary)" }} disabled={update.isPending} onClick={() => update.mutate({ id: d.id, status: "scheduled" })}><Clock className="w-3.5 h-3.5 mr-1" />Approva &amp; Pianifica</Button>
-                  </div>
+                  <AzioniPubblicazione d={d} onModifica={() => startEdit(d)} onElimina={() => del.mutate({ id: d.id })} />
                 </>
               )}
             </div>
