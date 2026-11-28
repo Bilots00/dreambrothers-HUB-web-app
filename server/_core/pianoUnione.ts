@@ -59,6 +59,51 @@ export function timbra(prima: BloccoU[], dopo: BloccoU[], tomb: Record<string, n
 
 const ora = (b: { mod?: number | undefined } | undefined) => b?.mod ?? 0;
 
+/* 0.9.402 BUG-256, Andrea: "nel piano il blocco Oggi, Domani, Calendario, Note compare due volte". La causa: il seme.
+   Un computer nuovo (o un browser pulito) apre il sito con il quaderno di partenza, dove «Il piano» ha gia' il suo
+   pannello con un id nuovo. La pagina del seme ha l'eta' zero e perde, ma i suoi blocchi, che l'altra copia non
+   conosce, entravano lo stesso come «blocchi nuovi di la'»: due pannelli (e lo stesso per gli orizzonti, 0.9.321).
+   Adesso:
+     - un blocco senza ora in una pagina senza ora e' del seme: non entra nell'altra copia;
+     - i pannelli dell'app (SINGOLI) non hanno un contenuto loro: in una pagina ce n'e' uno solo. Un secondo
+       uguale e vuoto non entra, e quello che c'e' gia' si toglie (togliDoppioni) e va fra i cancellati,
+       cosi' non torna dalle altre copie. Un blocco con qualcosa dentro non si tocca mai. */
+export const SINGOLI = new Set(['pannello', 'orizzonti', 'diario', 'note-tel']);
+const vuoto = (x: BloccoU) => !x.children?.length;
+const testoVuoto = (x: BloccoU) => x['kind'] === 'text' && !String(x['text'] ?? '').trim() && !x['html'] && vuoto(x);
+
+/** Toglie da una pagina i pannelli doppi (stesso tipo, stessa firma, vuoti): resta il primo. I tolti, e la riga
+ * vuota del seme che li segue, vanno fra i cancellati con l'ora `adesso`. Torna la stessa pagina se non c'e' niente. */
+export function togliDoppioni(p: PaginaU, adesso = Date.now()): PaginaU {
+  const visti = new Set<string>();
+  const via: number[] = [];
+  const giro = (list: BloccoU[]): BloccoU[] => {
+    let cambiato = false;
+    const out: BloccoU[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const x = list[i]!;
+      if (SINGOLI.has(String(x['kind'])) && vuoto(x)) {
+        const f = firma(x);
+        if (visti.has(f)) {
+          via.push(x.id); cambiato = true;
+          const dopo = list[i + 1];
+          if (dopo && testoVuoto(dopo) && !dopo.mod) { via.push(dopo.id); i++; }
+          continue;
+        }
+        visti.add(f);
+      }
+      const figli = x.children?.length ? giro(x.children) : x.children;
+      if (figli !== x.children) { cambiato = true; out.push({ ...x, children: figli }); } else out.push(x);
+    }
+    return cambiato ? out : list;
+  };
+  const blocks = giro(p.blocks ?? []);
+  if (!via.length) return p;
+  const tomb = { ...(p.tomb ?? {}) };
+  via.forEach(id => { tomb[String(id)] = adesso; });
+  return { ...p, blocks, tomb };
+}
+
 type Posto = { padre: number | null; prima: number | null };
 function posti(list: BloccoU[], padre: number | null, out = new Map<number, Posto>()): Map<number, Posto> {
   list.forEach((b, i) => { out.set(b.id, { padre, prima: i ? list[i - 1]!.id : null }); if (b.children?.length) posti(b.children, b.id, out); });
@@ -118,9 +163,15 @@ export function unisciPagina(a: PaginaU, b: PaginaU, adesso = Date.now()): Pagin
     });
     return { list: ok ? l : list, ok };
   };
+  // 0.9.402 BUG-256: i pannelli che la base ha gia' (tipo e firma), e i blocchi del seme, non entrano
+  const firmeSingoli = new Set<string>();
+  mappa(blocks).forEach(z => { if (SINGOLI.has(String(z['kind'])) && vuoto(z)) firmeSingoli.add(firma(z)); });
+  const seme = ora(altra) === 0;
   const visita = (list: BloccoU[]) => {
     for (const x of list) {
       if (!mb.has(x.id) && !messi.has(x.id)) {
+        if (seme && ora(x) === 0) continue;
+        if (SINGOLI.has(String(x['kind'])) && vuoto(x)) { const f = firma(x); if (firmeSingoli.has(f)) continue; firmeSingoli.add(f); }
         const nb = copia(x);
         if (nb) {
           const p = pa.get(x.id) ?? { padre: null, prima: null };
@@ -157,6 +208,8 @@ export function unisciQuaderni<S extends QuadernoU>(qui: S, la: S, adesso = Date
     if (perBlocco) tutte.set(p.id, unisciPagina(x, p, adesso));
     else if (ora(p) > ora(x)) tutte.set(p.id, p);
   });
+  // 0.9.402 BUG-256: i pannelli doppi gia' entrati (prima di questa correzione) se ne vanno, uno per tipo resta
+  if (perBlocco) tutte.forEach((p, id) => { const q = togliDoppioni(p, adesso); if (q !== p) tutte.set(id, q); });
   // una pagina buttata dopo l'ultima modifica resta nel cestino
   cestino.forEach((p, id) => { const v = tutte.get(id); if (v && ora(p) >= ora(v)) tutte.delete(id); else if (v) cestino.delete(id); });
   // 0.9.226: l'ordine delle pagine (trascinate nella barra) e i preferiti (anche quelli tolti) sono
