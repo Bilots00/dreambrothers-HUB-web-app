@@ -50,6 +50,17 @@ describe("un passo fa avanzare: i prompt la usano", () => {
     expect(p).toMatch(/quanto lo stima il percorso, tieni quel numero/);
     expect(p).toMatch(/lo fa l'intelligenza artificiale in pochi secondi/);
   });
+  /* app 0.9.403 (BUG-284, BUG-282): campi separati, un tempo unico, la categoria del lavoro */
+  it("il passo di domani: campi separati, un tempo solo e la categoria (dreammapConversa)", () => {
+    const s = sorgente("dreammapConversa.ts");
+    const p = s.slice(s.indexOf("b.evento === \"passo_domani\""), s.indexOf("Risposte della persona finora"));
+    expect(p).toMatch(/ognuna sulla sua riga/);
+    expect(p).toMatch(/nel Perché niente priorità e niente minuti/);
+    expect(p).toMatch(/IL TEMPO È UNO SOLO: un solo numero di minuti in tutta la risposta/);
+    expect(p).toMatch(/\\"Categoria:\\"/);
+    expect(p).toMatch(/sito, scrittura, video, studio, chiamata, riunione, vendita, email, design, marketing, sport, casa, mente/);
+    expect(p).toMatch(/chiamata solo se si telefona/);
+  });
   it("gli strumenti che scrivono la roadmap (aggiorna_roadmap e scrivi_roadmap)", () => {
     const t = sorgente("dreammapAgentTools.ts");
     expect(t.slice(t.indexOf("name: \"aggiorna_roadmap\""), t.indexOf("input_schema", t.indexOf("name: \"aggiorna_roadmap\"")))).toContain("REGOLA_PASSO_AVANZA_BREVE");
