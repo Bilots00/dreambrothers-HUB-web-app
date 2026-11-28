@@ -7,6 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { registerCareRoutes } from "./careRoutes";
 import { registerSocialRoutes } from "./socialRoutes";
+import { registerSocialMediaRoute } from "../socialPublishStore";
 import { registerVideoRoutes } from "./videoRoutes";
 import { registerClaudeRoutes } from "./claudeRoutes";
 import { registerDreamMapRoutes } from "./dreammapRoutes";
@@ -686,6 +687,7 @@ async function startServer() {
   registerOAuthRoutes(app);
   registerCareRoutes(app);
   registerSocialRoutes(app);
+  registerSocialMediaRoute(app);
   registerVideoRoutes(app);
   registerClaudeRoutes(app);
   registerMusicRoutes(app);
