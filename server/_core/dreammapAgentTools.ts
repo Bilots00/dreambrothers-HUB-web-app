@@ -58,8 +58,13 @@ const TOOLS = [
   /* app 0.9.380: con Premium la chiamata su misura la crea il tuo agente, dalla chat (Impostazioni della chiamata) */
   { name: "crea_condizione_chiamata", description: "Salva una condizione su misura per la chiamata dei sogni, quando la persona te lo chiede: per esempio aprire un'app che distrae dopo le 22, due giorni senza una tappa, un'idea che non c'entra con il piano. Scrivi quando deve squillare in una frase che capisce anche lei.",
     input_schema: { type: "object", properties: { device: { type: "string" }, nome: { type: "string", description: "un nome breve, es. Idea fuori rotta" }, quando: { type: "string", description: "quando deve squillare, in una frase intera" }, messaggio: { type: "string" } }, required: ["device", "nome", "quando"] } },
+  /* app 0.9.403 (BUG-298): con il piano Pro l'agente rende automatica un'abitudine scritta dalla persona. La regola la sorveglia il telefono
+     (www/js/partita-schede.js, pscAbAutoControlla) e spunta da sola il tracker; la spunta a mano resta. Senza il piano Pro il telefono tiene
+     la regola spenta: il piano lo sa solo l'app (agDati.pianoPremium), qui non c'e' */
+  { name: "crea_regola_abitudine", description: "Solo con il piano Pro (nei dati della persona pianoPremium = pro): rende automatica un'abitudine che la persona ha scritto (nei dati: abitudini), cosi' il tracker si spunta da solo. Tre tipi di regola: app (minuti su un'app in un giorno: piuDi spunta il giorno appena li supera, per un'abitudine da tenere; menoDi spunta il giorno se resta sotto, per un'abitudine da cambiare), fullfocus (una sessione di Full Focus riuscita di almeno minuti, con l'etichetta tag se la chiede), posizione (quando il telefono e' in un luogo: il luogo lo segna la persona dal foglio dell'abitudine, tu scrivi solo il nome). Una regola per abitudine: quella nuova sostituisce la vecchia. Con un altro piano non chiamarlo: digli che serve il piano Pro.",
+    input_schema: { type: "object", properties: { device: { type: "string" }, abitudine: { type: "string", description: "il testo dell'abitudine come l'ha scritto la persona" }, tipo: { type: "string", enum: ["app", "fullfocus", "posizione"] }, app: { type: "string", description: "tipo app: il nome dell'app, es. Duolingo" }, piuDi: { type: "number", description: "tipo app: minuti, spunta se li supera" }, menoDi: { type: "number", description: "tipo app: minuti, spunta se resta sotto" }, minuti: { type: "number", description: "tipo fullfocus: durata minima, di base 20" }, tag: { type: "string", description: "tipo fullfocus: l'etichetta della sessione, es. Studio" }, luogo: { type: "string", description: "tipo posizione: il nome del luogo, es. Palestra" }, raggio: { type: "number", description: "tipo posizione: metri, di base 150" }, perche: { type: "string" } }, required: ["device", "abitudine", "tipo"] } },
 ];
-const TIPO: Record<string, string> = { aggiorna_roadmap: "roadmap", crea_programma: "programma", crea_blocco_rapido: "blocco_rapido", crea_regola_partita: "regola", segna_imprevisto: "imprevisto", crea_condizione_chiamata: "chiamata" };
+const TIPO: Record<string, string> = { aggiorna_roadmap: "roadmap", crea_programma: "programma", crea_blocco_rapido: "blocco_rapido", crea_regola_partita: "regola", segna_imprevisto: "imprevisto", crea_condizione_chiamata: "chiamata", crea_regola_abitudine: "abitudine" };
 
 function chiave(req: Request): boolean {
   const k = String(process.env.AGENT_TOOLS_KEY || "");
@@ -105,6 +110,13 @@ export function registerDreamMapAgentTools(app: Express) {
     } else if (tool === "crea_condizione_chiamata") {
       payload = { nome: String(a.nome || "").slice(0, 80), quando: String(a.quando || "").slice(0, 300), messaggio: String(a.messaggio || "").slice(0, 300) };
       if (!payload.nome || !payload.quando) { res.status(400).json({ error: "servono nome e quando" }); return; }
+    } else if (tool === "crea_regola_abitudine") {
+      const tipo = ["app", "fullfocus", "posizione"].includes(String(a.tipo)) ? String(a.tipo) : "";
+      payload = { abitudine: String(a.abitudine || "").trim().slice(0, 120), tipo, app: String(a.app || "").trim().slice(0, 60),
+        piuDi: intero(a.piuDi, 1, 1440), menoDi: intero(a.menoDi, 1, 1440), minuti: intero(a.minuti, 1, 480), tag: String(a.tag || "").trim().slice(0, 40),
+        luogo: String(a.luogo || "").trim().slice(0, 60), raggio: intero(a.raggio, 50, 2000), perche: String(a.perche || "").slice(0, 200) };
+      if (!payload.abitudine || !tipo) { res.status(400).json({ error: "servono l'abitudine e il tipo (app, fullfocus o posizione)" }); return; }
+      if (tipo === "app" && !payload.app) { res.status(400).json({ error: "per il tipo app serve il nome dell'app" }); return; }
     } else if (tool === "segna_imprevisto") {
       payload = { giorni: Math.max(1, Math.min(60, Math.round(Number(a.giorni) || 1))), ore: Math.max(0, Math.min(400, Number(a.ore) || 0)), motivo: String(a.motivo || "").slice(0, 160) };
     } else {
