@@ -6,6 +6,8 @@ import { rows } from "./dreammapSocial";
 import { whoIs, isIdentity } from "./dreammapRoutes";
 /* app 0.9.390 (BUG-122): anche la roadmap scritta dall'AI dell'utente ha passi che fanno avanzare */
 import { REGOLA_PASSO_AVANZA_BREVE } from "./dreammapRegolaPassi";
+/* app 0.9.402 (BUG-255): per un sogno di business, Promote, Deliver, Build e la domanda sull'obiettivo */
+import { REGOLA_ROADMAP_BUSINESS_BREVE } from "./dreammapRegolaBusiness";
 
 /* DreamMap: IL PONTE CON LE ALTRE AI (app 0.9.333).
  *
@@ -300,7 +302,7 @@ const STRUMENTI = [
   },
   {
     name: "scrivi_roadmap",
-    description: "Scrive su DreamMap la roadmap dell'utente verso il suo sogno, dopo avergli fatto le domande che servono (una alla volta). La catena va dal lontano al vicino: fra cinque anni, quest'anno, questo mese, questa settimana, oggi; metti solo gli anelli che finiscono prima della data del sogno. L'utente la vede nell'app e la applica lui. " + REGOLA_PASSO_AVANZA_BREVE,
+    description: "Scrive su DreamMap la roadmap dell'utente verso il suo sogno, dopo avergli fatto le domande che servono (una alla volta). La catena va dal lontano al vicino: fra cinque anni, quest'anno, questo mese, questa settimana, oggi; metti solo gli anelli che finiscono prima della data del sogno. L'utente la vede nell'app e la applica lui. " + REGOLA_PASSO_AVANZA_BREVE + " " + REGOLA_ROADMAP_BUSINESS_BREVE,
     inputSchema: {
       type: "object",
       properties: { piano: { type: "object", properties: { cinque: ANELLO, anno: ANELLO, mese: ANELLO, settimana: ANELLO, oggi: ANELLO }, description: "Gli anelli della roadmap." } },
@@ -364,7 +366,7 @@ export async function rispondiMcp(chiave: string, m: any): Promise<any> {
         protocolVersion: String(m?.params?.protocolVersion || "2025-03-26"),
         capabilities: { tools: {} },
         serverInfo: { name: "dreammap", version: "1.0.0" },
-        instructions: "All'inizio leggi il piano con leggi_piano. Se l'utente ti chiede di avvisarlo quando succede qualcosa (per esempio una nuova idea fuori dal piano), salva la condizione con crea_condizione_chiamata e, quando succede, fai squillare il telefono con fai_squillare prima di dare punti. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro: cosa avete fatto, su quale task, e se era la priorità del piano. Se l'utente ti chiede la sua roadmap, fagli le domande una alla volta e poi scrivila con scrivi_roadmap. Se ti chiede il resoconto della sera, riassumi in registra_lavoro tutto quello su cui avete lavorato oggi e, se il piano non torna più con quello che sta facendo, aggiorna la roadmap con scrivi_roadmap. Quando vedi finita una tappa della roadmap (un link pubblicato, un file, del codice), confermala con verifica_tappa e la prova: mai solo sulla parola.",
+        instructions: "All'inizio leggi il piano con leggi_piano. Se l'utente ti chiede di avvisarlo quando succede qualcosa (per esempio una nuova idea fuori dal piano), salva la condizione con crea_condizione_chiamata e, quando succede, fai squillare il telefono con fai_squillare prima di dare punti. Alla fine di ogni lavoro scrivi un riassunto con registra_lavoro: cosa avete fatto, su quale task, e se era la priorità del piano. Se l'utente ti chiede la sua roadmap, fagli le domande una alla volta (per un sogno di business anche l'obiettivo: soldi in fretta oppure un brand solido che duri, con un pubblico e una community) e poi scrivila con scrivi_roadmap. Se ti chiede il resoconto della sera, riassumi in registra_lavoro tutto quello su cui avete lavorato oggi e, se il piano non torna più con quello che sta facendo, aggiorna la roadmap con scrivi_roadmap. Quando vedi finita una tappa della roadmap (un link pubblicato, un file, del codice), confermala con verifica_tappa e la prova: mai solo sulla parola.",
       });
     case "ping":
       return ok({});

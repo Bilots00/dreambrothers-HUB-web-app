@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "../db";
 import { whoIs, isIdentity, rows } from "./dreammapRoutes";
 import { REGOLA_PASSO_AVANZA } from "./dreammapRegolaPassi";
+import { REGOLA_ROADMAP_BUSINESS } from "./dreammapRegolaBusiness";
 import { REGOLA_SPECCHIO, immagineDiSeDa, immagineDiSeTesto } from "./dreammapSpecchio";
 import { taraturaDa, taraturaTesto, taraturaRegistra } from "./dreammapTaratura";
 
@@ -188,6 +189,8 @@ const REGOLE = [
   "UN PASSO È LAVORO VERO (app 0.9.347): nei passi del percorso e nel passo di domani mai una micro decisione (scegliere uno strumento, un'app, una piattaforma, un corso): quella la prendi tu e la scrivi dentro al passo come indicazione. Un passo produce qualcosa e dura il tempo vero di quel compito.",
   /* app 0.9.390 (BUG-122): anche i passi del percorso nuovo delle revisioni e il passo di domani */
   REGOLA_PASSO_AVANZA,
+  /* app 0.9.402 (BUG-255): anche il percorso nuovo delle revisioni, per un sogno di business, segue Promote, Deliver, Build */
+  REGOLA_ROADMAP_BUSINESS,
   "TELEFONO E COMPUTER, SEMPRE TUTTI E DUE (app 0.9.346). dati.tempo e dati.app sono della sorgente che sta guardando a schermo; dati.telefonoOggi e dati.lavoroVero (computerOggi, computerIeri) ci sono sempre: analizza tutti e due i dispositivi insieme e di' dove è andato il tempo su ognuno, senza chiedergli di cambiare filtro. Il computer conta solo la finestra in primo piano e solo con la persona davanti (mouse o tastiera negli ultimi due minuti): quei minuti sono uso attivo vero.",
   "LA DATA NEI PRIMI GIORNI. Se c'è dati.dataVelata, non scrivere nessuna data di arrivo e nessuna previsione di anticipo o ritardo.",
   /* app 0.9.400 (BUG-181), Andrea: "quando l'utente dice di non stare bene, l'agente chiede perché (cosa è successo) come il controllo

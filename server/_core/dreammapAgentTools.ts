@@ -4,6 +4,7 @@ import { getDb } from "../db";
 import { rows } from "./dreammapSocial";
 /* app 0.9.390 (BUG-122): una tappa e' un'azione che fa avanzare, mai raccolta di dati */
 import { REGOLA_PASSO_AVANZA_BREVE } from "./dreammapRegolaPassi";
+import { REGOLA_ROADMAP_BUSINESS_BREVE } from "./dreammapRegolaBusiness";
 
 /* DreamMap — GLI STRUMENTI DELL'AGENTE PERSONALE (0.9.207)
  *
@@ -43,7 +44,7 @@ const QUANDO = ["caveau", "deviazione", "tieniRighe", "taglia", "passo", "riga",
 const GIORNI = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"];
 const intero = (v: any, a: number, b: number) => { const n = Math.round(Number(v)); return v === undefined || v === null || v === "" || !isFinite(n) ? undefined : Math.max(a, Math.min(b, n)); };
 const TOOLS = [
-  { name: "aggiorna_roadmap", description: "Scrive o aggiorna la roadmap su misura della persona: le prossime tappe, in ordine, ognuna con titolo, cosa fare e minuti previsti. Ogni testo in italiano intero, con verbo e oggetto, senza abbreviazioni né barre (no «1 video/giorno feriale», sì «Girare e pubblicare un video al giorno, dal lunedì al venerdì»). " + REGOLA_PASSO_AVANZA_BREVE,
+  { name: "aggiorna_roadmap", description: "Scrive o aggiorna la roadmap su misura della persona: le prossime tappe, in ordine, ognuna con titolo, cosa fare e minuti previsti. Ogni testo in italiano intero, con verbo e oggetto, senza abbreviazioni né barre (no «1 video/giorno feriale», sì «Girare e pubblicare un video al giorno, dal lunedì al venerdì»). " + REGOLA_PASSO_AVANZA_BREVE + " " + REGOLA_ROADMAP_BUSINESS_BREVE,
     input_schema: { type: "object", properties: { device: { type: "string" }, titolo: { type: "string" }, tappe: { type: "array", items: { type: "object", properties: { titolo: { type: "string" }, cosa: { type: "string" }, minuti: { type: "number" }, giorno: { type: "string", description: "AAAA-MM-GG, facoltativo" } }, required: ["titolo"] } } }, required: ["device", "tappe"] } },
   { name: "crea_programma", description: "Crea un programma di blocco con le condizioni chieste dalla persona: app, siti, parole chiave (nell'indirizzo, nel dominio o in tutta la pagina), orario e giorni.",
     input_schema: { type: "object", properties: { device: { type: "string" }, nome: { type: "string" }, app: { type: "array", items: { type: "string" }, description: "package Android" }, siti: { type: "array", items: { type: "string" } }, parole: { type: "array", items: { type: "string" } }, dove: { type: "string", enum: ["url", "dominio", "pagina"], description: "dove cercare le parole" }, dalle: { type: "string", description: "HH:MM" }, alle: { type: "string", description: "HH:MM" }, giorni: { type: "array", items: { type: "boolean" }, description: "7 valori, da lunedi'" }, tuttoIlGiorno: { type: "boolean" } }, required: ["device", "nome"] } },
